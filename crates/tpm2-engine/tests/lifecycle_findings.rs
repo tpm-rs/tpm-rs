@@ -150,9 +150,8 @@ impl Rng for FlakyRng<'_> {
         self.inner.fill_bytes(dest)
     }
 
-    /// Ignores `data`, even in the failing state (like the default `stir_random` of the previous
-    /// `Rng` trait).
-    fn reseed(&mut self, _data: &[u8]) -> Result<(), CryptoError> {
+    /// Ignores `data`, even in the failing state.
+    fn stir_bytes(&mut self, _data: &[u8]) -> Result<(), CryptoError> {
         Ok(())
     }
 }

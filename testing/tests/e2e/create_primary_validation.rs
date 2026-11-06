@@ -3,9 +3,10 @@
 
 use crate::_common::Connection;
 use crate::_common::{
-    create, default_ecc_public, ecc_sign_template, execute_with_password_sessions, flush_context,
-    load, load_external, marshal_to_slice, owner_srk, rc0, rsa_public_bits, sealed_template,
-    set_hierarchy_enabled, try_create_primary_in,
+    create, default_ecc_public, ecc_sign_template, execute_with_corrupted_bytes_status,
+    execute_with_password_sessions, flush_context, load, load_external, marshal_to_slice,
+    owner_srk, put_u16, rc0, rsa_public_bits, sealed_template, set_hierarchy_enabled,
+    try_create_primary_in,
 };
 use testing::tpm::{SimulatorPlatformSignal, Tpm};
 use tpm2::commands::CreatePrimary;
@@ -31,7 +32,8 @@ fn non_hierarchy_handle_rejected() {
         primary_handle: Handle(0x80000000),
         in_sensitive,
         in_public,
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
 
     let err = match execute_with_password_sessions(&mut sim, &cmd, 0, &[]) {
@@ -57,7 +59,8 @@ fn non_password_session_handle_rejected() {
         primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
 
     // Use a session handle other than password session (e.g. 0x03000000)
@@ -119,7 +122,8 @@ fn owner_auth_enforced() {
         primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
 
     // 1. Change Owner Auth to "ownerpass"
@@ -164,19 +168,30 @@ fn rsa_512_bits_rejected() {
     };
     let in_sensitive = tpm2::Tpm2b(sensitive_create);
 
-    // Request a 512-bit RSA key, which is unsupported.
-    let in_public = tpm2::Tpm2b(rsa_public_bits(512));
+    // Request a 512-bit RSA key, which is unsupported: not a `TPMI_RSA_KEY_BITS` value, so the key
+    // size of an RSA-2048 template is patched in the marshaled parameters.
+    let in_public = tpm2::Tpm2b(rsa_public_bits(2048));
 
     let cmd = CreatePrimary {
         primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
 
     // RH_OWNER needs authorization: with no session C returns AUTH_MISSING
     // before parameters are checked (SessionProcess.c:1650).
-    let err = match execute_with_password_sessions(&mut sim, &cmd, 1, &[]) {
+    // keyBits follows inSensitive (6 octets), the size of inPublic, type, nameAlg,
+    // objectAttributes, the empty authPolicy, the symmetric definition and the NULL scheme.
+    const KEY_BITS_OFFSET: usize = 6 + 2 + 2 + 2 + 4 + 2 + 6 + 2;
+    let err = match execute_with_corrupted_bytes_status(&mut sim, &cmd, 1, &[], |params| {
+        assert_eq!(
+            params[KEY_BITS_OFFSET..KEY_BITS_OFFSET + 2],
+            2048u16.to_be_bytes()
+        );
+        put_u16(params, KEY_BITS_OFFSET, 512);
+    }) {
         Ok(_) => panic!("Expected error for 512-bit RSA key"),
         Err(e) => e,
     };

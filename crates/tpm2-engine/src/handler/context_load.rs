@@ -26,7 +26,7 @@ use crate::self_test::kdfa_bits;
 use tpm2::TpmCc;
 use tpm2::Unmarshal;
 use tpm2::commands::responses;
-use tpm2::crypto::{CryptoProvider, Direction, Rng};
+use tpm2::crypto::{Crypto, Direction, Rng};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Handle, TPM2_MAX_CONTEXT_SIZE, TpmHt};
 use tpm2::{TpmSe, TpmiAlgHash};
@@ -59,7 +59,7 @@ const MAX_CONTEXT_SIZE: usize = if cfg!(feature = "max-context-size-4344") {
 /// is unmarshaled, before any missing bytes (`TPM_RC_INSUFFICIENT`).
 pub(crate) const CONTEXT_DATA_CAPACITY: usize = (2 + 64) + (2 + MAX_CONTEXT_SIZE);
 
-impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
+impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     CommandHandler<'a, 'b, C, S, T, R>
 {
     /// Handles the [TpmCc::ContextLoad] (`0x113`) command.
@@ -396,9 +396,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         Ok(())
     }
 
-    /// Rebuilds the crypto provider's private key of a saved RSA object from the prime-only form
-    /// its context holds (see `TPM2_ContextSave`, `serialize_transient_object`) and the modulus
-    /// and exponent of its public area. Other objects are left unchanged.
+    /// Validates the prime-only form of the private key of a saved RSA object (see
+    /// `TPM2_ContextSave`, `serialize_transient_object`) by rebuilding the key from it and the
+    /// modulus and exponent of its public area, and stores the key's prime
+    /// ([`crate::handler::rsa_private_prime`]). Other objects are left unchanged.
     ///
     /// The blob passed the integrity check, so it was produced by this TPM: a prime that does not
     /// rebuild the key is a TPM failure.
@@ -418,20 +419,16 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::FAILURE);
         }
         prime[..prime_len].copy_from_slice(&fields.private[..prime_len]);
-        let exponent = if parms.exponent == 0 {
-            65537
-        } else {
-            parms.exponent
-        };
-        fields.private_len = match self.crypto().rsa_import_private_key(
+        let key = match crate::handler::rsa_private_key::<C>(
+            parms,
             unique.get_buffer(),
             &prime[..prime_len],
-            exponent,
-            &mut fields.private,
         ) {
-            Ok(Some(len)) => len,
+            Ok(Some(key)) => key,
             Ok(None) | Err(_) => return Err(TpmRc::FAILURE),
         };
+        fields.private_len = crate::handler::rsa_private_prime(&key, &mut fields.private)
+            .map_err(|_| TpmRc::FAILURE)?;
         Ok(())
     }
 

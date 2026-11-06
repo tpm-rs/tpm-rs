@@ -124,7 +124,7 @@ fn encryption_key_size_and_fixed_tpm() {
             TpmsRsaParms {
                 symmetric: None,
                 scheme: None,
-                key_bits: TpmiRsaKeyBits(2048),
+                key_bits: TpmiRsaKeyBits::Rsa2048,
                 exponent: 0,
             },
             Tpm2bPublicKeyRsa::from_bytes(&[0x22; 256]).unwrap(),
@@ -157,7 +157,7 @@ fn encryption_key_size_and_fixed_tpm() {
             TpmsRsaParms {
                 symmetric: None,
                 scheme: None,
-                key_bits: TpmiRsaKeyBits(2048),
+                key_bits: TpmiRsaKeyBits::Rsa2048,
                 exponent: 0,
             },
             Tpm2bPublicKeyRsa::from_bytes(&[0x22; 256]).unwrap(),
@@ -200,7 +200,7 @@ fn fixed_tpm_attribute_precedence() {
             TpmsRsaParms {
                 symmetric: None,
                 scheme: None,
-                key_bits: TpmiRsaKeyBits(2048),
+                key_bits: TpmiRsaKeyBits::Rsa2048,
                 exponent: 0,
             },
             Tpm2bPublicKeyRsa::default(),
@@ -278,7 +278,7 @@ fn import_checks_seed_size_before_attributes() {
             TpmsRsaParms {
                 symmetric: Some(AES128_CFB),
                 scheme: None,
-                key_bits: TpmiRsaKeyBits(2048),
+                key_bits: TpmiRsaKeyBits::Rsa2048,
                 exponent: 0,
             },
             Tpm2bPublicKeyRsa::default(),
@@ -722,7 +722,7 @@ fn symmetric_attributes_and_seed_size() {
             tpm2::TpmsRsaParms {
                 symmetric: Some(AES128_CFB),
                 scheme: None,
-                key_bits: tpm2::TpmiRsaKeyBits(2048),
+                key_bits: tpm2::TpmiRsaKeyBits::Rsa2048,
                 exponent: 0x00010001,
             },
             tpm2::Tpm2bPublicKeyRsa::default(),

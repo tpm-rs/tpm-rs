@@ -1,5 +1,5 @@
 #[cfg(not(all(feature = "rsa3072", feature = "rsa4096")))]
-use testing::tpm::ExecuteError;
+use crate::test_utils::{execute_test_parms_corrupted, put_u16};
 use testing::tpm::Tpm;
 use tpm2::TpmEccCurve;
 use tpm2::commands::TestParms;
@@ -60,7 +60,7 @@ fn test_test_parms_rsa2048() {
         parameters: TpmtPublicParms::Rsa(TpmsRsaParms {
             symmetric: None,
             scheme: None,
-            key_bits: TpmiRsaKeyBits(2048),
+            key_bits: TpmiRsaKeyBits::Rsa2048,
             exponent: 0,
         }),
     };
@@ -73,20 +73,21 @@ fn test_test_parms_rsa2048() {
 #[test]
 fn test_test_parms_rsa3072_unsupported() {
     let mut sim = Tpm::new();
-    let cmd = TestParms {
-        parameters: TpmtPublicParms::Rsa(TpmsRsaParms {
-            symmetric: None,
-            scheme: None,
-            key_bits: TpmiRsaKeyBits(3072),
-            exponent: 0,
-        }),
-    };
-    let err = sim.execute(cmd).unwrap_err();
+    // RSA-3072 is not a `TPMI_RSA_KEY_BITS` value of this build, so the key size is patched
+    // into the marshaled parameters (keyBits follows the type and the two NULL selectors).
+    let parameters = TpmtPublicParms::Rsa(TpmsRsaParms {
+        symmetric: None,
+        scheme: None,
+        key_bits: TpmiRsaKeyBits::Rsa2048,
+        exponent: 0,
+    });
+    let err = execute_test_parms_corrupted(&mut sim, parameters, |buf| {
+        put_u16(buf, 6, 3072);
+    })
+    .unwrap_err();
     // Go: errors.Is(err, TPMRCValue), which compares the canonical format-one
     // code and ignores the handle/session/parameter position.
-    let ExecuteError::Tpm(rc) = err else {
-        panic!("expected a TPM error, got {err:?}");
-    };
+    let rc = TpmRc::new(err).expect("a TPM error");
     assert_eq!(rc.to_fmt1().map(|(rc, _)| rc), Some(TpmRc::VALUE));
 }
 
@@ -96,19 +97,20 @@ fn test_test_parms_rsa3072_unsupported() {
 #[test]
 fn test_test_parms_rsa4096_unsupported() {
     let mut sim = Tpm::new();
-    let cmd = TestParms {
-        parameters: TpmtPublicParms::Rsa(TpmsRsaParms {
-            symmetric: None,
-            scheme: None,
-            key_bits: TpmiRsaKeyBits(4096),
-            exponent: 0,
-        }),
-    };
-    let err = sim.execute(cmd).unwrap_err();
+    // RSA-4096 is not a `TPMI_RSA_KEY_BITS` value of this build, so the key size is patched
+    // into the marshaled parameters (keyBits follows the type and the two NULL selectors).
+    let parameters = TpmtPublicParms::Rsa(TpmsRsaParms {
+        symmetric: None,
+        scheme: None,
+        key_bits: TpmiRsaKeyBits::Rsa2048,
+        exponent: 0,
+    });
+    let err = execute_test_parms_corrupted(&mut sim, parameters, |buf| {
+        put_u16(buf, 6, 4096);
+    })
+    .unwrap_err();
     // Go: errors.Is(err, TPMRCValue), which compares the canonical format-one
     // code and ignores the handle/session/parameter position.
-    let ExecuteError::Tpm(rc) = err else {
-        panic!("expected a TPM error, got {err:?}");
-    };
+    let rc = TpmRc::new(err).expect("a TPM error");
     assert_eq!(rc.to_fmt1().map(|(rc, _)| rc), Some(TpmRc::VALUE));
 }

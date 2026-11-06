@@ -8,11 +8,11 @@ use tpm2::Handle;
 #[allow(unused_imports)]
 use tpm2::TpmCc;
 use tpm2::commands::{Commit, responses};
-use tpm2::crypto::{CryptoProvider, Rng};
+use tpm2::crypto::{Crypto, Rng};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Tpm2bEccParameter, TpmEccCurve, TpmaObject, TpmsEccPoint};
 
-impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
+impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     CommandHandler<'a, 'b, C, S, T, R>
 {
     /// Handles the [TpmCc::Commit] (`0x18B`) command.
@@ -230,8 +230,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             p1_buf[param_size * 2 - p1_y.len()..param_size * 2].copy_from_slice(p1_y);
 
             crypto_check(
-                self.crypto()
-                    .validate_point(curve, &p1_buf[..param_size * 2]),
+                crate::ecc_curves::validate_point::<C>(curve, &p1_buf[..param_size * 2]),
                 TpmRc::ECC_POINT.with(Position::parameter(1)),
             )?;
         }
@@ -250,7 +249,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             xy2[param_size * 2 - y2_buf.len()..param_size * 2].copy_from_slice(y2_buf);
 
             crypto_check(
-                self.crypto().validate_point(curve, &xy2[..param_size * 2]),
+                crate::ecc_curves::validate_point::<C>(curve, &xy2[..param_size * 2]),
                 TpmRc::ECC_POINT.with(Position::parameter(3)),
             )?;
 

@@ -13,9 +13,9 @@ use crate::handler::rsa_sensitive::RSA_PRIVATE_SIZE;
 use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
 use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
-use tpm2::crypto::{CryptoProvider, Rng};
+use tpm2::crypto::{Crypto, Rng};
 
-impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
+impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     CommandHandler<'a, 'b, C, S, T, R>
 {
     /// Handles the [TpmCc::ObjectChangeAuth] (`0x14C`) command.
@@ -117,12 +117,14 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 Tpm2bEccParameter::from_bytes(&object.private[..object.private_len])
                     .map_err(|_| TpmRc::FAILURE)?,
             ),
-            crate::owned::OwnedPublicParmsAndId::Rsa(_, _) => {
+            crate::owned::OwnedPublicParmsAndId::Rsa(rsa_parms, rsa_unique) => {
                 // `SensitiveToPrivate()` with the parent: the CRT form under a fixedTPM parent,
                 // otherwise the prime (see `rsa_sensitive`).
                 let len = self
                     .rsa_sensitive_value(
-                        &object.private[..object.private_len],
+                        rsa_parms,
+                        rsa_unique.get_buffer(),
+                        object.private_bytes(),
                         parent_info.attributes.contains(TpmaObject::FIXED_TPM)
                             && super::rsa_sensitive::WRITES_CRT_FORM,
                         &mut rsa_value,

@@ -12,47 +12,70 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Tests of the tpm-rs extensions of `tpm2::crypto` (`kdfa_bits`/`kdfe_bits`,
+//! ECC point arithmetic, `digest_eq`) and of the dispatch error handling, with
+//! mock backends. The dispatch functions themselves are tested by the in-crate
+//! `crypto::tests` module.
+
+// The fake curve is only used with NIST P-256.
+#![cfg_attr(not(feature = "nist_p256"), allow(dead_code))]
+
+use tpm2::crypto::backend::{
+    Ecc, EccCurve, Hash, HashState, Hmac, HmacState, PrivateKey, Symmetric, SymmetricState,
+};
 use tpm2::crypto::*;
 use tpm2::*;
 
-// --- From kdf.rs ---
+// --- KDFs ---
 
-struct DummyHmac;
-impl Hmac for DummyHmac {
-    type Sha1Context = !;
-    type Sha256Context = !;
-    type Sha384Context = !;
-    type Sha512Context = !;
-    type Sm3_256Context = !;
-    type Sha3_256Context = !;
-    type Sha3_384Context = !;
-    type Sha3_512Context = !;
-}
-
+/// Mock hash/HMAC state: a FNV-like accumulator, whose output is `0xFF` except
+/// for 8 bytes of state (so that the high-order masking of the KDFs is visible
+/// in the first byte).
 struct MockCtx<const N: usize> {
     state: u64,
 }
 
 impl<const N: usize> MockCtx<N> {
-    fn new(seed: u64) -> Self {
-        Self { state: seed }
-    }
-}
-
-impl<const N: usize> Update for MockCtx<N> {
-    fn update(&mut self, data: &[u8]) -> Result<(), CryptoError> {
+    fn absorb(&mut self, data: &[u8]) {
         for &b in data {
             self.state = self
                 .state
                 .wrapping_mul(1099511628211)
-                .wrapping_add(b as u64);
+                .wrapping_add(u64::from(b));
         }
+    }
+}
+
+impl<const N: usize> HashState<N> for MockCtx<N> {
+    fn init() -> Result<Self, CryptoError> {
+        Ok(Self {
+            state: 0xcbf29ce484222325,
+        })
+    }
+    fn update(&mut self, data: &[u8]) -> Result<(), CryptoError> {
+        self.absorb(data);
+        Ok(())
+    }
+    fn finalize(&mut self, out: &mut [u8; N]) -> Result<(), CryptoError> {
+        out.fill(0xFF);
+        out[12..20].copy_from_slice(&self.state.to_be_bytes());
         Ok(())
     }
 }
 
-impl<const N: usize> Finalize<N> for MockCtx<N> {
-    fn finalize(self, out: &mut [u8; N]) -> Result<(), CryptoError> {
+impl<const N: usize> HmacState<N> for MockCtx<N> {
+    fn init(key: &[u8]) -> Result<Self, CryptoError> {
+        let mut ctx = Self {
+            state: 0xcbf29ce484222325,
+        };
+        ctx.absorb(key);
+        Ok(ctx)
+    }
+    fn update(&mut self, data: &[u8]) -> Result<(), CryptoError> {
+        self.absorb(data);
+        Ok(())
+    }
+    fn finalize(&mut self, out: &mut [u8; N]) -> Result<(), CryptoError> {
         out.fill(0xFF);
         out[12..20].copy_from_slice(&self.state.to_be_bytes());
         Ok(())
@@ -61,688 +84,502 @@ impl<const N: usize> Finalize<N> for MockCtx<N> {
 
 struct MockProvider;
 impl Hash for MockProvider {
-    type Sha1Context = MockCtx<20>;
-    type Sha256Context = MockCtx<32>;
-    type Sha384Context = MockCtx<48>;
-    type Sha512Context = MockCtx<64>;
-    type Sm3_256Context = MockCtx<32>;
-    type Sha3_256Context = MockCtx<32>;
-    type Sha3_384Context = MockCtx<48>;
-    type Sha3_512Context = MockCtx<64>;
-
-    fn sha1(&self) -> Result<Self::Sha1Context, CryptoError> {
-        Ok(MockCtx::new(0xcbf29ce484222325))
-    }
-    fn sha256(&self) -> Result<Self::Sha256Context, CryptoError> {
-        Ok(MockCtx::new(0xcbf29ce484222325))
-    }
-    fn sha384(&self) -> Result<Self::Sha384Context, CryptoError> {
-        Ok(MockCtx::new(0xcbf29ce484222325))
-    }
-    fn sha512(&self) -> Result<Self::Sha512Context, CryptoError> {
-        Ok(MockCtx::new(0xcbf29ce484222325))
-    }
-    fn sm3_256(&self) -> Result<Self::Sm3_256Context, CryptoError> {
-        Ok(MockCtx::new(0xcbf29ce484222325))
-    }
-    fn sha3_256(&self) -> Result<Self::Sha3_256Context, CryptoError> {
-        Ok(MockCtx::new(0xcbf29ce484222325))
-    }
-    fn sha3_384(&self) -> Result<Self::Sha3_384Context, CryptoError> {
-        Ok(MockCtx::new(0xcbf29ce484222325))
-    }
-    fn sha3_512(&self) -> Result<Self::Sha3_512Context, CryptoError> {
-        Ok(MockCtx::new(0xcbf29ce484222325))
-    }
+    type Sha1 = MockCtx<20>;
+    type Sha256 = MockCtx<32>;
+    type Sha384 = MockCtx<48>;
+    type Sha512 = MockCtx<64>;
+    type Sm3_256 = MockCtx<32>;
+    type Sha3_256 = MockCtx<32>;
+    type Sha3_384 = MockCtx<48>;
+    type Sha3_512 = MockCtx<64>;
 }
 impl Hmac for MockProvider {
-    type Sha1Context = MockCtx<20>;
-    type Sha256Context = MockCtx<32>;
-    type Sha384Context = MockCtx<48>;
-    type Sha512Context = MockCtx<64>;
-    type Sm3_256Context = MockCtx<32>;
-    type Sha3_256Context = MockCtx<32>;
-    type Sha3_384Context = MockCtx<48>;
-    type Sha3_512Context = MockCtx<64>;
+    type Sha1 = MockCtx<20>;
+    type Sha256 = MockCtx<32>;
+    type Sha384 = MockCtx<48>;
+    type Sha512 = MockCtx<64>;
+    type Sm3_256 = MockCtx<32>;
+    type Sha3_256 = MockCtx<32>;
+    type Sha3_384 = MockCtx<48>;
+    type Sha3_512 = MockCtx<64>;
+}
 
-    fn sha1(&self, key: &[u8]) -> Result<Self::Sha1Context, CryptoError> {
-        let mut ctx = MockCtx::new(0xcbf29ce484222325);
-        ctx.update(key)?;
-        Ok(ctx)
-    }
-    fn sha256(&self, key: &[u8]) -> Result<Self::Sha256Context, CryptoError> {
-        let mut ctx = MockCtx::new(0xcbf29ce484222325);
-        ctx.update(key)?;
-        Ok(ctx)
-    }
-    fn sha384(&self, key: &[u8]) -> Result<Self::Sha384Context, CryptoError> {
-        let mut ctx = MockCtx::new(0xcbf29ce484222325);
-        ctx.update(key)?;
-        Ok(ctx)
-    }
-    fn sha512(&self, key: &[u8]) -> Result<Self::Sha512Context, CryptoError> {
-        let mut ctx = MockCtx::new(0xcbf29ce484222325);
-        ctx.update(key)?;
-        Ok(ctx)
-    }
-    fn sm3_256(&self, key: &[u8]) -> Result<Self::Sm3_256Context, CryptoError> {
-        let mut ctx = MockCtx::new(0xcbf29ce484222325);
-        ctx.update(key)?;
-        Ok(ctx)
-    }
-    fn sha3_256(&self, key: &[u8]) -> Result<Self::Sha3_256Context, CryptoError> {
-        let mut ctx = MockCtx::new(0xcbf29ce484222325);
-        ctx.update(key)?;
-        Ok(ctx)
-    }
-    fn sha3_384(&self, key: &[u8]) -> Result<Self::Sha3_384Context, CryptoError> {
-        let mut ctx = MockCtx::new(0xcbf29ce484222325);
-        ctx.update(key)?;
-        Ok(ctx)
-    }
-    fn sha3_512(&self, key: &[u8]) -> Result<Self::Sha3_512Context, CryptoError> {
-        let mut ctx = MockCtx::new(0xcbf29ce484222325);
-        ctx.update(key)?;
-        Ok(ctx)
-    }
+/// A backend without any hash/HMAC algorithm.
+struct DummyHmac;
+impl Hmac for DummyHmac {
+    type Sha1 = !;
+    type Sha256 = !;
+    type Sha384 = !;
+    type Sha512 = !;
+    type Sm3_256 = !;
+    type Sha3_256 = !;
+    type Sha3_384 = !;
+    type Sha3_512 = !;
+}
+
+const HASH: TpmiAlgHash = TpmiAlgHash::DEFAULT_HASH;
+
+fn kdfa_b(label: &[u8], bits: u32, out: &mut [u8]) -> usize {
+    kdfa_bits::<MockProvider>(HASH, b"key", label, (b"u", b"v"), bits, out).unwrap()
+}
+
+fn kdfe_b(label: &[u8], bits: u32, out: &mut [u8]) -> usize {
+    kdfe_bits::<MockProvider>(HASH, b"z", label, (b"u", b"v"), bits, out).unwrap()
 }
 
 #[test]
 fn test_kdfa_request_too_large_rejected() {
-    let provider = DummyHmac;
     let mut out = [0u8; 64];
-    // Requesting 1000 bits requires 125 bytes, but our buffer is only 64 bytes.
-    let err = kdfa_bits(
-        &provider,
-        TpmiAlgHash::DEFAULT_HASH,
-        b"key",
-        b"label",
-        b"u",
-        b"v",
-        1000,
-        &mut out,
-    )
-    .unwrap_err();
-
+    // Requesting 1000 bits requires 125 bytes, but our buffer is only 64 bytes:
+    // rejected before the (unsupported) HMAC is used.
+    let err =
+        kdfa_bits::<DummyHmac>(HASH, b"key", b"label", (b"u", b"v"), 1000, &mut out).unwrap_err();
     assert_eq!(err, CryptoError::Internal);
+    // With a large enough buffer, the missing algorithm is reported.
+    let err =
+        kdfa_bits::<DummyHmac>(HASH, b"key", b"label", (b"u", b"v"), 256, &mut out).unwrap_err();
+    assert_eq!(err, CryptoError::Unsupported);
 }
 
 #[test]
 fn test_kdfa_and_kdfe_label_null_termination() {
-    let provider = MockProvider;
-    let hash = TpmiAlgHash::DEFAULT_HASH;
+    let (mut a, mut b) = ([0u8; 32], [0u8; 32]);
+    kdfa_b(b"STORAGE", 256, &mut a);
+    kdfa_b(b"STORAGE\0", 256, &mut b);
+    assert_eq!(a, b);
+    // The raw-label variant matches `kdfa` with the same label as a `CStr`.
+    let mut c = [0u8; 32];
+    kdfa::<MockProvider>(HASH, b"key", c"STORAGE", (b"u", b"v"), &mut c).unwrap();
+    assert_eq!(a, c);
 
-    let mut out_kdfa_no_nul = [0u8; 32];
-    let mut out_kdfa_with_nul = [0u8; 32];
-    kdfa_bits(
-        &provider,
-        hash,
-        b"key",
-        b"STORAGE",
-        b"u",
-        b"v",
-        256,
-        &mut out_kdfa_no_nul,
-    )
-    .unwrap();
-    kdfa_bits(
-        &provider,
-        hash,
-        b"key",
-        b"STORAGE\0",
-        b"u",
-        b"v",
-        256,
-        &mut out_kdfa_with_nul,
-    )
-    .unwrap();
-    assert_eq!(out_kdfa_no_nul, out_kdfa_with_nul);
+    kdfa_b(&[], 256, &mut a);
+    kdfa_b(&[0x00], 256, &mut b);
+    assert_eq!(a, b);
 
-    let mut out_kdfa_empty = [0u8; 32];
-    let mut out_kdfa_zero_byte = [0u8; 32];
-    kdfa_bits(
-        &provider,
-        hash,
-        b"key",
-        &[],
-        b"u",
-        b"v",
-        256,
-        &mut out_kdfa_empty,
-    )
-    .unwrap();
-    kdfa_bits(
-        &provider,
-        hash,
-        b"key",
-        &[0x00],
-        b"u",
-        b"v",
-        256,
-        &mut out_kdfa_zero_byte,
-    )
-    .unwrap();
-    assert_eq!(out_kdfa_empty, out_kdfa_zero_byte);
+    kdfa_b(b"STORAGE\0", 256, &mut a);
+    kdfa_b(b"STORAGE\0\0", 256, &mut b);
+    assert_ne!(a, b);
 
-    let mut out_kdfa_two_nuls = [0u8; 32];
-    kdfa_bits(
-        &provider,
-        hash,
-        b"key",
-        b"STORAGE\0\0",
-        b"u",
-        b"v",
-        256,
-        &mut out_kdfa_two_nuls,
-    )
-    .unwrap();
-    assert_ne!(out_kdfa_with_nul, out_kdfa_two_nuls);
+    kdfe_b(b"IDENTITY", 256, &mut a);
+    kdfe_b(b"IDENTITY\0", 256, &mut b);
+    assert_eq!(a, b);
+    kdfe::<MockProvider>(HASH, b"z", c"IDENTITY", (b"u", b"v"), &mut c).unwrap();
+    assert_eq!(a, c);
 
-    let mut out_kdfe_no_nul = [0u8; 32];
-    let mut out_kdfe_with_nul = [0u8; 32];
-    kdfe_bits(
-        &provider,
-        hash,
-        b"z",
-        b"IDENTITY",
-        b"u",
-        b"v",
-        256,
-        &mut out_kdfe_no_nul,
-    )
-    .unwrap();
-    kdfe_bits(
-        &provider,
-        hash,
-        b"z",
-        b"IDENTITY\0",
-        b"u",
-        b"v",
-        256,
-        &mut out_kdfe_with_nul,
-    )
-    .unwrap();
-    assert_eq!(out_kdfe_no_nul, out_kdfe_with_nul);
+    kdfe_b(b"IDENTITY\0", 256, &mut a);
+    kdfe_b(b"IDENTITY\0\0", 256, &mut b);
+    assert_ne!(a, b);
 
-    let mut out_kdfe_two_nuls = [0u8; 32];
-    kdfe_bits(
-        &provider,
-        hash,
-        b"z",
-        b"IDENTITY\0\0",
-        b"u",
-        b"v",
-        256,
-        &mut out_kdfe_two_nuls,
-    )
-    .unwrap();
-    assert_ne!(out_kdfe_with_nul, out_kdfe_two_nuls);
-
-    let mut out_kdfe_empty = [0u8; 32];
-    let mut out_kdfe_zero_byte = [0u8; 32];
-    kdfe_bits(
-        &provider,
-        hash,
-        b"z",
-        &[],
-        b"u",
-        b"v",
-        256,
-        &mut out_kdfe_empty,
-    )
-    .unwrap();
-    kdfe_bits(
-        &provider,
-        hash,
-        b"z",
-        &[0x00],
-        b"u",
-        b"v",
-        256,
-        &mut out_kdfe_zero_byte,
-    )
-    .unwrap();
-    assert_eq!(out_kdfe_empty, out_kdfe_zero_byte);
+    kdfe_b(&[], 256, &mut a);
+    kdfe_b(&[0x00], 256, &mut b);
+    assert_eq!(a, b);
 }
 
 #[test]
 fn test_kdfa_and_kdfe_high_order_bit_masking() {
-    let provider = MockProvider;
-    let hash = TpmiAlgHash::DEFAULT_HASH;
-
     // Verify masking for every remainder bits % 8 in 1..=7 (both 1-byte and 2-byte outputs)
     for rem in 1..=7u32 {
         let expected_mask = (1u8 << rem) - 1;
 
-        // 1-byte output (bits = 1..=7)
-        let mut out_a1 = [0u8; 1];
-        let len_a1 = kdfa_bits(
-            &provider,
-            hash,
-            b"key",
-            b"STORAGE",
-            b"u",
-            b"v",
-            rem,
-            &mut out_a1,
-        )
-        .unwrap();
-        assert_eq!(len_a1, 1);
-        assert_eq!(out_a1[0], expected_mask);
+        let mut out = [0u8; 1];
+        assert_eq!(kdfa_b(b"STORAGE", rem, &mut out), 1);
+        assert_eq!(out[0], expected_mask);
+        assert_eq!(kdfe_b(b"SECRET", rem, &mut out), 1);
+        assert_eq!(out[0], expected_mask);
 
-        let mut out_e1 = [0u8; 1];
-        let len_e1 = kdfe_bits(
-            &provider,
-            hash,
-            b"z",
-            b"SECRET",
-            b"u",
-            b"v",
-            rem,
-            &mut out_e1,
-        )
-        .unwrap();
-        assert_eq!(len_e1, 1);
-        assert_eq!(out_e1[0], expected_mask);
-
-        // 2-byte output (bits = 9..=15)
-        let bits = 8 + rem;
-        let mut out_a = [0u8; 2];
-        let len_a = kdfa_bits(
-            &provider, hash, b"key", b"STORAGE", b"u", b"v", bits, &mut out_a,
-        )
-        .unwrap();
-        assert_eq!(len_a, 2);
-        assert_eq!(out_a[0], expected_mask);
-        assert_eq!(out_a[1], 0xFF);
-
-        let mut out_e = [0u8; 2];
-        let len_e = kdfe_bits(
-            &provider, hash, b"z", b"SECRET", b"u", b"v", bits, &mut out_e,
-        )
-        .unwrap();
-        assert_eq!(len_e, 2);
-        assert_eq!(out_e[0], expected_mask);
-        assert_eq!(out_e[1], 0xFF);
+        let mut out = [0u8; 2];
+        assert_eq!(kdfa_b(b"STORAGE", 8 + rem, &mut out), 2);
+        assert_eq!(out, [expected_mask, 0xFF]);
+        assert_eq!(kdfe_b(b"SECRET", 8 + rem, &mut out), 2);
+        assert_eq!(out, [expected_mask, 0xFF]);
     }
 
     // 521 bits (e.g. NIST P-521) -> 66 bytes, 521 % 8 = 1 -> mask 0x01
-    let mut out_kdfa_521 = [0u8; 66];
-    let len = kdfa_bits(
-        &provider,
-        hash,
-        b"key",
-        b"STORAGE",
-        b"u",
-        b"v",
-        521,
-        &mut out_kdfa_521,
-    )
-    .unwrap();
-    assert_eq!(len, 66);
-    assert_eq!(out_kdfa_521[0], 0x01);
-    assert_eq!(out_kdfa_521[1], 0xFF);
+    let mut out = [0u8; 66];
+    assert_eq!(kdfa_b(b"STORAGE", 521, &mut out), 66);
+    assert_eq!(out[..2], [0x01, 0xFF]);
+    assert_eq!(kdfe_b(b"SECRET", 521, &mut out), 66);
+    assert_eq!(out[..2], [0x01, 0xFF]);
 
     // 16 bits -> 2 bytes, 16 % 8 = 0 -> no masking (0xFF)
-    let mut out_kdfa_16 = [0u8; 2];
-    let len = kdfa_bits(
-        &provider,
-        hash,
-        b"key",
-        b"STORAGE",
-        b"u",
-        b"v",
-        16,
-        &mut out_kdfa_16,
-    )
-    .unwrap();
-    assert_eq!(len, 2);
-    assert_eq!(out_kdfa_16[0], 0xFF);
-    assert_eq!(out_kdfa_16[1], 0xFF);
+    let mut out = [0u8; 2];
+    assert_eq!(kdfa_b(b"STORAGE", 16, &mut out), 2);
+    assert_eq!(out, [0xFF, 0xFF]);
+    assert_eq!(kdfe_b(b"SECRET", 16, &mut out), 2);
+    assert_eq!(out, [0xFF, 0xFF]);
 
-    let mut out_kdfe_16 = [0u8; 2];
-    let len = kdfe_bits(
-        &provider,
-        hash,
-        b"z",
-        b"SECRET",
-        b"u",
-        b"v",
-        16,
-        &mut out_kdfe_16,
-    )
-    .unwrap();
-    assert_eq!(len, 2);
-    assert_eq!(out_kdfe_16[0], 0xFF);
-    assert_eq!(out_kdfe_16[1], 0xFF);
+    // 0 bits -> 0 bytes, `out` untouched
+    let mut out = [0xAAu8; 2];
+    assert_eq!(kdfa_b(b"STORAGE", 0, &mut out), 0);
+    assert_eq!(kdfe_b(b"SECRET", 0, &mut out), 0);
+    assert_eq!(out, [0xAA, 0xAA]);
 
-    // 0 bits -> 0 bytes
-    let mut out_kdfa_0 = [0xAAu8; 2];
-    let len = kdfa_bits(
-        &provider,
-        hash,
-        b"key",
-        b"STORAGE",
-        b"u",
-        b"v",
-        0,
-        &mut out_kdfa_0,
-    )
-    .unwrap();
-    assert_eq!(len, 0);
-    assert_eq!(out_kdfa_0[0], 0xAA);
-
-    let mut out_kdfe_0 = [0xAAu8; 2];
-    let len = kdfe_bits(
-        &provider,
-        hash,
-        b"z",
-        b"SECRET",
-        b"u",
-        b"v",
-        0,
-        &mut out_kdfe_0,
-    )
-    .unwrap();
-    assert_eq!(len, 0);
-    assert_eq!(out_kdfe_0[0], 0xAA);
-
-    // 521 bits -> 66 bytes, 521 % 8 = 1 -> mask 0x01
-    let mut out_kdfe_521 = [0u8; 66];
-    let len = kdfe_bits(
-        &provider,
-        hash,
-        b"z",
-        b"SECRET",
-        b"u",
-        b"v",
-        521,
-        &mut out_kdfe_521,
-    )
-    .unwrap();
-    assert_eq!(len, 66);
-    assert_eq!(out_kdfe_521[0], 0x01);
-    assert_eq!(out_kdfe_521[1], 0xFF);
+    // Only `ceil(bits / 8)` bytes are written.
+    let mut out = [0xAAu8; 4];
+    assert_eq!(kdfa_b(b"STORAGE", 12, &mut out), 2);
+    assert_eq!(out, [0x0F, 0xFF, 0xAA, 0xAA]);
 }
 
-// --- From symmetric.rs ---
+/// A complete backend without any algorithm, only implementing `ct_eq`.
+struct CtEqOnly;
+impl Random for CtEqOnly {
+    type Rng = FakeRng;
+    fn from_entropy() -> Result<FakeRng, CryptoError> {
+        Ok(FakeRng)
+    }
+    fn from_seed(_: &[u8]) -> Result<FakeRng, CryptoError> {
+        Ok(FakeRng)
+    }
+}
+impl Hash for CtEqOnly {
+    type Sha1 = !;
+    type Sha256 = !;
+    type Sha384 = !;
+    type Sha512 = !;
+    type Sm3_256 = !;
+    type Sha3_256 = !;
+    type Sha3_384 = !;
+    type Sha3_512 = !;
+}
+impl Hmac for CtEqOnly {
+    type Sha1 = !;
+    type Sha256 = !;
+    type Sha384 = !;
+    type Sha512 = !;
+    type Sm3_256 = !;
+    type Sha3_256 = !;
+    type Sha3_384 = !;
+    type Sha3_512 = !;
+}
+impl backend::Cmac for CtEqOnly {
+    type Aes128 = !;
+    type Aes192 = !;
+    type Aes256 = !;
+    type Sm4_128 = !;
+    type Camellia128 = !;
+    type Camellia192 = !;
+    type Camellia256 = !;
+}
+impl Symmetric for CtEqOnly {
+    type Aes128 = !;
+    type Aes192 = !;
+    type Aes256 = !;
+    type Sm4_128 = !;
+    type Camellia128 = !;
+    type Camellia192 = !;
+    type Camellia256 = !;
+}
+impl backend::Rsa for CtEqOnly {
+    type Rsa1024 = !;
+    type Rsa2048 = !;
+    type Rsa3072 = !;
+    type Rsa4096 = !;
+}
+impl Ecc for CtEqOnly {
+    type NistP192 = !;
+    type NistP224 = !;
+    type NistP256 = !;
+    type NistP384 = !;
+    type NistP521 = !;
+    type BNP256 = !;
+    type BNP638 = !;
+    type SM2P256 = !;
+    type BpP256R1 = !;
+    type BpP384R1 = !;
+    type BpP512R1 = !;
+    type Ed25519 = !;
+    type Ed448 = !;
+    type X25519 = !;
+    type X448 = !;
+}
+impl backend::Mldsa for CtEqOnly {
+    type Mldsa44 = !;
+    type Mldsa65 = !;
+    type Mldsa87 = !;
+}
+impl backend::Mlkem for CtEqOnly {
+    type Mlkem512 = !;
+    type Mlkem768 = !;
+    type Mlkem1024 = !;
+}
+impl Crypto for CtEqOnly {
+    fn ct_eq(a: &[u8], b: &[u8]) -> bool {
+        a.len() == b.len() && a.iter().zip(b).fold(0, |acc, (x, y)| acc | (x ^ y)) == 0
+    }
+}
 
-/// Test provider whose AES-128 "cipher" XORs the data with the key and sets the
-/// chained IV (ivOut) to the key; only CFB is supported.
-struct DummyProvider;
+#[test]
+fn test_digest_eq_and_known_answer_tests() {
+    let x = [1u8; HASH.digest_size()];
+    let y = [2u8; HASH.digest_size()];
+    let a = TpmtHa::new(HASH, &x).unwrap();
+    let b = TpmtHa::new(HASH, &y).unwrap();
+    assert!(digest_eq::<CtEqOnly>(a, a));
+    assert!(!digest_eq::<CtEqOnly>(a, b));
+    // The known-answer self tests are enabled by default.
+    const { assert!(CtEqOnly::KNOWN_ANSWER_TESTS) };
+}
 
-impl Symmetric for DummyProvider {
-    fn aes128(
-        &self,
-        key: &[u8; 16],
-        mode: ModeIv<'_>,
-        _dir: Direction,
-        data: &mut [u8],
-    ) -> Result<(), CryptoError> {
-        let ModeIv::Cfb(iv_out) = mode else {
-            return Err(CryptoError::Unsupported);
-        };
-        for (i, b) in data.iter_mut().enumerate() {
-            *b ^= key[i % 16];
+// --- Symmetric ---
+
+/// AES-128 "cipher" which XORs the data with the key; only CFB is supported.
+struct XorAes;
+impl SymmetricState<16> for XorAes {
+    fn init(_key: &[u8; 16]) -> Result<Self, CryptoError> {
+        Ok(Self)
+    }
+    fn ctr(&self, _: &mut Block, _: &mut [u8]) -> Result<(), CryptoError> {
+        Err(CryptoError::Unsupported)
+    }
+    fn ofb(&self, _: &mut Block, _: &mut [u8]) -> Result<(), CryptoError> {
+        Err(CryptoError::Unsupported)
+    }
+    fn cbc(&self, _: Direction, _: &mut Block, _: &mut [Block]) -> Result<(), CryptoError> {
+        Err(CryptoError::Unsupported)
+    }
+    fn cfb(&self, _: Direction, iv: &mut Block, data: &mut [u8]) -> Result<(), CryptoError> {
+        for b in data.iter_mut() {
+            *b ^= 0x5A;
         }
-        *iv_out = *key;
+        iv.fill(0x5A);
         Ok(())
+    }
+    fn ecb(&self, _: Direction, _: &mut [Block]) -> Result<(), CryptoError> {
+        Err(CryptoError::Unsupported)
     }
 }
 
-#[test]
-fn test_symmetric_key_too_small_rejected() {
-    let provider = DummyProvider;
-    let mut iv = [0u8; 16];
-    let bad_key = [0u8; 15]; // Aes128 expects 16
-    let mut data = [0u8; 16];
+struct DummySymmetric;
+impl Symmetric for DummySymmetric {
+    type Aes128 = XorAes;
+    type Aes192 = !;
+    type Aes256 = !;
+    type Sm4_128 = !;
+    type Camellia128 = !;
+    type Camellia192 = !;
+    type Camellia256 = !;
+}
 
+#[test]
+#[cfg(feature = "aes128")]
+fn test_symmetric_key_and_iv_sizes() {
     // The key length is checked when the key is built for its algorithm.
-    assert!(SymmetricKey::new(AlgSym::Aes128, &bad_key).is_none());
-
-    // A key of the right length is accepted and reaches the provider.
-    let key = [0x5Au8; 16];
-    assert_eq!(
-        encrypt(
-            &provider,
-            SymmetricKey::new(AlgSym::Aes128, &key).unwrap(),
-            ModeIv::new(TpmiAlgCipherMode::Cfb, &mut iv).unwrap(),
-            &mut data,
-        ),
-        Ok(())
-    );
-    assert_eq!(data, key);
-    assert_eq!(iv, key);
-}
-
-#[test]
-fn test_symmetric_iv_buffer_too_small_rejected() {
-    let provider = DummyProvider;
-    let mut bad_iv = [0u8; 15]; // expects 16 bytes
-    let key = [0u8; 16];
+    assert!(SymmetricKey::new(AlgSym::Aes128, &[0u8; 15]).is_none());
+    // The IV length is checked when the input is built for its mode.
     let mut data = [0u8; 16];
+    assert!(CipherInput::new(TpmiAlgCipherMode::Cfb, &mut [0u8; 15], &mut data).is_none());
 
-    // The IV length is checked when the IV is bound to its mode.
-    assert!(ModeIv::new(TpmiAlgCipherMode::Cfb, &mut bad_iv).is_none());
-
-    // A 16-byte IV is accepted and reaches the provider.
+    // A key and IV of the right length reach the backend.
+    let key = SymmetricKey::new(AlgSym::Aes128, &[0x5Au8; 16]).unwrap();
     let mut iv = [0u8; 16];
+    let input = CipherInput::new(TpmiAlgCipherMode::Cfb, &mut iv, &mut data).unwrap();
     assert_eq!(
-        encrypt(
-            &provider,
-            SymmetricKey::new(AlgSym::Aes128, &key).unwrap(),
-            ModeIv::new(TpmiAlgCipherMode::Cfb, &mut iv).unwrap(),
-            &mut data,
-        ),
+        key.crypt::<DummySymmetric>(Direction::Encrypt, input),
         Ok(())
     );
+    assert_eq!(data, [0x5A; 16]);
+    assert_eq!(iv, [0x5A; 16]);
 }
 
-// --- From asymmetric.rs ---
+// --- ECC point arithmetic (tpm-rs extensions) ---
 
-struct DummyAsymmetricProvider;
+/// A fake P-256 where `[k]G = (k, k)`, `[k]P = (k ^ P.x, k ^ P.y)`, and every
+/// point with `x != 0` is on the curve. Private keys are not supported.
+struct FakeP256;
 
-impl AsymmetricSign for DummyAsymmetricProvider {
-    fn rsassa_sign(
+#[derive(Clone, Copy)]
+struct FakePoint([u8; 64]);
+
+impl PrivateKey<64, 32, FakeRng> for FakeP256 {
+    type PublicKey = FakePoint;
+    fn generate(_: &mut FakeRng, _: ()) -> Result<Self, CryptoError> {
+        Err(CryptoError::Unsupported)
+    }
+    fn load(_: FakePoint, _: &[u8; 32]) -> Result<Option<Self>, CryptoError> {
+        Ok(Some(Self))
+    }
+    fn store(&self, _: &mut [u8; 32]) -> Result<(), CryptoError> {
+        Err(CryptoError::Unsupported)
+    }
+    fn as_public(&self) -> &FakePoint {
+        &FakePoint([0; 64])
+    }
+    fn load_public(_: (), public: &[u8; 64]) -> Result<Option<FakePoint>, CryptoError> {
+        Ok((public[..32] != [0; 32]).then_some(FakePoint(*public)))
+    }
+    fn store_public(public: &FakePoint, out: &mut [u8; 64]) -> Result<(), CryptoError> {
+        *out = public.0;
+        Ok(())
+    }
+}
+
+impl EccCurve<32, 64, FakeRng> for FakeP256 {
+    fn ecdh(
         &self,
-        _private_key: &[u8],
-        _digest: TpmtHa<'_>,
-        signature_out: &mut [u8],
-    ) -> Result<Option<usize>, CryptoError> {
-        signature_out[..4].copy_from_slice(&[1, 2, 3, 4]);
-        Ok(Some(4))
-    }
-}
-
-impl Asymmetric for DummyAsymmetricProvider {}
-
-#[test]
-fn test_asymmetric_default_unimplemented() {
-    let provider = DummyAsymmetricProvider;
-    let mut sig = [0u8; 32];
-    let digest = TpmtHa::DEFAULT_HA;
-    #[cfg(feature = "rsassa")]
-    {
-        assert_eq!(
-            sign_inner(&provider, Alg::RSASSA, &[], digest, &mut sig),
-            Ok(Some(4))
-        );
-        assert_eq!(sig[..4], [1, 2, 3, 4]);
-    }
-
-    assert_eq!(
-        sign_inner(&provider, Alg::RSAPSS, &[], digest, &mut sig),
-        Err(CryptoError::Unsupported)
-    );
-    assert_eq!(
-        verify_inner(&provider, Alg::ECDSA, &[], 0, digest, &[]),
-        Err(CryptoError::Unsupported)
-    );
-    assert_eq!(
-        rsa_encrypt(
-            &provider,
-            Alg::OAEP,
-            Alg::SHA256,
-            &[],
-            0,
-            &[],
-            &mut sig,
-            &[]
-        ),
-        Err(CryptoError::Unsupported)
-    );
-    assert_eq!(
-        rsa_decrypt(&provider, Alg::RSAES, Alg::SHA256, &[], &[], &mut sig, &[]),
-        Err(CryptoError::Unsupported)
-    );
-    let mut pub_k = [0u8; 32];
-    let mut priv_k = [0u8; 32];
-    assert_eq!(
-        generate_key(&provider, Alg::RSA, None, &mut pub_k, &mut priv_k, None),
-        Err(CryptoError::Unsupported)
-    );
-    assert_eq!(
-        generate_key(&provider, Alg::ECC, None, &mut pub_k, &mut priv_k, None),
-        Err(CryptoError::Unsupported)
-    );
-}
-
-// --- From ecc.rs ---
-
-struct DummyP256;
-impl EccCurve<32> for DummyP256 {
-    fn validate_point(&self, _x: &[u8; 32], _y: &[u8; 32]) -> Result<bool, CryptoError> {
-        Ok(true)
-    }
-    fn point_multiply_generator(
-        &self,
-        scalar: &[u8; 32],
-        x_out: &mut [u8; 32],
-        y_out: &mut [u8; 32],
+        _: &FakePoint,
+        _: &mut [u8; 32],
+        _: &mut [u8; 32],
     ) -> Result<Option<()>, CryptoError> {
-        *x_out = *scalar;
-        *y_out = *scalar;
+        Err(CryptoError::Unsupported)
+    }
+    fn sign(
+        &self,
+        _: &mut FakeRng,
+        _: &[u8],
+        _: &mut [u8; 32],
+        _: &mut [u8; 32],
+    ) -> Result<(), CryptoError> {
+        Err(CryptoError::Unsupported)
+    }
+    fn verify(_: &FakePoint, _: &[u8], _: &[u8; 32], _: &[u8; 32]) -> Result<bool, CryptoError> {
+        Err(CryptoError::Unsupported)
+    }
+    fn mul_generator(
+        k: &[u8; 32],
+        out_x: &mut [u8; 32],
+        out_y: &mut [u8; 32],
+    ) -> Result<Option<()>, CryptoError> {
+        if *k == [0; 32] {
+            return Ok(None);
+        }
+        *out_x = *k;
+        *out_y = *k;
         Ok(Some(()))
     }
-    fn point_multiply(
-        &self,
-        scalar: &[u8; 32],
-        x_in: &[u8; 32],
-        y_in: &[u8; 32],
-        x_out: &mut [u8; 32],
-        y_out: &mut [u8; 32],
+    fn mul_point(
+        point: &FakePoint,
+        k: &[u8; 32],
+        out_x: &mut [u8; 32],
+        out_y: &mut [u8; 32],
     ) -> Result<Option<()>, CryptoError> {
         for i in 0..32 {
-            x_out[i] = scalar[i] ^ x_in[i];
-            y_out[i] = scalar[i] ^ y_in[i];
+            out_x[i] = k[i] ^ point.0[i];
+            out_y[i] = k[i] ^ point.0[32 + i];
         }
         Ok(Some(()))
     }
-    fn ecdaa_sign(
-        &self,
-        _commit_r: &[u8; 32],
-        _commit_x: &[u8],
-        _commit_p1: &[u8],
-        _private_key_d: &[u8; 32],
-        _digest: &[u8],
-        nonce_k_out: &mut [u8; 32],
-        s_out: &mut [u8; 32],
-    ) -> Result<Option<()>, CryptoError> {
-        *nonce_k_out = [0xAA; 32];
-        *s_out = [0xBB; 32];
-        Ok(Some(()))
+}
+
+struct FakeRng;
+impl Rng for FakeRng {
+    fn fill_bytes(&mut self, out: &mut [u8]) -> Result<(), CryptoError> {
+        out.fill(0x42);
+        Ok(())
+    }
+    fn stir_bytes(&mut self, _: &[u8]) -> Result<(), CryptoError> {
+        Ok(())
     }
 }
 
-struct DummyBackend;
-impl Ecc for DummyBackend {
-    type NistP256Context = DummyP256;
-    fn nist_p256(&self) -> Result<Self::NistP256Context, CryptoError> {
-        Ok(DummyP256)
+struct DummyEcc;
+impl Random for DummyEcc {
+    type Rng = FakeRng;
+    fn from_entropy() -> Result<FakeRng, CryptoError> {
+        Ok(FakeRng)
     }
-
-    type NistP192Context = !;
-    type NistP224Context = !;
-    type NistP384Context = !;
-    type NistP521Context = !;
-    type BnP256Context = !;
-    type BnP638Context = !;
-    type Sm2P256Context = !;
-    type BpP256R1Context = !;
-    type BpP384R1Context = !;
-    type BpP512R1Context = !;
-    type Curve25519Context = !;
-    type Curve448Context = !;
+    fn from_seed(_: &[u8]) -> Result<FakeRng, CryptoError> {
+        Ok(FakeRng)
+    }
+}
+impl Ecc for DummyEcc {
+    type NistP192 = !;
+    type NistP224 = !;
+    type NistP256 = FakeP256;
+    type NistP384 = !;
+    type NistP521 = !;
+    type BNP256 = !;
+    type BNP638 = !;
+    type SM2P256 = !;
+    type BpP256R1 = !;
+    type BpP384R1 = !;
+    type BpP512R1 = !;
+    type Ed25519 = !;
+    type Ed448 = !;
+    type X25519 = !;
+    type X448 = !;
 }
 
 #[test]
-#[cfg(feature = "ecc_curve_nist_p256")]
-fn test_ecc_ctx_and_helpers() {
-    let backend = DummyBackend;
-    let pt = [1u8; 64];
-    assert_eq!(
-        validate_point(&backend, TpmEccCurve::NistP256, &pt),
-        Ok(true)
-    );
+#[cfg(feature = "nist_p256")]
+fn test_ecc_point_arithmetic() {
+    let curve = TpmEccCurve::NistP256;
+    let (mut x, mut y) = ([0u8; 32], [0u8; 32]);
 
-    // Invalid point length
-    assert_eq!(
-        validate_point(&backend, TpmEccCurve::NistP256, &[1u8; 63]),
-        Ok(false)
+    // [k]G, with a short (left-padded) scalar.
+    let q = ecc_mul_generator::<DummyEcc>(curve, &[2], &mut x, &mut y)
+        .unwrap()
+        .unwrap();
+    let mut two = [0u8; 32];
+    two[31] = 2;
+    assert_eq!((q.x.as_slice(), q.y.as_slice()), (&two[..], &two[..]));
+    // Zero and over-long scalars have no result.
+    assert!(
+        ecc_mul_generator::<DummyEcc>(curve, &[0; 32], &mut x, &mut y)
+            .unwrap()
+            .is_none()
     );
-
-    let scalar = [2u8; 32];
-    let mut out = [0u8; 64];
-    assert_eq!(
-        point_multiply_generator(&backend, TpmEccCurve::NistP256, &scalar, &mut out),
-        Ok(Some(64))
+    assert!(
+        ecc_mul_generator::<DummyEcc>(curve, &[1; 33], &mut x, &mut y)
+            .unwrap()
+            .is_none()
     );
-    assert_eq!(out[..32], [2u8; 32]);
-    assert_eq!(out[32..], [2u8; 32]);
-
-    // Buffer too small
-    let mut small_out = [0u8; 63];
+    // Output buffers too small.
     assert_eq!(
-        point_multiply_generator(&backend, TpmEccCurve::NistP256, &scalar, &mut small_out),
+        ecc_mul_generator::<DummyEcc>(curve, &[2], &mut [0u8; 31], &mut y),
         Err(CryptoError::Internal)
     );
 
-    // point_multiply
-    let mut derived = [0u8; 64];
-    assert_eq!(
-        point_multiply(&backend, TpmEccCurve::NistP256, &scalar, &pt, &mut derived),
-        Ok(Some(64))
+    // Point validation is `EccPublicKey::load`.
+    let px = [1u8; 32];
+    let p = TpmsEccPoint {
+        x: Tpm2bEccParameter::new(&px).unwrap(),
+        y: Tpm2bEccParameter::new(&px).unwrap(),
+    };
+    let public = EccPublicKey::<DummyEcc>::load(curve, None, p)
+        .unwrap()
+        .unwrap();
+    let off_curve = TpmsEccPoint {
+        x: Tpm2bEccParameter::new(&[0u8; 32]).unwrap(),
+        y: Tpm2bEccParameter::new(&px).unwrap(),
+    };
+    assert!(
+        EccPublicKey::<DummyEcc>::load(curve, None, off_curve)
+            .unwrap()
+            .is_none()
     );
-    assert_eq!(derived[0], 3);
 
-    // ecdaa_sign
-    let mut k_out = [0u8; 32];
-    let mut s_out = [0u8; 32];
-    assert_eq!(
-        ecdaa_sign(
-            &backend,
-            TpmEccCurve::NistP256,
-            &[1u8; 32],
-            &[],
-            &[],
-            &[2u8; 32],
-            b"digest",
-            &mut k_out,
-            &mut s_out,
-        ),
-        Ok(Some(32))
+    // [k]P
+    let r = public.mul_point(&[3], &mut x, &mut y).unwrap().unwrap();
+    assert_eq!(r.x.as_slice()[31], 3 ^ 1);
+    assert_eq!(r.y.as_slice()[0], 1);
+
+    // A private key from its scalar.
+    assert!(
+        EccPrivateKey::<DummyEcc>::from_scalar(curve, &[7])
+            .unwrap()
+            .is_some()
     );
-    assert_eq!(k_out, [0xAA; 32]);
-    assert_eq!(s_out, [0xBB; 32]);
+    assert!(
+        EccPrivateKey::<DummyEcc>::from_scalar(curve, &[0])
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]
-#[cfg(feature = "ecc_curve_nist_p384")]
+#[cfg(feature = "nist_p384")]
 fn test_ecc_unimplemented_curve() {
-    let backend = DummyBackend;
-    let pt = [1u8; 96];
+    let (mut x, mut y) = ([0u8; 48], [0u8; 48]);
     assert_eq!(
-        validate_point(&backend, TpmEccCurve::NistP384, &pt),
+        ecc_mul_generator::<DummyEcc>(TpmEccCurve::NistP384, &[2], &mut x, &mut y),
         Err(CryptoError::Unsupported)
     );
+    let p = TpmsEccPoint {
+        x: Tpm2bEccParameter::new(&[1u8; 48]).unwrap(),
+        y: Tpm2bEccParameter::new(&[1u8; 48]).unwrap(),
+    };
+    assert!(matches!(
+        EccPublicKey::<DummyEcc>::load(TpmEccCurve::NistP384, None, p),
+        Err(CryptoError::Unsupported)
+    ));
 }

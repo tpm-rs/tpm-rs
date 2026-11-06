@@ -2,15 +2,14 @@
 //! point computation.
 
 use crate::_common::{
-    AES128_CFB, CC_ECDH_ZGEN, CLIENT_CRYPTO, base_attrs, create_primary_returning_public,
-    create_primary_with_auth_in, ecc_point_param, ecc_public, ecc_storage_template_derived,
-    ecc_template, execute_with_password_sessions, fixed_zgen_point, hmac_template,
-    load_external_ecc_key, rc_at, rc_bare, rsa_public_with_symmetric, sdo_user, send_key_command,
-    send_with_trailing,
+    AES128_CFB, CC_ECDH_ZGEN, base_attrs, client_ecc_mul_point, client_ecc_public,
+    create_primary_returning_public, create_primary_with_auth_in, ecc_point_param, ecc_public,
+    ecc_storage_template_derived, ecc_template, execute_with_password_sessions, fixed_zgen_point,
+    hmac_template, load_external_ecc_key, rc_at, rc_bare, rsa_public_with_symmetric, sdo_user,
+    send_key_command, send_with_trailing,
 };
 use testing::tpm::Tpm;
 use tpm2::commands::{ECDHKeyGen, ECDHZGen, HMAC};
-use tpm2::crypto::Ecc;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
     Handle, Tpm2b, Tpm2bEccParameter, Tpm2bMaxBuffer, TpmEccCurve, TpmaObject, TpmiAlgHash,
@@ -101,20 +100,12 @@ fn key_gen_shared_point() {
     pub_raw[..32].copy_from_slice(pub_tpms.x.get_buffer());
     pub_raw[32..64].copy_from_slice(pub_tpms.y.get_buffer());
     assert!(
-        CLIENT_CRYPTO.validate_point(TpmEccCurve::NistP256, &pub_raw) == Ok(true),
+        client_ecc_public(TpmEccCurve::NistP256, &pub_raw).is_some(),
         "pubPoint must lie on NIST P-256 curve"
     );
 
     // Check zPoint coordinates match expected ECDH scalar multiplication: Z = [d_s] Q_e
-    let mut expected_z_raw = [0u8; 64];
-    CLIENT_CRYPTO
-        .point_multiply(
-            TpmEccCurve::NistP256,
-            &priv_bytes,
-            &pub_raw,
-            &mut expected_z_raw,
-        )
-        .expect("Scalar multiplication [d_s] Q_e should succeed")
+    let expected_z_raw = client_ecc_mul_point(TpmEccCurve::NistP256, &priv_bytes, &pub_raw)
         .expect("Scalar multiplication [d_s] Q_e should succeed");
 
     let z_tpms = rsp.z_point.0;
@@ -123,7 +114,8 @@ fn key_gen_shared_point() {
     z_raw[32..64].copy_from_slice(z_tpms.y.get_buffer());
 
     assert_eq!(
-        z_raw, expected_z_raw,
+        z_raw[..],
+        expected_z_raw[..],
         "zPoint coordinates must match expected ECDH scalar multiplication [d_s] Q_e"
     );
 }

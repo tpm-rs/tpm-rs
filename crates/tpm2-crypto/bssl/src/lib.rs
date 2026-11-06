@@ -1,54 +1,61 @@
 #![cfg_attr(not(test), no_std)]
 #![deny(unsafe_code)]
 
-use tpm2::crypto::{ConstantTimeEq, CryptoError, CryptoProvider, Random};
+use tpm2::crypto::{Crypto, CryptoError, Random, Rng};
 
-/// BoringSSL-based implementation of the `tpm2::crypto` interfaces
-/// ([`CryptoProvider`] and its super-traits).
+/// BoringSSL-based implementation of the `tpm2::crypto` backend interfaces
+/// ([`Crypto`] and the [`tpm2::crypto::backend`] family traits).
 ///
 /// Supported algorithms: SHA-1/SHA-256/SHA-384/SHA-512 (hash and HMAC),
 /// AES-128/192/256 (CMAC, and the CTR, OFB, CBC, CFB and ECB modes for symmetric
 /// encryption), Camellia-128/192/256 (the same; BoringSSL is built without
 /// Camellia, `OPENSSL_NO_CAMELLIA`, so these fall back to the RustCrypto
-/// `camellia` and `cmac` crates), RSA 1024-4096
+/// implementation of `tpm2-crypto-rust`), RSA 1024-4096
 /// (RSASSA, RSAPSS, RSAES, OAEP, raw RSA, key generation and import), the NIST
-/// P-224/P-256/P-384/P-521 curves (ECDSA, point operations and key generation),
-/// and BN-P256 (point operations and key generation), NIST P-192, BN P-638
-/// and SM2 P-256 (point operations and key generation) with the generic
-/// constant-time short-Weierstrass arithmetic of `tpm2-crypto-weierstrass`
-/// (BoringSSL limits custom curves to 66-byte fields, too small for BN P-638;
-/// the same implementation serves the other two curves for uniformity, see
-/// `bssl-algorithms.md`), and ML-KEM-768/1024 and ML-DSA-44/65/87 key
-/// generation and verification.
+/// P-224/P-256/P-384/P-521 curves and BN-P256 (ECDSA, ECDH, point operations and
+/// key generation), NIST P-192, BN P-638 and SM2 P-256 (the same, and SM2
+/// signatures) with the generic constant-time short-Weierstrass arithmetic of
+/// `tpm2-crypto-weierstrass` (BoringSSL limits custom curves to 66-byte fields,
+/// too small for BN P-638; the same implementation serves the other two curves
+/// for uniformity, see `bssl-algorithms.md`), and ML-KEM-768/1024 and
+/// ML-DSA-44/65/87 key generation and verification.
 /// ML-KEM-512 and ML-DSA signing (with the TPM's signing randomness) fall back
-/// to RustCrypto `ml-kem`/`ml-dsa` ([`tpm2_crypto_rust::pqc`]; see [`pqc`]).
-/// Everything else returns [`CryptoError::Unsupported`].
+/// to RustCrypto `ml-kem`/`ml-dsa` (`tpm2-crypto-rust`; see [`pqc`]).
+/// Everything else is bound to `!` ([`CryptoError::Unsupported`]).
 pub struct BsslCryptoProvider;
 
-impl CryptoProvider for BsslCryptoProvider {
-    fn get_random(&self, dest: &mut [u8]) -> Result<(), CryptoError> {
-        bssl_crypto::rand_bytes(dest);
-        Ok(())
-    }
-}
-
-impl ConstantTimeEq for BsslCryptoProvider {
+impl Crypto for BsslCryptoProvider {
     /// Compares `a` and `b` with BoringSSL's `CRYPTO_memcmp`, in time independent
-    /// of their contents.
-    fn constant_time_eq<const N: usize>(&self, a: &[u8; N], b: &[u8; N]) -> bool {
+    /// of their contents (slices of different lengths are unequal).
+    fn ct_eq(a: &[u8], b: &[u8]) -> bool {
         bssl_crypto::constant_time_compare(a, b)
     }
 }
 
-/// The provider does not create [`tpm2::crypto::Rng`] instances: its CSPRNG is
-/// [`CryptoProvider::get_random`], and deterministic key generation takes a seed
-/// directly ([`tpm2::crypto::Asymmetric::generate_key`]).
+/// The RNG of [`BsslCryptoProvider::from_entropy`] is BoringSSL's `RAND_bytes`, and the
+/// deterministic RNG of [`BsslCryptoProvider::from_seed`] is a ChaCha20 RNG seeded with
+/// SHA-256 of the seed.
 impl Random for BsslCryptoProvider {
-    type Rng = !;
+    type Rng = BsslRng;
+
+    fn from_entropy() -> Result<BsslRng, CryptoError> {
+        Ok(BsslRng(RngSource::System))
+    }
+
+    fn from_seed(seed: &[u8]) -> Result<BsslRng, CryptoError> {
+        let seed_32 = bssl_crypto::digest::Sha256::hash(seed);
+        use rand_chacha::rand_core::SeedableRng as _;
+        Ok(BsslRng(RngSource::Seeded(
+            rand_chacha::ChaCha20Rng::from_seed(seed_32),
+        )))
+    }
+
+    fn rand_bytes(out: &mut [u8]) -> Result<(), CryptoError> {
+        bssl_crypto::rand_bytes(out);
+        Ok(())
+    }
 }
 
-#[forbid(unsafe_code)]
-pub mod asymmetric;
 pub mod bssl;
 #[forbid(unsafe_code)]
 pub mod cmac;
@@ -59,8 +66,10 @@ pub mod hash;
 #[forbid(unsafe_code)]
 pub mod pqc;
 #[forbid(unsafe_code)]
+pub mod rsa;
+#[forbid(unsafe_code)]
 pub mod symmetric;
-pub use {bssl::*, cmac::*, ecc::*, hash::*};
+pub use {bssl::*, cmac::*, ecc::*, hash::*, pqc::*, rsa::*, symmetric::*};
 
 /// Maps the result of a verification or validation binding to the
 /// `tpm2::crypto` convention: [`BsslError::InvalidData`] (a bad signature, key,
@@ -83,62 +92,85 @@ pub(crate) fn output<T>(result: Result<T, BsslError>) -> Result<Option<T>, Crypt
     }
 }
 
-/// Random number generator backed by BoringSSL's `RAND_bytes`.
-pub struct BsslRng;
+/// The random number generator of [`BsslCryptoProvider`] ([`Random::Rng`]).
+///
+/// It is either BoringSSL's `RAND_bytes` ([`Random::from_entropy`]), or a deterministic
+/// ChaCha20 RNG ([`Random::from_seed`]), whose output depends only on the seed and the
+/// sequence of calls. It also implements [`rand_core::RngCore`], for the key generation
+/// of the curves and parameter sets that take their randomness from it.
+pub struct BsslRng(RngSource);
+
+#[allow(clippy::large_enum_variant)]
+enum RngSource {
+    /// BoringSSL's `RAND_bytes`.
+    System,
+    /// A ChaCha20 RNG seeded with SHA-256 of the seed (and reseeded by `stir_bytes`).
+    Seeded(rand_chacha::ChaCha20Rng),
+}
+
+impl BsslRng {
+    /// Returns `true` for the deterministic RNG of [`Random::from_seed`].
+    pub fn is_seeded(&self) -> bool {
+        matches!(self.0, RngSource::Seeded(_))
+    }
+}
+
+impl Rng for BsslRng {
+    fn fill_bytes(&mut self, out: &mut [u8]) -> Result<(), CryptoError> {
+        rand_core::RngCore::fill_bytes(self, out);
+        Ok(())
+    }
+
+    /// For BoringSSL's `RAND_bytes`, does nothing: BoringSSL reseeds itself from the
+    /// operating system, and its public API takes no additional input. For the seeded RNG,
+    /// reseeds the ChaCha20 RNG with SHA-256 of 32 bytes of its output followed by `data`
+    /// (deterministic).
+    fn stir_bytes(&mut self, data: &[u8]) -> Result<(), CryptoError> {
+        if let RngSource::Seeded(rng) = &mut self.0 {
+            use rand_chacha::rand_core::SeedableRng as _;
+            let mut state = [0u8; 32];
+            rand_core::RngCore::fill_bytes(rng, &mut state);
+            let mut hash = bssl_crypto::digest::Sha256::new();
+            hash.update(&state);
+            hash.update(data);
+            bssl::cleanse(&mut state);
+            *rng = rand_chacha::ChaCha20Rng::from_seed(hash.digest());
+        }
+        Ok(())
+    }
+}
 
 impl rand_core::RngCore for BsslRng {
     fn next_u32(&mut self) -> u32 {
         let mut buf = [0u8; 4];
-        bssl_crypto::rand_bytes(&mut buf);
+        rand_core::RngCore::fill_bytes(self, &mut buf);
         u32::from_le_bytes(buf)
     }
+
     fn next_u64(&mut self) -> u64 {
         let mut buf = [0u8; 8];
-        bssl_crypto::rand_bytes(&mut buf);
+        rand_core::RngCore::fill_bytes(self, &mut buf);
         u64::from_le_bytes(buf)
     }
+
     fn fill_bytes(&mut self, dest: &mut [u8]) {
-        bssl_crypto::rand_bytes(dest);
+        match &mut self.0 {
+            RngSource::System => bssl_crypto::rand_bytes(dest),
+            RngSource::Seeded(rng) => rng.fill_bytes(dest),
+        }
     }
+
     fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), rand_core::Error> {
-        bssl_crypto::rand_bytes(dest);
+        rand_core::RngCore::fill_bytes(self, dest);
         Ok(())
     }
 }
 
 impl rand_core::CryptoRng for BsslRng {}
 
-#[allow(clippy::large_enum_variant)]
-pub(crate) enum RngWrapper {
-    ChaCha(rand_chacha::ChaCha20Rng),
-    Bssl(BsslRng),
+/// Draws an `N`-byte array from `rng`.
+pub(crate) fn random_array<const N: usize>(rng: &mut BsslRng) -> [u8; N] {
+    let mut out = [0u8; N];
+    rand_core::RngCore::fill_bytes(rng, &mut out);
+    out
 }
-
-impl rand_core::RngCore for RngWrapper {
-    fn next_u32(&mut self) -> u32 {
-        match self {
-            Self::ChaCha(rng) => rng.next_u32(),
-            Self::Bssl(rng) => rng.next_u32(),
-        }
-    }
-    fn next_u64(&mut self) -> u64 {
-        match self {
-            Self::ChaCha(rng) => rng.next_u64(),
-            Self::Bssl(rng) => rng.next_u64(),
-        }
-    }
-    fn fill_bytes(&mut self, dest: &mut [u8]) {
-        match self {
-            Self::ChaCha(rng) => rng.fill_bytes(dest),
-            Self::Bssl(rng) => rng.fill_bytes(dest),
-        }
-    }
-    fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), rand_core::Error> {
-        match self {
-            Self::ChaCha(rng) => rng.try_fill_bytes(dest),
-            Self::Bssl(rng) => rng.try_fill_bytes(dest),
-        }
-    }
-}
-
-impl rand_core::CryptoRng for RngWrapper {}

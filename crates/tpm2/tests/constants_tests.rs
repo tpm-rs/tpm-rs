@@ -72,10 +72,7 @@ fn test_alg_debug_formatting() {
 
 #[test]
 fn test_tpm_ecc_curve_conversions() {
-    assert_eq!(core::mem::size_of::<TpmEccCurve>(), 2);
-    assert_eq!(u16::from(TpmEccCurve::None), 0x0000);
-    assert_eq!(TpmEccCurve::try_from(0x0000), Ok(TpmEccCurve::None));
-    assert_eq!(TpmEccCurve::None.parameter_size(), 0);
+    assert_eq!(TpmEccCurve::try_from(0x0000), Err(UnmarshalError::CURVE));
     let mut none_slice: &[u8] = &[0x00, 0x00];
     assert_eq!(
         TpmEccCurve::unmarshal(&mut none_slice),
@@ -83,22 +80,22 @@ fn test_tpm_ecc_curve_conversions() {
     );
     let mut opt_slice: &[u8] = &[0x00, 0x00];
     assert_eq!(Option::<TpmEccCurve>::unmarshal(&mut opt_slice), Ok(None));
-    #[cfg(feature = "ecc_curve_nist_p192")]
+    #[cfg(feature = "nist_p192")]
     {
         assert_eq!(u16::from(TpmEccCurve::NistP192), 0x0001);
         assert_eq!(TpmEccCurve::try_from(0x0001), Ok(TpmEccCurve::NistP192));
     }
-    #[cfg(feature = "ecc_curve_nist_p256")]
+    #[cfg(feature = "nist_p256")]
     {
         assert_eq!(u16::from(TpmEccCurve::NistP256), 0x0003);
         assert_eq!(TpmEccCurve::try_from(0x0003), Ok(TpmEccCurve::NistP256));
     }
-    #[cfg(feature = "ecc_curve_bp_p256_r1")]
+    #[cfg(feature = "bp_p256_r1")]
     {
         assert_eq!(u16::from(TpmEccCurve::BpP256R1), 0x0030);
         assert_eq!(TpmEccCurve::try_from(0x0030), Ok(TpmEccCurve::BpP256R1));
     }
-    #[cfg(feature = "ecc_curve_curve448")]
+    #[cfg(feature = "curve448")]
     {
         assert_eq!(u16::from(TpmEccCurve::Curve448), 0x0041);
         assert_eq!(TpmEccCurve::try_from(0x0041), Ok(TpmEccCurve::Curve448));
@@ -260,7 +257,6 @@ fn test_handle_and_tpm_st_constants() {
     assert_eq!(Alg::default(), Alg::NULL);
     assert_eq!(TpmSt::default(), TpmSt::NULL);
     assert_eq!(TpmPtPcr::default(), TpmPtPcr::SAVE);
-    assert_eq!(TpmHt::default(), TpmHt::PCR);
 }
 
 #[test]

@@ -17,7 +17,7 @@ use tpm2::Unmarshal;
 #[allow(deprecated)] // `TPM2_CreateLoaded` is deprecated, but this TPM still implements it.
 use tpm2::commands::CreateLoaded;
 use tpm2::commands::responses;
-use tpm2::crypto::{CryptoProvider, Direction, Rng};
+use tpm2::crypto::{Crypto, Direction, Rng};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
     PublicParmsAndId, Tpm2bDigest, Tpm2bEccParameter, Tpm2bPrivate, Tpm2bPrivateKeyRsa,
@@ -26,7 +26,7 @@ use tpm2::{
     TpmuSensitiveComposite,
 };
 
-impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
+impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     CommandHandler<'a, 'b, C, S, T, R>
 {
     /// Handles the [TpmCc::CreateLoaded] (`0x197`) command.
@@ -366,9 +366,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             }
             // ML-KEM/ML-DSA: the private seed comes first in the stream, as the reference's
             // `CryptoMlkem_GenerateKey()`/`CryptoMldsa_GenerateKey()` draw it from the KDF.
-            OwnedPublicParmsAndId::Mlkem(..) => tpm2::crypto::MLKEM_SEED_SIZE,
+            OwnedPublicParmsAndId::Mlkem(..) => tpm2::TpmiMlkemParms::PRIV_KEY_BYTES,
             OwnedPublicParmsAndId::Mldsa(..) | OwnedPublicParmsAndId::HashMldsa(..) => {
-                tpm2::crypto::MLDSA_SEED_SIZE
+                tpm2::TpmiMldsaParms::PRIV_KEY_BYTES
             }
             _ => return Err(TpmRc::TYPE.with(Position::parameter(2))),
         };
@@ -412,7 +412,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     .map_err(|_| TpmRc::FAILURE)?;
             }
             OwnedPublicParmsAndId::Mlkem(parms, unique) => {
-                let seed: &[u8; tpm2::crypto::MLKEM_SEED_SIZE] = actual_private_key[..key_len]
+                let seed: &[u8; tpm2::TpmiMlkemParms::PRIV_KEY_BYTES] = actual_private_key
+                    [..key_len]
                     .try_into()
                     .map_err(|_| TpmRc::FAILURE)?;
                 let mut public_key = [0u8; tpm2::TPM2_MAX_MLKEM_PUB_SIZE];
@@ -425,7 +426,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 tpm2::TpmsHashMldsaParms { parameter_set, .. },
                 unique,
             ) => {
-                let seed: &[u8; tpm2::crypto::MLDSA_SEED_SIZE] = actual_private_key[..key_len]
+                let seed: &[u8; tpm2::TpmiMldsaParms::PRIV_KEY_BYTES] = actual_private_key
+                    [..key_len]
                     .try_into()
                     .map_err(|_| TpmRc::FAILURE)?;
                 let mut public_key = [0u8; tpm2::TPM2_MAX_MLDSA_PUB_SIZE];
@@ -440,6 +442,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
     /// Helper function to derive or generate the random seed for the newly created object.
     #[allow(clippy::too_many_arguments)]
+    #[cfg(not(feature = "reference-rng"))]
     pub(crate) fn derive_create_loaded_seed(
         &self,
         is_primary: bool,
@@ -494,9 +497,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             Ok(digest_size)
         } else {
             let seed_len = digest_size;
-            self.crypto()
-                .get_random(&mut obj_seed[..digest_size])
-                .map_err(|_| TpmRc::FAILURE)?;
+            C::rand_bytes(&mut obj_seed[..digest_size]).map_err(|_| TpmRc::FAILURE)?;
             Ok(seed_len)
         }
     }
@@ -510,6 +511,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     /// authPolicy, parameters and unique) and `inSensitive.data`. Two templates that differ in
     /// any field therefore yield unrelated keys. Returns the seed length (the nameAlg digest
     /// size).
+    #[cfg(not(feature = "reference-rng"))]
     pub(crate) fn derive_primary_object_seed(
         &self,
         primary_seed: &[u8],
@@ -924,7 +926,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         // exponents is allowed but discouraged." The specification does not say where or with
         // which response code an unsupported exponent fails; the TCG reference is followed.
         if let PublicParmsAndId::Rsa(parms, _) = &public_struct.parms_and_id
-            && !matches!(parms.key_bits.0, 1024 | 2048 | 3072 | 4096)
+            && !matches!(parms.key_bits.as_u16(), 1024 | 2048 | 3072 | 4096)
         {
             return Err(TpmRc::VALUE.with(error_pos));
         }
@@ -1390,17 +1392,19 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         private_buf: &'c mut [u8; 2048],
     ) -> Result<Tpm2bPrivate<'c>, TpmRc> {
         let mut rsa_value = [0u8; RSA_PRIVATE_SIZE];
-        let sensitive_comp = match in_public_struct.parms_and_id {
+        let sensitive_comp = match &in_public_struct.parms_and_id {
             PublicParmsAndId::Ecc(_, _) => TpmuSensitiveComposite::Ecc(
                 Tpm2bEccParameter::from_bytes(actual_private_key)
                     .expect("private key has valid size"),
             ),
-            PublicParmsAndId::Rsa(_, _) => {
+            PublicParmsAndId::Rsa(rsa_parms, rsa_unique) => {
                 // The CRT form under a fixedTPM parent, otherwise the prime (`MarshalSensitive()`,
                 // see `rsa_sensitive`). A value that is not a valid key (the unvalidated
                 // sensitive value `TPM2_Import` passes through under a parent that is not
                 // fixedTPM) is kept as it is.
                 let len = match self.rsa_sensitive_value(
+                    rsa_parms,
+                    rsa_unique.get_buffer(),
                     actual_private_key,
                     parent_fixed_tpm && super::rsa_sensitive::WRITES_CRT_FORM,
                     &mut rsa_value,

@@ -19,164 +19,11 @@ use tpm2_engine::TpmPlatform;
 use tpm2_engine::handler::TransientObject;
 
 use hex_literal::hex;
-use tpm2::crypto::{Asymmetric, AsymmetricSign};
-use tpm2::crypto::{CryptoError, CryptoProvider};
 
 struct StressTestCrypto;
 
-impl_fake_hash!(StressTestCrypto);
-
-impl AsymmetricSign for StressTestCrypto {
-    fn sign_inner(
-        &self,
-        sign_alg: tpm2::Alg,
-        _private_key: &[u8],
-        _digest: tpm2::TpmtHa<'_>,
-        signature_out: &mut [u8],
-    ) -> Result<Option<usize>, CryptoError> {
-        let len = match sign_alg {
-            tpm2::Alg::ECDSA => {
-                if signature_out.len() < 64 {
-                    return Err(CryptoError::Internal);
-                }
-                signature_out[..64].fill(0xee);
-                64
-            }
-            _ => {
-                if signature_out.len() < 256 {
-                    return Err(CryptoError::Internal);
-                }
-                signature_out[..256].fill(0xee);
-                256
-            }
-        };
-        Ok(Some(len))
-    }
-}
-
-impl Asymmetric for StressTestCrypto {
-    fn verify_inner(
-        &self,
-        _sign_alg: tpm2::Alg,
-        _public_key: &[u8],
-        _rsa_exponent: u32,
-        _digest: tpm2::TpmtHa<'_>,
-        _signature: &[u8],
-    ) -> Result<bool, CryptoError> {
-        Ok(true)
-    }
-    fn encrypt(
-        &self,
-        scheme: tpm2::Alg,
-        _hash_alg: tpm2::Alg,
-        public_key: &[u8],
-        _rsa_exponent: u32,
-        data: &[u8],
-        ciphertext: &mut [u8],
-        _label: &[u8],
-    ) -> Result<Option<usize>, CryptoError> {
-        let len = data.len();
-        let out_len = if scheme == tpm2::Alg::OAEP && !public_key.is_empty() {
-            public_key.len()
-        } else {
-            len
-        };
-        if ciphertext.len() < out_len {
-            return Err(CryptoError::Internal);
-        }
-        ciphertext[..len].copy_from_slice(data);
-        if out_len > len {
-            ciphertext[len..out_len].fill(0);
-        }
-        Ok(Some(out_len))
-    }
-    fn decrypt(
-        &self,
-        scheme: tpm2::Alg,
-        _hash_alg: tpm2::Alg,
-        private_key: &[u8],
-        ciphertext: &[u8],
-        plaintext: &mut [u8],
-        _label: &[u8],
-    ) -> Result<Option<usize>, CryptoError> {
-        if private_key.is_empty() {
-            return Err(CryptoError::Internal);
-        }
-        let len = if scheme == tpm2::Alg::OAEP && ciphertext.len() > 32 {
-            32
-        } else {
-            ciphertext.len()
-        };
-        if plaintext.len() < len {
-            return Err(CryptoError::Internal);
-        }
-        plaintext[..len].copy_from_slice(&ciphertext[..len]);
-        Ok(Some(len))
-    }
-    fn generate_key(
-        &self,
-        scheme: tpm2::Alg,
-        _params: Option<tpm2::crypto::asymmetric::KeyParams>,
-        public_key: &mut [u8],
-        private_key: &mut [u8],
-        _seed: Option<&[u8]>,
-    ) -> Result<(usize, usize), CryptoError> {
-        match scheme {
-            tpm2::Alg::RSA => {
-                public_key[..256].fill(0xcc);
-                private_key[..256].fill(0xdd);
-                Ok((256, 256))
-            }
-            tpm2::Alg::ECC => {
-                public_key[..64].fill(0xcc);
-                private_key[..32].fill(0xdd);
-                Ok((64, 32))
-            }
-            _ => Err(CryptoError::Internal),
-        }
-    }
-    fn rsa_import_private_key(
-        &self,
-        modulus: &[u8],
-        prime_p: &[u8],
-        exponent: u32,
-        private_key_out: &mut [u8],
-    ) -> Result<Option<usize>, CryptoError> {
-        let _ = modulus;
-        let _ = exponent;
-        if private_key_out.len() < prime_p.len() * 2 {
-            return Err(CryptoError::Internal);
-        }
-        private_key_out[..prime_p.len()].copy_from_slice(prime_p);
-        private_key_out[prime_p.len()..prime_p.len() * 2].copy_from_slice(prime_p);
-        Ok(Some(prime_p.len() * 2))
-    }
-    fn rsa_private_key_to_prime_p(
-        &self,
-        private_key: &[u8],
-        prime_p_out: &mut [u8],
-    ) -> Result<Option<usize>, CryptoError> {
-        let half_len = private_key.len() / 2;
-        if prime_p_out.len() < half_len {
-            return Err(CryptoError::Internal);
-        }
-        prime_p_out[..half_len].copy_from_slice(&private_key[..half_len]);
-        Ok(Some(half_len))
-    }
-}
-
-impl tpm2::crypto::Mlkem for StressTestCrypto {}
-impl tpm2::crypto::Mldsa for StressTestCrypto {}
-
-impl CryptoProvider for StressTestCrypto {
-    /// Its algorithms are fakes, which fail the known-answer self tests.
-    const KNOWN_ANSWER_TESTS: bool = false;
-
-    fn get_random(&self, dest: &mut [u8]) -> Result<(), CryptoError> {
-        dest.fill(0xaa);
-        Ok(())
-    }
-}
+// The provider CSPRNG fills every buffer with `0xaa` bytes.
+impl_fake_crypto!(common, StressTestCrypto, common::ConstRng<0xaa>);
 
 fn setup_tpm<'a>(
     crypto: &'a mut StressTestCrypto,
@@ -343,7 +190,7 @@ fn test_duplicate_import_load_roundtrip() {
             tpm2::TpmsRsaParms {
                 symmetric: None,
                 scheme: None,
-                key_bits: tpm2::TpmiRsaKeyBits(2048),
+                key_bits: tpm2::TpmiRsaKeyBits::Rsa2048,
                 exponent: 0,
             },
             // The modulus MSB must be set for a valid RSA public key (C `CryptValidateKeys()`).
@@ -370,10 +217,10 @@ fn test_duplicate_import_load_roundtrip() {
         name: target_name,
         auth: (Tpm2bAuth::default()).into(),
         public: (target_public).into(),
-        // The prime derived from this fake private key must have its MSB set (C
-        // `CryptValidateKeys()`), or loading the imported object fails with TPM_RC_KEY_SIZE.
+        // The private key is the prime p, which must have its MSB set (C `CryptValidateKeys()`),
+        // or loading the imported object fails with TPM_RC_KEY_SIZE.
         private: [0xb3; tpm2_engine::handler::MAX_PRIVATE_KEY_SIZE],
-        private_len: 256,
+        private_len: 128,
         qualified_name: target_name,
         hierarchy: 0x40000001,
         st_clear: false,
@@ -408,7 +255,7 @@ fn test_duplicate_import_load_roundtrip() {
                         mode: Some(TpmiAlgCipherMode::Cfb.into()),
                     }),
                     scheme: None,
-                    key_bits: tpm2::TpmiRsaKeyBits(2048),
+                    key_bits: tpm2::TpmiRsaKeyBits::Rsa2048,
                     exponent: 0,
                 },
                 Tpm2bPublicKeyRsa::from_bytes(&[0xbb; 256]).unwrap(), // unique parent modulus
@@ -416,7 +263,7 @@ fn test_duplicate_import_load_roundtrip() {
         })
         .into(),
         private: [0x55; tpm2_engine::handler::MAX_PRIVATE_KEY_SIZE],
-        private_len: 256,
+        private_len: 128,
         qualified_name: (Tpm2bName::from_bytes(&[4, 5, 6]).unwrap()).into(),
         hierarchy: 0x40000001,
         st_clear: false,

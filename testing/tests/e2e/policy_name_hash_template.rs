@@ -1,5 +1,6 @@
 //! TPM2_PolicyNameHash and TPM2_PolicyTemplate digest updates and session checks.
 
+use crate::_common::ClientCrypto;
 use crate::_common::*;
 use testing::tpm::Tpm;
 use tpm2::commands::{PolicyGetDigest, PolicyNameHash, PolicyTemplate, StartAuthSession};
@@ -108,7 +109,7 @@ fn policy_template_extends_digest() {
     .expect("PolicyTemplate command failed");
 
     // 3. Compute expected policy digest: Sha256(0[32] || TPM_CC_PolicyTemplate || template_hash)
-    let mut hasher = tpm2::crypto::HashStream::new(CLIENT_CRYPTO, TpmiAlgHash::Sha256).unwrap();
+    let mut hasher = tpm2::crypto::HashContext::<ClientCrypto>::new(TpmiAlgHash::Sha256).unwrap();
     hasher.update(&[0u8; 32]).unwrap();
     hasher
         .update(&TpmCc::PolicyTemplate.code().to_be_bytes())

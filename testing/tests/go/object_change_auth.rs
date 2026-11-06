@@ -71,7 +71,8 @@ fn run_object_change_auth(last: Subtest) {
             data: Tpm2bSensitiveData::default(),
         }),
         in_public: tpm2::Tpm2b(get_ecc_srk_template()),
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     let srk_resp = execute_with_password_sessions(&mut sim, &create_srk_cmd, 1, &[])
         .expect("could not generate SRK");

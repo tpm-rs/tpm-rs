@@ -11,11 +11,12 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
-# No `ecc_curve_*` features: the curve parameters are the always-present statics of
+# No curve features: the curve parameters are the always-present statics of
 # `tpm2::crypto::ecc_params`, and enabling curve features here would widen the TPM.
 tpm2 = { workspace = true }
 # Without the default `rand` feature (which needs `std`), so that the crate stays `no_std`.
 crypto-bigint = { version = "0.5.5", default-features = false }
+zeroize = { version = "1.8", default-features = false }
 
 [features]
 default = ["sha512"]

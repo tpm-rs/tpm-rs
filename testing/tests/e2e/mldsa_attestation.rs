@@ -30,7 +30,7 @@ fn assert_mldsa_attestation(
 ) {
     let (parameter_set, public_key) = mldsa_public_key(public);
     let signature = mldsa_signature_bytes(signature.as_ref().expect("no signature"));
-    assert_eq!(signature.len(), parameter_set.signature_bytes());
+    assert_eq!(signature.len(), parameter_set.sig_bytes());
     let message = marshal_to_vec(attest);
     assert!(
         mldsa_client_verify(parameter_set, &public_key, &message, &signature),
@@ -373,7 +373,7 @@ fn certify_signs_with_hash_mldsa() {
             parameter_set,
             &public_key,
             &mu,
-            signature.sig.get_buffer()
+            signature.signature.get_buffer()
         ));
         flush_context(&mut sim, key).unwrap();
     }

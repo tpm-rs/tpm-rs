@@ -29,7 +29,7 @@ fn test_get_time() {
             TpmsRsaParms {
                 symmetric: None,
                 scheme: Some(TpmtRsaScheme::Rsassa(TpmiAlgHash::Sha256)),
-                key_bits: TpmiRsaKeyBits(2048),
+                key_bits: TpmiRsaKeyBits::Rsa2048,
                 exponent: 0,
             },
             Tpm2bPublicKeyRsa::default(),
@@ -42,7 +42,8 @@ fn test_get_time() {
             data: Tpm2bSensitiveData::default(),
         }),
         in_public: tpm2::Tpm2b(public_area),
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     let rsp_cp = execute_with_password_sessions(&mut sim, &create_primary, 1, &[])
         .expect("could not create key");

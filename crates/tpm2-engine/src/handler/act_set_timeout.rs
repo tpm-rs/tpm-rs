@@ -7,13 +7,13 @@ use crate::timer::TpmTimer;
 #[allow(unused_imports)]
 use tpm2::TpmCc;
 use tpm2::commands::ACTSetTimeout;
-use tpm2::crypto::{CryptoProvider, Rng};
+use tpm2::crypto::{Crypto, Rng};
 use tpm2::errors::{Position, TpmRc};
 
 /// `SU_DA_USED_VALUE`: the orderly states below it are orderly (`NV_IS_ORDERLY`).
 const SU_DA_USED_VALUE: u16 = 0xFFFE;
 
-impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
+impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     CommandHandler<'a, 'b, C, S, T, R>
 {
     /// Handles the [TpmCc::ACTSetTimeout] (`0x198`) command.

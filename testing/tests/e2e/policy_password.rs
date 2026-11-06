@@ -71,7 +71,7 @@ fn password_required_for_sealed_object() {
             TpmsRsaParms {
                 symmetric: Some(AES128_CFB),
                 scheme: None,
-                key_bits: TpmiRsaKeyBits(2048),
+                key_bits: TpmiRsaKeyBits::Rsa2048,
                 exponent: 0,
             },
             Tpm2bPublicKeyRsa::default(),

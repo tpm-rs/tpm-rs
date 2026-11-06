@@ -199,7 +199,7 @@ impl<'a> UnmarshalMessage<'a> for HashSequenceStartRsp {
 /// [TPM2.0 1.83] 17.5 TPM2_SignSequenceStart (Command)
 #[doc(alias = "TPM2_SignSequenceStart")]
 #[doc(alias = "SignSequenceStart_In")]
-#[derive(Clone, Copy, PartialEq, Debug, Default, Eq)]
+#[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct SignSequenceStart<'a> {
     pub key_handle: Handle,
     pub auth: Tpm2bAuth<'a>,
@@ -207,7 +207,7 @@ pub struct SignSequenceStart<'a> {
 }
 /// [TPM2.0 1.83] 17.5 TPM2_SignSequenceStart (Response)
 #[doc(alias = "SignSequenceStart_Out")]
-#[derive(Clone, Copy, PartialEq, Debug, Default, Eq)]
+#[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct SignSequenceStartRsp {
     pub sequence_handle: Handle,
 }
@@ -268,7 +268,7 @@ impl<'a> UnmarshalMessage<'a> for SignSequenceStartRsp {
 /// [TPM2.0 1.83] 17.6 TPM2_VerifySequenceStart (Command)
 #[doc(alias = "TPM2_VerifySequenceStart")]
 #[doc(alias = "VerifySequenceStart_In")]
-#[derive(Clone, Copy, PartialEq, Debug, Default, Eq)]
+#[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct VerifySequenceStart<'a> {
     pub key_handle: Handle,
     pub auth: Tpm2bAuth<'a>,
@@ -277,7 +277,7 @@ pub struct VerifySequenceStart<'a> {
 }
 /// [TPM2.0 1.83] 17.6 TPM2_VerifySequenceStart (Response)
 #[doc(alias = "VerifySequenceStart_Out")]
-#[derive(Clone, Copy, PartialEq, Debug, Default, Eq)]
+#[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct VerifySequenceStartRsp {
     pub sequence_handle: Handle,
 }
@@ -387,7 +387,7 @@ pub struct SequenceComplete<'a> {
 }
 /// [TPM2.0 1.83] 17.8 TPM2_SequenceComplete (Response)
 #[doc(alias = "SequenceComplete_Out")]
-#[derive(Clone, Copy, PartialEq, Debug, Default, Eq)]
+#[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct SequenceCompleteRsp<'a> {
     pub result: Tpm2bDigest<'a>,
     pub validation: TpmtTkHashcheck<'a>,

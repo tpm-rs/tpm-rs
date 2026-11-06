@@ -7,11 +7,11 @@ use crate::timer::TpmTimer;
 use tpm2::TpmCc;
 use tpm2::commands::PolicySigned;
 use tpm2::commands::responses;
-use tpm2::crypto::{CryptoProvider, Rng};
+use tpm2::crypto::{Crypto, Rng};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Tpm2bDigest, Tpm2bTimeout, TpmSe, TpmtSignature, TpmtTkAuth};
 
-impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
+impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     CommandHandler<'a, 'b, C, S, T, R>
 {
     /// Handles the [TpmCc::PolicySigned] (`0x160`) command.
@@ -170,12 +170,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             } else {
                 let mut pub_buf = [0u8; 512];
                 let pub_len;
-                // The RSA public exponent (`0`: the default 65537); unused for ECC keys.
-                let mut rsa_exponent = 0;
 
                 match obj.public.parms_and_id {
                     crate::owned::OwnedPublicParmsAndId::Rsa(parms, ref unique) => {
-                        let key_size = (parms.key_bits.0 / 8) as usize;
+                        let key_size = (parms.key_bits.as_u16() / 8) as usize;
                         let u_buf = unique.get_buffer();
                         if u_buf.len() > key_size || key_size > pub_buf.len() {
                             return Err(TpmRc::KEY_SIZE.to_rc());
@@ -183,7 +181,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                         let offset = key_size - u_buf.len();
                         pub_buf[offset..key_size].copy_from_slice(u_buf);
                         pub_len = key_size;
-                        rsa_exponent = parms.exponent;
                     }
                     crate::owned::OwnedPublicParmsAndId::Ecc(parms, ref point) => {
                         let curve = parms.curve_id;
@@ -317,8 +314,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 // `Ok(false)` (bad signature or unusable key) and any crypto error both fail
                 // with `TPM_RC_SIGNATURE` (`RC_PolicySigned_auth`), as exp's catch-all did.
                 let verified = match obj.public.parms_and_id {
-                    // The schemes and curves the crypto provider's verification interface (which
-                    // carries no curve) cannot express.
+                    // The schemes and curves the crypto backend's verification does not cover.
                     crate::owned::OwnedPublicParmsAndId::Ecc(parms, _)
                         if sign_alg != tpm2::Alg::ECDSA
                             || !super::crypt_ops::provider_ecdsa_curve(parms.curve_id) =>
@@ -329,33 +325,21 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                         let crypto = self.crypto();
                         let curve = parms.curve_id;
                         match sign_alg {
-                            tpm2::Alg::ECDSA => crate::ecc_schemes::ecdsa_verify(
-                                crypto.inner,
-                                curve,
-                                q,
-                                digest,
-                                r,
-                                s,
-                            ),
+                            tpm2::Alg::ECDSA => {
+                                crate::ecc_schemes::ecdsa_verify::<C>(curve, q, digest, r, s)
+                            }
                             tpm2::Alg::SM2 => {
-                                crate::ecc_schemes::sm2_verify(crypto.inner, curve, q, digest, r, s)
+                                crate::ecc_schemes::sm2_verify::<C>(curve, q, digest, r, s)
                             }
                             _ => crate::ecc_schemes::schnorr_verify(
-                                crypto.inner,
-                                &crypto,
-                                curve,
-                                tpmi_hash,
-                                q,
-                                digest,
-                                r,
-                                s,
+                                &crypto, curve, tpmi_hash, q, digest, r, s,
                             ),
                         }
                     }
-                    _ => self.crypto().verify_inner(
+                    ref key => super::crypt_ops::verify_signature_with_backend::<C>(
                         sign_alg,
+                        key,
                         &pub_buf[..pub_len],
-                        rsa_exponent,
                         digest_ha,
                         &sig_buf[..sig_len],
                     ),
@@ -472,14 +456,15 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 }
             }
 
-            let hmac_digest = tpm2::crypto::hmac(
-                &self.crypto(),
-                crate::handler::context_integrity_hash_alg(),
-                proof.as_bytes(),
-                &hmac_input[..offset],
-                &mut hmac_digest_bytes,
-            )
-            .map_err(|_| TpmRc::FAILURE)?;
+            let hmac_digest = self
+                .crypto()
+                .hmac(
+                    crate::handler::context_integrity_hash_alg(),
+                    proof.as_bytes(),
+                    &[&hmac_input[..offset]],
+                    &mut hmac_digest_bytes,
+                )
+                .map_err(|_| TpmRc::FAILURE)?;
             let hmac_len = hmac_digest.digest().len();
 
             let ticket_digest = Tpm2bDigest::from_bytes(&hmac_digest_bytes[..hmac_len]).unwrap();
@@ -543,7 +528,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 ) else {
                     return Err(TpmRc::SCHEME.to_rc());
                 };
-                self.mldsa_verify_mu(auth_object, &mu, sig.sig.get_buffer())?
+                self.mldsa_verify_mu(auth_object, &mu, sig.signature.get_buffer())?
             }
             _ => return Err(TpmRc::SCHEME.to_rc()),
         };

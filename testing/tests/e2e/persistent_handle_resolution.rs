@@ -41,7 +41,7 @@ fn persistent_object_uses_real_name() {
                 TpmsRsaParms {
                     symmetric: None,
                     scheme: Some(TpmtRsaScheme::Rsassa(TpmiAlgHash::Sha256)),
-                    key_bits: TpmiRsaKeyBits(2048),
+                    key_bits: TpmiRsaKeyBits::Rsa2048,
                     exponent: 0,
                 },
                 Tpm2bPublicKeyRsa::default(),
@@ -163,7 +163,7 @@ fn read_public_certify_and_hmac_start() {
             tpm2::TpmsRsaParms {
                 symmetric: None,
                 scheme: Some(TpmtRsaScheme::Rsassa(TpmiAlgHash::Sha256)),
-                key_bits: tpm2::TpmiRsaKeyBits(2048),
+                key_bits: tpm2::TpmiRsaKeyBits::Rsa2048,
                 exponent: 0,
             },
             Tpm2bPublicKeyRsa::default(),

@@ -85,7 +85,8 @@ fn public(n: &'static [u8]) -> TpmtPublic<'static> {
             TpmsRsaParms {
                 symmetric: None,
                 scheme: Some(TpmtRsaScheme::Rsassa(TpmiAlgHash::Sha256)),
-                key_bits: TpmiRsaKeyBits(8 * n.len() as u16),
+                key_bits: TpmiRsaKeyBits::new(8 * n.len() as u16)
+                    .expect("implemented RSA key size"),
                 exponent: 0,
             },
             Tpm2bPublicKeyRsa::from_bytes(n).unwrap(),

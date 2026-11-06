@@ -18,9 +18,9 @@ use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
 use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
 use tpm2::Alg;
-use tpm2::crypto::{CryptoProvider, Rng};
+use tpm2::crypto::{Crypto, EccPrivateKey, Rng, RsaPrivateKey};
 
-impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
+impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     CommandHandler<'a, 'b, C, S, T, R>
 {
     /// Handles the [TpmCc::VerifySignature] (`0x177`) command.
@@ -151,8 +151,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     ) -> Result<(), TpmRc> {
         let mut pub_key = [0u8; 512];
         let mut sig_buf = [0u8; 512];
-        // The RSA public exponent (`0`: the default 65537); unused for ECC keys.
-        let mut rsa_exponent = 0;
         let (sign_alg, hash_alg, pub_len, sig_len) = match &obj.public.parms_and_id {
             OwnedPublicParmsAndId::Rsa(parms, unique) => {
                 // CryptRsaValidateSignature()
@@ -166,14 +164,13 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 if sig_bytes.len() != modulus.len() {
                     return Err(TpmRc::SIGNATURE.to_rc());
                 }
-                let key_size = (u16::from(parms.key_bits) / 8) as usize;
+                let key_size = (parms.key_bits.as_u16() / 8) as usize;
                 if modulus.len() > key_size || key_size > pub_key.len() {
                     return Err(TpmRc::SIGNATURE.to_rc());
                 }
                 let offset = key_size - modulus.len();
                 pub_key[offset..key_size].copy_from_slice(modulus);
                 sig_buf[offset..key_size].copy_from_slice(sig_bytes);
-                rsa_exponent = parms.exponent;
                 // `CryptRsaValidateSignature()` tests the scheme (the RSASSA-PSS test draws
                 // from the TPM's DRBG), then `RSAEP()` rejects a signature that is not below the
                 // modulus before `PssDecode()` hashes with the signature's hash algorithm.
@@ -230,20 +227,14 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                         .map_err(|_| TpmRc::FAILURE)?;
                 }
                 if sign_alg != Alg::ECDSA || !provider_ecdsa_curve(curve) {
-                    // The schemes and curves the crypto provider's verification interface (which
-                    // carries no curve) cannot express.
+                    // The schemes and curves the crypto backend's verification does not cover.
                     let (r, s) = sig_buf[..2 * param_size].split_at(param_size);
                     let q = &pub_key[..2 * param_size];
                     let crypto = self.crypto();
                     let verified = match sign_alg {
-                        Alg::ECDSA => {
-                            crate::ecc_schemes::ecdsa_verify(crypto.inner, curve, q, digest, r, s)
-                        }
-                        Alg::SM2 => {
-                            crate::ecc_schemes::sm2_verify(crypto.inner, curve, q, digest, r, s)
-                        }
+                        Alg::ECDSA => crate::ecc_schemes::ecdsa_verify::<C>(curve, q, digest, r, s),
+                        Alg::SM2 => crate::ecc_schemes::sm2_verify::<C>(curve, q, digest, r, s),
                         _ => crate::ecc_schemes::schnorr_verify(
-                            crypto.inner,
                             &crypto,
                             curve,
                             sig_ecc.hash,
@@ -292,13 +283,14 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         let digest_ha =
             tpm2::TpmtHa::from_alg(hash_alg, digest).ok_or_else(|| TpmRc::SIGNATURE.to_rc())?;
-        match self.crypto().verify_inner(
+        let verified = verify_signature_with_backend::<C>(
             sign_alg,
+            &obj.public.parms_and_id,
             &pub_key[..pub_len],
-            rsa_exponent,
             digest_ha,
             &sig_buf[..sig_len],
-        ) {
+        );
+        match verified {
             Ok(true) => Ok(()),
             Ok(false) | Err(_) => Err(TpmRc::SIGNATURE.to_rc()),
         }
@@ -539,7 +531,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     /// signature (`r || s` for ECDSA) to `out`.
     ///
     /// With `reference-rng`, the random parts (the ECDSA nonce, the PSS salt) are drawn from the
-    /// TPM's DRBG exactly as in the reference code; otherwise the crypto provider signs.
+    /// TPM's DRBG exactly as in the reference code; otherwise the crypto backend signs.
     pub(crate) fn sign_asymmetric(
         &mut self,
         sign_alg: Alg,
@@ -594,13 +586,14 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 out[len..].copy_from_slice(&s[..len]);
                 return Ok(Some(2 * len));
             }
-            (Alg::RSAPSS, OwnedPublicParmsAndId::Rsa(_, unique)) => {
+            (Alg::RSAPSS, OwnedPublicParmsAndId::Rsa(parms, unique)) => {
                 let hash = digest.hash_alg();
                 return self
                     .reference_rsa_pss_sign(
                         hash,
+                        parms,
+                        unique.get_buffer(),
                         private_key,
-                        unique.get_size() as usize,
                         digest.digest(),
                         out,
                     )
@@ -610,15 +603,15 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         }
         #[cfg(not(feature = "reference-rng"))]
         if let OwnedPublicParmsAndId::Ecc(parms, _) = key {
-            // The schemes and curves the crypto provider's signing interface (which carries no
-            // curve) cannot express, with nonces from the provider's random number generator.
+            // The schemes and curves the crypto backend's signing interface cannot express, with
+            // nonces from the backend's random number generator.
             let curve = parms.curve_id;
-            let crypto = self.crypto();
-            let nonce = |buf: &mut [u8]| crypto.get_random(buf);
+            let crypto = crate::self_test::Tested::<C>::new(&self.context.self_test);
+            let rng = &mut self.context.crypto_rng;
+            let nonce = |buf: &mut [u8]| rng.fill_bytes(buf);
             match sign_alg {
                 Alg::ECDSA if !provider_ecdsa_curve(curve) => {
-                    return crate::ecc_schemes::ecdsa_sign(
-                        crypto.inner,
+                    return crate::ecc_schemes::ecdsa_sign::<C>(
                         curve,
                         private_key,
                         digest.digest(),
@@ -627,8 +620,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     );
                 }
                 Alg::SM2 => {
-                    return crate::ecc_schemes::sm2_sign(
-                        crypto.inner,
+                    return crate::ecc_schemes::sm2_sign::<C>(
                         curve,
                         private_key,
                         digest.digest(),
@@ -638,7 +630,6 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 }
                 Alg::ECSCHNORR => {
                     return crate::ecc_schemes::schnorr_sign(
-                        crypto.inner,
                         &crypto,
                         curve,
                         digest.hash_alg(),
@@ -651,7 +642,34 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 _ => {}
             }
         }
-        self.crypto().sign_inner(sign_alg, private_key, digest, out)
+        let hash = digest.hash_alg();
+        let scheme = match sign_alg {
+            Alg::RSASSA => TpmtSigScheme::Rsassa(hash),
+            Alg::RSAPSS => TpmtSigScheme::Rsapss(hash),
+            Alg::ECDSA => TpmtSigScheme::Ecdsa(hash),
+            _ => return Err(tpm2::crypto::CryptoError::Unsupported),
+        };
+        let rng = &mut self.context.crypto_rng;
+        let mut sig = [0u8; tpm2::crypto::MAX_SIGNATURE_BYTES];
+        let signature = match key {
+            OwnedPublicParmsAndId::Rsa(parms, unique) => {
+                let Some(private) =
+                    super::rsa_private_key::<C>(parms, unique.get_buffer(), private_key)?
+                else {
+                    return Ok(None);
+                };
+                private.sign(rng, scheme, digest.digest(), &mut sig)?
+            }
+            OwnedPublicParmsAndId::Ecc(parms, _) => {
+                let Some(private) = EccPrivateKey::<C>::from_scalar(parms.curve_id, private_key)?
+                else {
+                    return Ok(None);
+                };
+                private.sign(rng, scheme, digest.digest(), &mut sig)?
+            }
+            _ => return Err(tpm2::crypto::CryptoError::Unsupported),
+        };
+        write_signature(&signature, out)
     }
 
     /// Handles the [TpmCc::RSAEncrypt] (`0x150`) command.
@@ -715,10 +733,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         // TPM's DRBG; `TPM_ALG_NULL` is raw RSA, which needs no test of its own here).
         self.do_self_test(resolved_scheme)?;
 
-        // Call self.crypto().encrypt(...) using resolved scheme/hash alg. CryptRsaEncrypt()
+        // Encrypt with the resolved scheme/hash alg (`crate::rsa::rsa_encrypt`). CryptRsaEncrypt()
         // errors are returned without a position; a message that is too large for the key is
         // TPM_RC_VALUE.
-        let key_size = (u16::from(key_bits) / 8) as usize;
+        let key_size = (key_bits.as_u16() / 8) as usize;
         if cmd.message.get_buffer().len() > key_size {
             return Err(TpmRc::VALUE.to_rc());
         }
@@ -749,26 +767,28 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     Err(e) => return Err(e),
                 }
             }
-            _ => self.crypto().encrypt(
+            _ => Self::rsa_encrypt_with(
+                &mut self.context.crypto_rng,
+                &obj,
                 resolved_scheme,
                 resolved_hash_alg,
-                pub_key,
-                exponent,
+                label_bytes,
                 cmd.message.get_buffer(),
                 &mut encrypted_data[..key_size],
-                label_bytes,
             ),
         };
         #[cfg(not(feature = "reference-rng"))]
-        let encrypted = self.crypto().encrypt(
+        let encrypted = Self::rsa_encrypt_with(
+            &mut self.context.crypto_rng,
+            &obj,
             resolved_scheme,
             resolved_hash_alg,
-            pub_key,
-            exponent,
+            label_bytes,
             cmd.message.get_buffer(),
             &mut encrypted_data[..key_size],
-            label_bytes,
         );
+        #[cfg(not(feature = "reference-rng"))]
+        let _ = (exponent, pub_key);
         let encrypted_len = match encrypted {
             Ok(Some(len)) => len,
             Ok(None) | Err(_) => return Err(TpmRc::VALUE.to_rc()),
@@ -865,19 +885,27 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::SIZE.to_rc());
         }
 
-        let key_size = (u16::from(key_bits) / 8) as usize;
+        let key_size = (key_bits.as_u16() / 8) as usize;
         let mut decrypted_message = [0u8; 512];
-        let decrypted = self.crypto().decrypt(
-            resolved_scheme,
-            resolved_hash_alg,
-            &obj.private[..obj.private_len],
-            cmd.cipher_text.get_buffer(),
-            &mut decrypted_message,
-            label_bytes,
-        );
-        if resolved_scheme == Alg::OAEP {
+        let private_key = obj.rsa_private_key::<C>();
+        let decrypted = match &private_key {
+            Ok(Some(key)) => crate::rsa::rsa_decrypt::<C>(
+                &mut self.context.crypto_rng,
+                key,
+                resolved_scheme,
+                resolved_hash_alg,
+                label_bytes,
+                cmd.cipher_text.get_buffer(),
+                &mut decrypted_message,
+            ),
+            Ok(None) => Ok(None),
+            Err(e) => Err(*e),
+        };
+        if resolved_scheme == Alg::OAEP
+            && let Ok(Some(key)) = &private_key
+        {
             self.oaep_decode_hash_test(
-                &obj.private[..obj.private_len],
+                key,
                 cmd.cipher_text.get_buffer(),
                 resolved_hash_alg,
                 matches!(decrypted, Ok(Some(_))),
@@ -907,10 +935,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     /// The hash self test of `OaepDecode()`, which hashes (MGF1, the label) unless the decrypted
     /// block is too small for two digests or does not start with a zero octet. `decoded`: the
     /// OAEP decryption succeeded (so the block was well formed); otherwise the raw RSA
-    /// decryption of `ciphertext` with `private_key` decides.
+    /// decryption of `ciphertext` with `key` decides.
     pub(crate) fn oaep_decode_hash_test(
         &mut self,
-        private_key: &[u8],
+        key: &RsaPrivateKey<C>,
         ciphertext: &[u8],
         hash_alg: Alg,
         decoded: bool,
@@ -920,16 +948,45 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 .map(|h| h.digest_size())
                 .unwrap_or(0);
             let mut block = [0u8; 512];
+            // A `TPM_ALG_NULL` decryption is the size of the modulus.
             ciphertext.len() >= 2 * digest_size + 2
                 && matches!(
-                    self.crypto().rsa_null_decrypt(private_key, ciphertext, &mut block),
-                    Ok(Some(len)) if len < ciphertext.len() || block[0] == 0
+                    crate::rsa::rsa_decrypt::<C>(
+                        &mut self.context.crypto_rng,
+                        key,
+                        Alg::NULL,
+                        Alg::NULL,
+                        &[],
+                        ciphertext,
+                        &mut block,
+                    ),
+                    Ok(Some(_)) if block[0] == 0
                 )
         };
         if hash_runs {
             self.do_self_test(hash_alg)?;
         }
         Ok(())
+    }
+
+    /// Encrypts `message` with the RSA public key of `obj` (`crate::rsa::rsa_encrypt`, with the
+    /// same arguments); `Ok(None)` for an invalid public key.
+    #[allow(clippy::too_many_arguments)]
+    fn rsa_encrypt_with(
+        rng: &mut C::Rng,
+        obj: &super::TransientObject,
+        scheme: Alg,
+        hash_alg: Alg,
+        label: &[u8],
+        message: &[u8],
+        out: &mut [u8],
+    ) -> Result<Option<usize>, tpm2::crypto::CryptoError> {
+        match obj.rsa_public_key::<C>()? {
+            Some(key) => {
+                crate::rsa::rsa_encrypt::<C>(rng, &key, scheme, hash_alg, label, message, out)
+            }
+            None => Ok(None),
+        }
     }
 
     fn resolve_rsa_scheme(
@@ -1047,14 +1104,15 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         let key = &obj.private[..obj.private_len];
         let mut digest_buf = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
-        let digest = tpm2::crypto::hmac(
-            &self.crypto(),
-            key_hash_alg,
-            key,
-            cmd.buffer.get_buffer(),
-            &mut digest_buf,
-        )
-        .map_err(|_| TpmRc::FAILURE)?;
+        let digest = self
+            .crypto()
+            .hmac(
+                key_hash_alg,
+                key,
+                &[cmd.buffer.get_buffer()],
+                &mut digest_buf,
+            )
+            .map_err(|_| TpmRc::FAILURE)?;
         let out_hmac = Tpm2bDigest::from_bytes(digest.digest()).map_err(|_| TpmRc::FAILURE)?;
 
         let rsp = responses::HMAC { out_hmac };
@@ -1142,8 +1200,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         raw_point[param_size * 2 - in_y.len()..param_size * 2].copy_from_slice(in_y);
 
         if !matches!(
-            self.crypto()
-                .validate_point(curve, &raw_point[..param_size * 2]),
+            crate::ecc_curves::validate_point::<C>(curve, &raw_point[..param_size * 2]),
             Ok(true)
         ) {
             return Err(TpmRc::ECC_POINT.with(Position::parameter(1)));
@@ -1303,6 +1360,77 @@ pub(crate) fn select_sign_scheme(
     Some(selected)
 }
 
+/// Verifies the signature `signature` (the RSA signature, or `r || s` with each component the
+/// size of the curve) with the scheme `sign_alg` (RSASSA, RSAPSS or ECDSA on the curves of
+/// [`provider_ecdsa_curve`]) over `digest` with the crypto backend, for the key with the public
+/// parameters `key` and the public key `public` (the modulus, or `x || y` with each coordinate the
+/// size of the curve). `Ok(false)`: the signature does not verify or the public key is not valid.
+pub(crate) fn verify_signature_with_backend<C: Crypto>(
+    sign_alg: Alg,
+    key: &OwnedPublicParmsAndId,
+    public: &[u8],
+    digest: tpm2::TpmtHa<'_>,
+    signature: &[u8],
+) -> Result<bool, tpm2::crypto::CryptoError> {
+    let hash = digest.hash_alg();
+    match (sign_alg, key) {
+        (Alg::RSASSA | Alg::RSAPSS, OwnedPublicParmsAndId::Rsa(parms, _)) => {
+            let Some(sig) = Tpm2bPublicKeyRsa::new(signature) else {
+                return Ok(false);
+            };
+            let sig = TpmsSignatureRsa { hash, sig };
+            let signature = if sign_alg == Alg::RSAPSS {
+                TpmtSignature::Rsapss(sig)
+            } else {
+                TpmtSignature::Rsassa(sig)
+            };
+            match super::rsa_public_key::<C>(parms, public)? {
+                Some(key) => key.verify(digest.digest(), signature),
+                None => Ok(false),
+            }
+        }
+        (Alg::ECDSA, OwnedPublicParmsAndId::Ecc(parms, _)) => {
+            let (r, s) = signature.split_at(signature.len() / 2);
+            let (Some(signature_r), Some(signature_s)) =
+                (Tpm2bEccParameter::new(r), Tpm2bEccParameter::new(s))
+            else {
+                return Ok(false);
+            };
+            let signature = TpmtSignature::Ecdsa(TpmsSignatureEcc {
+                hash,
+                signature_r,
+                signature_s,
+            });
+            match crate::ecc_curves::load_point::<C>(parms.curve_id, public)? {
+                Some(key) => key.verify(digest.digest(), signature),
+                None => Ok(false),
+            }
+        }
+        _ => Err(tpm2::crypto::CryptoError::Unsupported),
+    }
+}
+
+/// Writes the RSA signature or the ECC signature `r || s` (each component the size of the curve)
+/// of `signature` to `out`, returning its length.
+fn write_signature(
+    signature: &TpmtSignature<'_>,
+    out: &mut [u8],
+) -> Result<Option<usize>, tpm2::crypto::CryptoError> {
+    let parts: [&[u8]; 2] = match signature {
+        TpmtSignature::Rsassa(s) | TpmtSignature::Rsapss(s) => [s.sig.as_slice(), &[]],
+        TpmtSignature::Ecdsa(s) => [s.signature_r.as_slice(), s.signature_s.as_slice()],
+        _ => return Err(tpm2::crypto::CryptoError::Internal),
+    };
+    let mut len = 0;
+    for part in parts {
+        out.get_mut(len..len + part.len())
+            .ok_or(tpm2::crypto::CryptoError::Internal)?
+            .copy_from_slice(part);
+        len += part.len();
+    }
+    Ok(Some(len))
+}
+
 /// The `TPMS_SIGNATURE_ECC` with the scheme hash `hash` of the signature `rs` (`r || s`, two
 /// halves of the order size).
 pub(crate) fn ecc_signature(hash: TpmiAlgHash, rs: &[u8]) -> Result<TpmsSignatureEcc<'_>, TpmRc> {
@@ -1314,10 +1442,10 @@ pub(crate) fn ecc_signature(hash: TpmiAlgHash, rs: &[u8]) -> Result<TpmsSignatur
     })
 }
 
-/// Whether the crypto provider's ECDSA interface ([`tpm2::crypto::AsymmetricSign::ecdsa_sign`],
-/// [`tpm2::crypto::Asymmetric::ecdsa_verify`]), which identifies the curve by the key size, covers
-/// `curve`: the NIST curves P-224 to P-521. ECDSA on the other curves (BN P-256, NIST P-192,
-/// BN P-638, SM2 P-256) is computed by [`crate::ecc_schemes`].
+/// Whether the crypto backend's ECDSA (the [`EccPrivateKey::sign`]/[`tpm2::crypto::EccPublicKey::verify`]
+/// dispatch used by [`CommandHandler::sign_asymmetric`] and [`CommandHandler::validate_signature`])
+/// signs and verifies on `curve`: the NIST curves P-224 to P-521. ECDSA on the other curves (BN
+/// P-256, NIST P-192, BN P-638, SM2 P-256) is computed by [`crate::ecc_schemes`].
 pub(crate) fn provider_ecdsa_curve(curve: TpmEccCurve) -> bool {
     matches!(
         curve,

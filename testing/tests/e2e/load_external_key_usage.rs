@@ -37,7 +37,7 @@ fn ecc_external_key_signs() {
         key_handle: resp_handles.object_handle,
         digest: Tpm2bDigest::from_bytes(&[0x02; 32]).unwrap(),
         in_scheme: None,
-        validation: TpmtTkHashcheck::default(),
+        validation: TpmtTkHashcheck::new(Handle::RH_NULL, Tpm2bDigest::default()),
     };
     let res = execute_with_password_sessions_status(&mut sim, &sign_cmd, 0, &[]);
     assert!(res.is_err());
@@ -67,7 +67,7 @@ fn ecc_public_key_verifies_tpm_signature() {
         key_handle: sign_handles.object_handle,
         digest,
         in_scheme: Some(tpm2::TpmtSigScheme::Ecdsa(TpmiAlgHash::Sha256)),
-        validation: TpmtTkHashcheck::default(),
+        validation: TpmtTkHashcheck::new(Handle::RH_NULL, Tpm2bDigest::default()),
     };
     let mut resp_buffer = [0u8; 4096];
     let sign_rsp = execute_sign(&mut sim, &sign_cmd, 1, &[], &mut resp_buffer).unwrap();
@@ -184,7 +184,7 @@ fn rsa_public_key_verifies_tpm_signature() {
         key_handle: sign_handles.object_handle,
         digest,
         in_scheme: Some(tpm2::TpmtSigScheme::Rsassa(TpmiAlgHash::Sha256)),
-        validation: TpmtTkHashcheck::default(),
+        validation: TpmtTkHashcheck::new(Handle::RH_NULL, Tpm2bDigest::default()),
     };
     let mut resp_buffer = [0u8; 4096];
     let sign_rsp = execute_sign(&mut sim, &sign_cmd, 1, &[], &mut resp_buffer).unwrap();

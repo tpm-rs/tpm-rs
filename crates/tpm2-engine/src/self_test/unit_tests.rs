@@ -48,10 +48,9 @@ fn initial_to_do_list() -> Vec<u16> {
     ids(&algs)
 }
 
-/// Runs `f` with a self tester on the dev crypto provider and `state` (with the
+/// Runs `f` with a self tester on the dev crypto backend and `state` (with the
 /// `reference-rng` feature, with a DRBG instantiated from fixed entropy).
 fn with_tester<T>(state: &SelfTestState, f: impl FnOnce(&mut SelfTester<'_, Crypto>) -> T) -> T {
-    let crypto = Crypto;
     #[cfg(feature = "reference-rng")]
     {
         use crate::reference_rng::{RefRng, drbg};
@@ -64,7 +63,7 @@ fn with_tester<T>(state: &SelfTestState, f: impl FnOnce(&mut SelfTester<'_, Cryp
         })
         .unwrap();
         let mut tester = SelfTester {
-            crypto: Tested::new(&crypto, state),
+            crypto: Tested::new(state),
             rng: Some(RefRng {
                 drbg: Some(&mut drbg_state),
                 entropy: Some(&mut entropy),
@@ -75,7 +74,7 @@ fn with_tester<T>(state: &SelfTestState, f: impl FnOnce(&mut SelfTester<'_, Cryp
     #[cfg(not(feature = "reference-rng"))]
     {
         let mut tester = SelfTester {
-            crypto: Tested::new(&crypto, state),
+            crypto: Tested::new(state),
         };
         f(&mut tester)
     }
@@ -102,8 +101,8 @@ fn initialization_lists_the_testable_algorithms() {
     assert!(!state.all_tested());
 }
 
-/// `TPM2_SelfTest(fullTest = YES)` passes every known-answer test (on the dev crypto provider) and leaves
-/// nothing to test; so does `fullTest = NO` from the initial state.
+/// `TPM2_SelfTest(fullTest = YES)` passes every known-answer test (on the dev crypto backend) and
+/// leaves nothing to test; so does `fullTest = NO` from the initial state.
 #[test]
 fn full_and_partial_self_tests_pass_and_test_everything() {
     for full_test in [true, false] {
@@ -195,14 +194,15 @@ fn kdfa_test_tests_its_hash() {
     assert!(state.needs_test(Alg::SHA256.id()));
 }
 
-/// A hash computation with the hooked provider tests the hash first.
+/// A hash computation with the hooked backend tests the hash first.
 #[test]
 fn hooked_hash_tests_the_hash() {
     let state = SelfTestState::default();
-    let crypto = Crypto;
-    let tested = Tested::new(&crypto, &state);
+    let tested = Tested::<Crypto>::new(&state);
     let mut out = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
-    tpm2::crypto::hash(&tested, TpmiAlgHash::Sha256, b"abc", &mut out).unwrap();
+    tested
+        .hash(TpmiAlgHash::Sha256, &[b"abc"], &mut out)
+        .unwrap();
     assert!(!state.needs_test(Alg::SHA256.id()));
     assert!(state.needs_test(Alg::SHA1.id()));
 }

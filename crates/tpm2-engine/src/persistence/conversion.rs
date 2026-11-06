@@ -17,7 +17,7 @@
 
 use core::fmt;
 
-use tpm2::crypto::Hash;
+use tpm2::crypto::backend::Hash;
 use tpm2::{Alg, Handle, Marshal, TpmSe, TpmiAlgHash, TpmlPcrSelection, TpmtSymDef, Unmarshal};
 
 use crate::act::{ACT_COUNT, ActCounter, ActPolicy};
@@ -831,20 +831,19 @@ impl PersistedTpmState {
     /// get their values between two commands with NV available): the NV-synced fields are
     /// reloaded from the NV records of [`Self::nv`], then the RAM groups are applied, with the
     /// platform time rebased on `now_ms` (the current reading of the target's platform timer)
-    /// and the Names of the loaded objects recomputed with `crypto`. The whole persisted state
+    /// and the Names of the loaded objects recomputed with the crypto backend `H`. The whole persisted state
     /// is validated before `state` is modified; the NV storage is then erased and rewritten
     /// from the image. The self-test state is not applied (see [`Self::apply_self_test`]).
-    pub(crate) fn apply_to_global_state<S: NvStorage>(
+    pub(crate) fn apply_to_global_state<H: Hash, S: NvStorage>(
         &self,
         state: &mut GlobalState,
         storage: &mut S,
         now_ms: u64,
-        crypto: &impl Hash,
     ) -> Result<(), DeserializeError> {
         self.validate_nv(storage.capacity())?;
         let mut staged = GlobalState::default();
         self.load_nv_synced(&mut staged)?;
-        self.apply_ram_state(&mut staged, now_ms, crypto)?;
+        self.apply_ram_state::<H>(&mut staged, now_ms)?;
         self.write_nv(storage)?;
         *state = staged;
         Ok(())
@@ -970,11 +969,10 @@ impl PersistedTpmState {
     /// NV-synced fields: the RAM values that may be ahead of NV (`clear_count`,
     /// `orderly_state`, `failed_tries`, `lockout_auth_enabled`) replace the ones reloaded from
     /// NV.
-    fn apply_ram_state(
+    fn apply_ram_state<H: Hash>(
         &self,
         state: &mut GlobalState,
         now_ms: u64,
-        crypto: &impl Hash,
     ) -> Result<(), DeserializeError> {
         self.apply_reset(state)?;
 
@@ -1030,7 +1028,7 @@ impl PersistedTpmState {
         state.locality = r.locality;
         state.physical_presence = r.physical_presence;
 
-        self.apply_transient_objects(state, crypto)?;
+        self.apply_transient_objects::<H>(state)?;
         self.apply_sessions(state)?;
         self.apply_sequences(state)?;
         self.check_loaded_handles()?;
@@ -1148,10 +1146,9 @@ impl PersistedTpmState {
     }
 
     /// Applies the loaded objects, in the slots of their order, and recomputes their Names.
-    fn apply_transient_objects(
+    fn apply_transient_objects<H: Hash>(
         &self,
         state: &mut GlobalState,
-        crypto: &impl Hash,
     ) -> Result<(), DeserializeError> {
         state.transient_objects = [const { None }; MAX_LOADED_OBJECTS];
         for (i, obj) in bytes(&self.loaded.objects, "loaded.objects")?
@@ -1175,7 +1172,7 @@ impl PersistedTpmState {
                 seed_len,
                 external: obj.external,
                 public_only: obj.public_only,
-                name: object_name(crypto, public.name_alg, public_bytes)?,
+                name: object_name::<H>(public.name_alg, public_bytes)?,
                 auth: owned(&obj.auth, "object.auth")?,
                 public,
                 private,
@@ -1522,8 +1519,7 @@ fn nv_item_attributes(handle: u32, payload: &[u8]) -> u32 {
 
 /// The Name of an object (`nameAlg || H_nameAlg(public)`; empty with the `TPM_ALG_NULL`
 /// `nameAlg`), from its marshaled public area.
-fn object_name(
-    crypto: &impl Hash,
+fn object_name<H: Hash>(
     name_alg: Option<TpmiAlgHash>,
     public_bytes: &[u8],
 ) -> Result<OwnedName, DeserializeError> {
@@ -1531,7 +1527,7 @@ fn object_name(
         return Ok(OwnedName::default());
     };
     let mut digest = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
-    let digest = tpm2::crypto::hash(crypto, alg, public_bytes, &mut digest)
+    let digest = tpm2::crypto::hash::<H>(alg, &[public_bytes], &mut digest)
         .map_err(|_| DeserializeError::InvalidValue("object.public.name_alg"))?;
     let mut name = [0u8; 2 + TpmiAlgHash::MAX_DIGEST_BYTES];
     name[..2].copy_from_slice(&Alg::from(alg).id().to_be_bytes());

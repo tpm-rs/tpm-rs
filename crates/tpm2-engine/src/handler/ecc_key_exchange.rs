@@ -30,7 +30,7 @@ use crate::timer::TpmTimer;
 use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
 #[allow(unused_imports)]
 use tpm2::TpmCc;
-use tpm2::crypto::{CryptoProvider, Rng};
+use tpm2::crypto::{Crypto, Rng};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Tpm2bEccParameter, Tpm2bEccPoint, TpmEccCurve, TpmsEccPoint};
 
@@ -142,7 +142,7 @@ fn times_cofactor(params: &CurveParams, t: &[u8], out: &mut [u8]) {
     }
 }
 
-impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
+impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     CommandHandler<'a, 'b, C, S, T, R>
 {
     /// Handles the [TpmCc::ECEphemeral] (`0x18E`) command.
@@ -293,7 +293,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         ] {
             let on_curve = point.to_struct().is_ok_and(|p| pad_point(&p, size, buf))
                 && matches!(
-                    self.crypto().validate_point(curve, &buf[..2 * size]),
+                    crate::ecc_curves::validate_point::<C>(curve, &buf[..2 * size]),
                     Ok(true)
                 );
             if !on_curve {

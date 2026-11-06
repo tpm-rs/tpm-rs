@@ -114,7 +114,9 @@ fn storage_primary(tpm: &mut RealCryptoEngine<'_>) -> u32 {
                 tpm2::TpmsEccPoint::default(),
             ),
         }),
-        ..Default::default()
+        in_sensitive: Default::default(),
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     execute_command(tpm, &create, &[password_auth(b"")])
         .expect("CreatePrimary")

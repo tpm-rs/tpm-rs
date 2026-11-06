@@ -30,7 +30,8 @@ fn object_nv_and_session_attributes() {
             primary_handle: Handle::RH_OWNER,
             in_sensitive,
             in_public,
-            ..Default::default()
+            outside_info: Default::default(),
+            creation_pcr: Default::default(),
         };
         // One password session: with none, C returns AUTH_MISSING first.
         let err = execute_with_password_sessions(&mut sim, &cmd, 1, &[])
@@ -73,7 +74,8 @@ fn object_nv_and_session_attributes() {
         primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     let mut cmd_buf = [0u8; 2048];
     let mut cmd_header = CmdHeader {

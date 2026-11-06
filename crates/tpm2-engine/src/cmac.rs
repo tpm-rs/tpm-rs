@@ -1,17 +1,18 @@
 //! Portable, serializable CMAC state (`TPM_ALG_CMAC`, NIST SP 800-38B) over the block ciphers of
 //! the TPM, for `TPM2_MAC` and the MAC sequences of `TPM2_MAC_Start` (which `TPM2_ContextSave`
-//! must be able to save, so the state cannot be an opaque context of the crypto provider).
+//! must be able to save, so the state cannot be an opaque context of the crypto backend).
 //!
 //! The state is that of the TCG reference's `tpmCmacState_t` (`CryptCmac.c`): the chaining value
 //! `iv`, into which the input is XORed, and the number of bytes of the current block in it. A
 //! full block is only encrypted when more data follows, so that [`CmacState::finalize`] can apply
 //! the subkey K1 (complete last block) or pad the block and apply K2 before the final encryption.
 //!
-//! The single-block encryption `E_K(x)` uses the provider's CFB mode (the mode every provider
+//! The single-block encryption `E_K(x)` uses the backend's CFB mode (the mode every backend
 //! implements): encrypting one zero block in CFB mode with the IV `x` yields `E_K(x)`.
 
+use crate::self_test::Tested;
 use tpm2::AlgSym;
-use tpm2::crypto::{CryptoError, ModeIv, Symmetric, SymmetricKey};
+use tpm2::crypto::{CipherInput, Crypto, CryptoError, Direction, SymmetricKey};
 
 /// The block size of the TPM's block ciphers (`AlgSym::BLOCK_SIZE`).
 const BLOCK: usize = AlgSym::BLOCK_SIZE;
@@ -54,20 +55,24 @@ impl CmacState {
         &self.key[..self.alg.key_bytes()]
     }
 
-    /// `block = E_K(block)` with the provider `s`.
-    fn encrypt_block(
+    /// `block = E_K(block)` with the crypto backend `s` (after the test of the block cipher).
+    fn encrypt_block<C: Crypto>(
         &self,
-        s: &impl Symmetric,
+        s: &Tested<'_, C>,
         block: &mut [u8; BLOCK],
     ) -> Result<(), CryptoError> {
         let key = SymmetricKey::new(self.alg, self.key()).ok_or(CryptoError::Internal)?;
         let mut iv = *block;
         block.fill(0);
-        tpm2::crypto::encrypt(s, key, ModeIv::Cfb(&mut iv), block)
+        s.crypt(key, Direction::Encrypt, CipherInput::Cfb(&mut iv, block))
     }
 
     /// Adds `data` to the CMAC (`CryptCmacData()`).
-    pub fn update(&mut self, s: &impl Symmetric, mut data: &[u8]) -> Result<(), CryptoError> {
+    pub fn update<C: Crypto>(
+        &mut self,
+        s: &Tested<'_, C>,
+        mut data: &[u8],
+    ) -> Result<(), CryptoError> {
         while !data.is_empty() {
             if usize::from(self.bcount) == BLOCK {
                 let mut iv = self.iv;
@@ -87,7 +92,7 @@ impl CmacState {
     }
 
     /// Completes the CMAC and returns the 16-octet MAC (`CryptCmacEnd()`).
-    pub fn finalize(mut self, s: &impl Symmetric) -> Result<[u8; BLOCK], CryptoError> {
+    pub fn finalize<C: Crypto>(mut self, s: &Tested<'_, C>) -> Result<[u8; BLOCK], CryptoError> {
         // L = E_K(0^128); K1 = dbl(L); K2 = dbl(K1).
         let mut subkey = [0u8; BLOCK];
         self.encrypt_block(s, &mut subkey)?;
@@ -175,6 +180,8 @@ mod tests {
     ))]
     use tpm2_crypto_rust::RustCryptoProvider as Provider;
 
+    use crate::self_test::SelfTestState;
+
     /// The 64-octet message of the SP 800-38B / RFC 4493 examples.
     const MESSAGE: [u8; 64] = hex!(
         "6bc1bee22e409f96e93d7e117393172a"
@@ -193,18 +200,18 @@ mod tests {
             (40, hex!("dfa66747de9ae63030ca32611497c827")),
             (64, hex!("51f0bebf7e3b9d92fc49741779363cfe")),
         ];
+        let state = SelfTestState::default();
+        let s = Tested::<Provider>::new(&state);
         for (len, expected) in cases {
             // One update, and one update per octet.
             let mut whole = CmacState::new(AlgSym::Aes128, &key).unwrap();
-            whole.update(&Provider, &MESSAGE[..len]).unwrap();
-            assert_eq!(whole.finalize(&Provider).unwrap(), expected, "len {len}");
+            whole.update(&s, &MESSAGE[..len]).unwrap();
+            assert_eq!(whole.finalize(&s).unwrap(), expected, "len {len}");
             let mut bytewise = CmacState::new(AlgSym::Aes128, &key).unwrap();
             for b in &MESSAGE[..len] {
-                bytewise
-                    .update(&Provider, core::slice::from_ref(b))
-                    .unwrap();
+                bytewise.update(&s, core::slice::from_ref(b)).unwrap();
             }
-            assert_eq!(bytewise.finalize(&Provider).unwrap(), expected, "len {len}");
+            assert_eq!(bytewise.finalize(&s).unwrap(), expected, "len {len}");
         }
     }
 
@@ -213,18 +220,20 @@ mod tests {
     #[test]
     fn aes256_matches_sp800_38b_examples_across_serialization() {
         let key = hex!("603deb1015ca71be2b73aef0857d77811f352c073b6108d72d9810a30914dff4");
+        let self_test = SelfTestState::default();
+        let s = Tested::<Provider>::new(&self_test);
         let mut state = CmacState::new(AlgSym::Aes256, &key).unwrap();
         assert_eq!(
-            state.finalize(&Provider).unwrap(),
+            state.finalize(&s).unwrap(),
             hex!("028962f61b7bf89efc6b551f4667d983")
         );
-        state.update(&Provider, &MESSAGE[..23]).unwrap();
+        state.update(&s, &MESSAGE[..23]).unwrap();
         let mut buf = [0u8; CmacState::SERIALIZED_SIZE];
         assert_eq!(state.serialize(&mut buf), CmacState::SERIALIZED_SIZE);
         let mut state = CmacState::deserialize(&buf).unwrap();
-        state.update(&Provider, &MESSAGE[23..]).unwrap();
+        state.update(&s, &MESSAGE[23..]).unwrap();
         assert_eq!(
-            state.finalize(&Provider).unwrap(),
+            state.finalize(&s).unwrap(),
             hex!("e1992190549f6ed5696a2c056c315410")
         );
     }

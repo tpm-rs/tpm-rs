@@ -61,7 +61,7 @@ pub trait SecureChannel {
 ///   TRUE") with that TPM key and the requester key Name `TPM_ALG_SHA384 || 0x11 * 48`
 ///   (`dummy_reqKeyName`).
 ///
-/// In a build without SHA-384 or NIST P-384 (the `sha384`/`ecc_curve_nist_p384` features of
+/// In a build without SHA-384 or NIST P-384 (the `sha384`/`nist_p384` features of
 /// `tpm2`) the dummy key does not unmarshal, so the TPM then has no SPDM key.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct SimulatedSecureChannel;
@@ -122,11 +122,11 @@ impl SecureChannel for SimulatedSecureChannel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Marshal;
 
     #[test]
-    #[cfg(all(feature = "sha384", feature = "ecc_curve_nist_p384"))]
+    #[cfg(all(feature = "sha384", feature = "nist_p384"))]
     fn dummy_key_round_trips() {
+        use crate::Marshal;
         let key = SimulatedSecureChannel
             .tpm_spdm_public_key(0)
             .expect("dummy key");

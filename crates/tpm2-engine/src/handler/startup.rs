@@ -3,7 +3,7 @@ use crate::timer::TpmTimer;
 use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
 #[allow(unused_imports)]
 use tpm2::TpmCc;
-use tpm2::crypto::{CryptoProvider, Rng};
+use tpm2::crypto::{Crypto, Rng};
 use tpm2::errors::{Position, TpmRc};
 
 /// Custom value matching the TCG reference code implementation indicating that no orderly shutdown
@@ -33,7 +33,7 @@ fn is_orderly(value: u16) -> bool {
     value < SU_DA_USED_VALUE
 }
 
-impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
+impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     CommandHandler<'a, 'b, C, S, T, R>
 {
     pub(crate) fn nv_sync_persistent_reset_count(&mut self) -> Result<(), TpmRc> {
@@ -153,6 +153,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     }
 
     /// Loads the internal SP800-90A CTR_DRBG state (`go.drbgState`, 76 bytes at offset 36) from non-volatile storage.
+    #[cfg(not(feature = "reference-rng"))]
     pub(crate) fn nv_load_persistent_drbg_state(&mut self) -> Result<(), TpmRc> {
         let mut buf = [0u8; 76];
         if self

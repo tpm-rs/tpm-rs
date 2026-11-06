@@ -1,4 +1,5 @@
-//! The optional ECC curves NIST P-192, BN P-638 and SM2 P-256 (`ecc_curve_*` features):
+//! The optional ECC curves NIST P-192, BN P-638 and SM2 P-256 (features `nist_p192`, `bn_p638`
+//! and `sm2_p256`):
 //! `TPM_CAP_ECC_CURVES` lists exactly the implemented curves, `TPM2_ECC_Parameters` reports their
 //! domain parameters (checked against the published constants of `_common::client_curve`) and
 //! KDF, and `TPM2_TestParms` accepts ECC parameters on them.
@@ -61,7 +62,7 @@ fn ecc_curves_capability_lists_exactly_the_implemented_curves() {
 
 /// `TPM2_ECC_Parameters(TPM_ECC_NIST_P192)` reports the FIPS 186-4 domain parameters and
 /// `KDF1_SP800_56A` with SHA-256 (`TPM_ALG_NULL` with the `ecc-parameters-null-kdf` profile).
-#[cfg(feature = "ecc_curve_nist_p192")]
+#[cfg(feature = "nist_p192")]
 #[test]
 fn nist_p192_domain_parameters() {
     check_domain_parameters(
@@ -74,7 +75,7 @@ fn nist_p192_domain_parameters() {
 
 /// `TPM2_ECC_Parameters(TPM_ECC_BN_P638)` reports the TCG Algorithm Registry domain parameters
 /// (a 638-bit prime in 80-byte field elements, `a = 0`, `b = 257`, `G = (p - 1, 16)`) and no KDF.
-#[cfg(feature = "ecc_curve_bn_p638")]
+#[cfg(feature = "bn_p638")]
 #[test]
 fn bn_p638_domain_parameters() {
     check_domain_parameters(TpmEccCurve::BNP638, 638, None);
@@ -83,7 +84,7 @@ fn bn_p638_domain_parameters() {
 /// `TPM2_ECC_Parameters(TPM_ECC_SM2_P256)` reports the GM/T 0003.5 domain parameters and no
 /// KDF: the curve's KDF hash would be SM3-256, which is not implemented, so the reported KDF is
 /// `TPM_ALG_NULL`.
-#[cfg(feature = "ecc_curve_sm2_p256")]
+#[cfg(feature = "sm2_p256")]
 #[test]
 fn sm2_p256_domain_parameters() {
     check_domain_parameters(TpmEccCurve::SM2P256, 256, None);

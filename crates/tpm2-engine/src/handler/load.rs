@@ -14,10 +14,10 @@ use tpm2::errors::{Position, TpmRc};
 use crate::self_test::kdfa_bits;
 use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
-use tpm2::crypto::{CryptoProvider, Direction, Rng};
+use tpm2::crypto::{Crypto, Direction, Rng};
 use tpm2::{Tpm2bPrivate, TpmaObject, TpmiAlgHash, TpmtSensitive};
 
-impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
+impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     CommandHandler<'a, 'b, C, S, T, R>
 {
     /// Handles the [TpmCc::Load] (`0x12C`) command.

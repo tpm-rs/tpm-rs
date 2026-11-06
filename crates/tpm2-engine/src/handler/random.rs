@@ -6,9 +6,9 @@ use tpm2::errors::{Position, TpmRc};
 use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
 use crate::{InternalError, handler::CommandHandler, req_resp::RequestThenResponse};
-use tpm2::crypto::{CryptoProvider, Rng};
+use tpm2::crypto::{Crypto, Rng};
 
-impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
+impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     CommandHandler<'a, 'b, C, S, T, R>
 {
     fn try_get_random(&mut self, buffer: &mut [u8]) -> Result<(), InternalError> {
@@ -97,10 +97,15 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         }
         #[cfg(not(feature = "reference-rng"))]
         {
-            self.crypto()
-                .stir_random(cmd.in_data.get_buffer())
+            self.context
+                .crypto_rng
+                .stir_bytes(cmd.in_data.get_buffer())
                 .map_err(|_| TpmRc::FAILURE)?;
-            let _ = self.context.platform.rng.reseed(cmd.in_data.get_buffer());
+            let _ = self
+                .context
+                .platform
+                .rng
+                .stir_bytes(cmd.in_data.get_buffer());
         }
 
         let _response = request.into_response();

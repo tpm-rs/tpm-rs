@@ -73,7 +73,7 @@ fn encapsulate_then_decapsulate_agree() {
         let (key, _) = mlkem_primary(&mut sim, parameter_set);
         let (shared_secret, ciphertext) = encapsulate(&mut sim, key).unwrap();
         assert_eq!(shared_secret.len(), MLKEM_SHARED_SECRET_BYTES);
-        assert_eq!(ciphertext.len(), parameter_set.ciphertext_bytes());
+        assert_eq!(ciphertext.len(), parameter_set.ct_bytes());
         assert_eq!(
             decapsulate(&mut sim, key, &ciphertext).unwrap(),
             shared_secret,

@@ -161,7 +161,8 @@ fn encrypt_decrypt2_rejects_invalid_decrypt_flag() {
             data: Tpm2bSensitiveData::default(),
         }),
         in_public: tpm2::Tpm2b(sym_template),
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     let cp_resp = execute_with_password_sessions(&mut sim, &create_primary_cmd, 1, &[]).unwrap();
     let key_handle = cp_resp.object_handle;
@@ -237,7 +238,8 @@ fn encrypt_decrypt_rejects_cmac_mode() {
             data: Tpm2bSensitiveData::default(),
         }),
         in_public: tpm2::Tpm2b(sym_template),
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     let cp_resp = execute_with_password_sessions(&mut sim, &create_primary_cmd, 1, &[]).unwrap();
     let key_handle = cp_resp.object_handle;
@@ -311,7 +313,8 @@ fn encrypt_decrypt_rejects_invalid_decrypt_flag() {
             data: Tpm2bSensitiveData::default(),
         }),
         in_public: tpm2::Tpm2b(sym_template),
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     let cp_resp = execute_with_password_sessions(&mut sim, &create_primary_cmd, 1, &[]).unwrap();
     let key_handle = cp_resp.object_handle;

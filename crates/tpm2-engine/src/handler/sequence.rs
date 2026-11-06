@@ -9,13 +9,13 @@ use tpm2::commands::responses;
 use tpm2::commands::{
     EventSequenceComplete, HMACStart, Hash, HashSequenceStart, SequenceComplete, SequenceUpdate,
 };
-use tpm2::crypto::{CryptoProvider, Rng};
+use tpm2::crypto::{Crypto, Rng};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
     Alg, Tpm2bDigest, TpmaObject, TpmiAlgHash, TpmlDigestValues, TpmtHa, TpmtKeyedHashScheme,
 };
 
-impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
+impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     CommandHandler<'a, 'b, C, S, T, R>
 {
     /// Handles the [TpmCc::Hash] (`0x17D`) command.
@@ -207,7 +207,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         // length of a sequence (C has none either).
         seq_obj.update_hash_states(data);
 
-        // A CMAC sequence is updated with the block cipher of the crypto provider.
+        // A CMAC sequence is updated with the block cipher of the crypto backend.
         #[cfg(feature = "cmac")]
         if let crate::SequenceType::Cmac { mut state } = seq_obj.sequence_type {
             state

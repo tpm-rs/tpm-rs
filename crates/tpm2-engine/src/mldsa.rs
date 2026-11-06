@@ -1,7 +1,8 @@
 //! ML-DSA (FIPS 204) message representatives.
 //!
-//! The crypto provider signs and verifies the message representative `mu`
-//! ([`tpm2::crypto::Mldsa::mldsa_sign_mu`], [`tpm2::crypto::Mldsa::mldsa_verify_mu`]); the engine
+//! The crypto backend signs and verifies the message representative `mu`
+//! ([`tpm2::crypto::MldsaPrivateKey::sign_mu_internal`], [`tpm2::crypto::MldsaPublicKey::verify`]);
+//! the engine
 //! computes `mu` itself with [`Shake256`]:
 //!
 //! ```text
@@ -18,13 +19,10 @@ use tpm2::TpmiAlgHash;
 use crate::shake256::Shake256;
 
 /// The size of the message representative `mu` (`MLDSA_MU_SIZE`).
-pub(crate) const MU_SIZE: usize = tpm2::crypto::MLDSA_MU_SIZE;
+pub(crate) const MU_SIZE: usize = tpm2::TpmiMldsaParms::MU_BYTES;
 
 /// The size of the public-key hash `tr`.
 pub(crate) const TR_SIZE: usize = 64;
-
-/// The maximum size of the context string `ctx` (`MLDSA_CTX_MAX_SIZE`).
-pub(crate) const MAX_CONTEXT_SIZE: usize = 255;
 
 /// A SHAKE256 computation of `mu` for the verification key `public_key`, with `tr` absorbed
 /// (the caller absorbs `M'` and squeezes [`MU_SIZE`] bytes).
@@ -39,23 +37,13 @@ pub(crate) fn mu_start(public_key: &[u8]) -> Shake256 {
 /// A SHAKE256 computation of the pure ML-DSA `mu` for the verification key `public_key` and the
 /// context string `context`, with `tr || 0 || len(ctx) || ctx` absorbed (the caller absorbs the
 /// message `M` and squeezes [`MU_SIZE`] bytes), or `None` if `context` is longer than
-/// [`MAX_CONTEXT_SIZE`].
+/// 255 octets (`MLDSA_CTX_MAX_SIZE`).
 pub(crate) fn pure_mu_start(public_key: &[u8], context: &[u8]) -> Option<Shake256> {
     let context_len = u8::try_from(context.len()).ok()?;
     let mut shake = mu_start(public_key);
     shake.update(&[0, context_len]);
     shake.update(context);
     Some(shake)
-}
-
-/// The pure ML-DSA `mu` of the message `message` for `public_key` and `context`, or `None` if
-/// `context` is longer than [`MAX_CONTEXT_SIZE`].
-pub(crate) fn pure_mu(public_key: &[u8], context: &[u8], message: &[u8]) -> Option<[u8; MU_SIZE]> {
-    let mut shake = pure_mu_start(public_key, context)?;
-    shake.update(message);
-    let mut mu = [0u8; MU_SIZE];
-    shake.finalize_into(&mut mu);
-    Some(mu)
 }
 
 /// The DER encoding of the object identifier of the pre-hash function `hash_alg` of HashML-DSA
@@ -85,7 +73,7 @@ pub(crate) fn pre_hash_oid(hash_alg: TpmiAlgHash) -> Option<&'static [u8]> {
 }
 
 /// The HashML-DSA `mu` of the pre-hashed message `digest` (computed with `hash_alg`) for
-/// `public_key` and `context`, or `None` if `context` is longer than [`MAX_CONTEXT_SIZE`] or
+/// `public_key` and `context`, or `None` if `context` is longer than 255 octets or
 /// `hash_alg` has no pre-hash identifier ([`pre_hash_oid`]).
 pub(crate) fn hash_mu(
     public_key: &[u8],

@@ -1,9 +1,10 @@
-//! Camellia-128/192/256 through the crypto provider: CFB encryption and
-//! decryption (`Symmetric::camellia*`; the other modes are covered by
-//! `block_cipher_modes.rs`) and CMAC (`Cmac::camellia*`).
+//! Camellia-128/192/256 through the crypto backend under test: CFB encryption
+//! and decryption (`<TestProvider as Symmetric>::Camellia*`; the other modes
+//! are covered by `block_cipher_modes.rs`) and CMAC
+//! (`<TestProvider as Cmac>::Camellia*`).
 //!
-//! The trait methods are called directly rather than through
-//! `SymmetricKey`/`CmacStream`, whose Camellia variants only exist with the
+//! The backend traits are called directly rather than through
+//! `SymmetricKey`/`CmacContext`, whose Camellia variants only exist with the
 //! `tpm2` Camellia features, which these tests must not enable (Cargo features
 //! unify across the workspace and would widen the TPM).
 //!
@@ -14,7 +15,9 @@
 //! example plaintext.
 
 use hex_literal::hex;
-use tpm2::crypto::{Cmac, CryptoError, Direction, Finalize, ModeIv, Symmetric, Update};
+use tpm2::TpmiAlgCipherMode;
+use tpm2::crypto::backend::{Cmac, CmacState, Symmetric, SymmetricState};
+use tpm2::crypto::{CipherInput, Direction};
 use tpm2_crypto_tests::TestProvider;
 
 /// RFC 3713, Appendix A: Camellia-128 key (also the plaintext of every key size).
@@ -36,23 +39,18 @@ const PLAINTEXT: [u8; 64] = hex!(
     "f69f2445df4f9b17ad2b417be66c3710"
 );
 
-/// The signature of `Symmetric::camellia*` for an `N`-byte key.
-type SymFn<const N: usize> =
-    fn(&TestProvider, &[u8; N], ModeIv<'_>, Direction, &mut [u8]) -> Result<(), CryptoError>;
-
-/// One Camellia key size: its `Symmetric` method, key, RFC 3713 ciphertext
+/// One Camellia key size: its backend cipher `S`, key, RFC 3713 ciphertext
 /// block and CFB ciphertext of [`PLAINTEXT`] under [`IV`].
-struct CfbCase<const N: usize> {
+struct CfbCase<S, const N: usize> {
     name: &'static str,
-    op: SymFn<N>,
     key: [u8; N],
     rfc_ciphertext: [u8; 16],
     cfb_ciphertext: [u8; 64],
+    cipher: core::marker::PhantomData<S>,
 }
 
-const CFB_128: CfbCase<16> = CfbCase {
+const CFB_128: CfbCase<<TestProvider as Symmetric>::Camellia128, 16> = CfbCase {
     name: "Camellia-128",
-    op: <TestProvider as Symmetric>::camellia128,
     key: KEY_128,
     rfc_ciphertext: hex!("67673138549669730857065648eabe43"),
     cfb_ciphertext: hex!(
@@ -61,11 +59,11 @@ const CFB_128: CfbCase<16> = CfbCase {
         "a9f79f3753f2cdd548dc4a8cd595757f"
         "e115a0fc165a3c999abfbd223a4a5b78"
     ),
+    cipher: core::marker::PhantomData,
 };
 
-const CFB_192: CfbCase<24> = CfbCase {
+const CFB_192: CfbCase<<TestProvider as Symmetric>::Camellia192, 24> = CfbCase {
     name: "Camellia-192",
-    op: <TestProvider as Symmetric>::camellia192,
     key: KEY_192,
     rfc_ciphertext: hex!("b4993401b3e996f84ee5cee7d79b09b9"),
     cfb_ciphertext: hex!(
@@ -74,11 +72,11 @@ const CFB_192: CfbCase<24> = CfbCase {
         "2d677c1e0b8df28a8f4008238c031363"
         "5d73a6a179c3f1e7277654c383035a50"
     ),
+    cipher: core::marker::PhantomData,
 };
 
-const CFB_256: CfbCase<32> = CfbCase {
+const CFB_256: CfbCase<<TestProvider as Symmetric>::Camellia256, 32> = CfbCase {
     name: "Camellia-256",
-    op: <TestProvider as Symmetric>::camellia256,
     key: KEY_256,
     rfc_ciphertext: hex!("9acc237dff16d76c20ef7c919e3a7509"),
     cfb_ciphertext: hex!(
@@ -87,13 +85,25 @@ const CFB_256: CfbCase<32> = CfbCase {
         "c78e087010a81a540498d05c85b5c927"
         "58f1ef158f7ca49a43f1c8e8ae3cb065"
     ),
+    cipher: core::marker::PhantomData,
 };
 
-impl<const N: usize> CfbCase<N> {
-    /// Runs the case's `Symmetric` method in CFB mode on `data` with `iv`.
+impl<S: SymmetricState<N>, const N: usize> CfbCase<S, N> {
+    /// Runs the case's cipher in CFB mode on `data` with `iv`, through
+    /// `SymmetricState::crypt` (the TPM's chaining value: a partial final
+    /// ciphertext block is zero padded).
     fn cfb(&self, iv: &mut [u8; 16], dir: Direction, data: &mut [u8]) {
-        (self.op)(&TestProvider, &self.key, ModeIv::Cfb(iv), dir, data)
+        let input = CipherInput::new(TpmiAlgCipherMode::Cfb, iv, data).unwrap();
+        S::crypt_once(&self.key, dir, input)
             .unwrap_or_else(|e| panic!("{} CFB failed: {e:?}", self.name));
+    }
+
+    /// Runs the backend's raw `SymmetricState::cfb` mode method on `data`
+    /// with `iv`.
+    fn raw_cfb(&self, iv: &mut [u8; 16], dir: Direction, data: &mut [u8]) {
+        S::init(&self.key)
+            .and_then(|s| s.cfb(dir, iv, data))
+            .unwrap_or_else(|e| panic!("{} raw CFB failed: {e:?}", self.name));
     }
 
     /// The first CFB keystream block is `E_K(IV)`, so encrypting a zero block
@@ -104,6 +114,20 @@ impl<const N: usize> CfbCase<N> {
         self.cfb(&mut iv, Direction::Encrypt, &mut data);
         assert_eq!(data, self.rfc_ciphertext, "{} RFC 3713 block", self.name);
         assert_eq!(iv, self.rfc_ciphertext, "{} ivOut", self.name);
+        // The RFC 3713 block in ECB mode.
+        let mut blocks = [RFC_PLAINTEXT];
+        S::init(&self.key)
+            .and_then(|s| s.ecb(Direction::Encrypt, &mut blocks))
+            .unwrap();
+        assert_eq!(blocks[0], self.rfc_ciphertext, "{} RFC 3713 ECB", self.name);
+        S::init(&self.key)
+            .and_then(|s| s.ecb(Direction::Decrypt, &mut blocks))
+            .unwrap();
+        assert_eq!(
+            blocks[0], RFC_PLAINTEXT,
+            "{} RFC 3713 ECB decrypt",
+            self.name
+        );
     }
 
     /// Whole-block encryption and decryption of [`PLAINTEXT`]; `ivOut` is the
@@ -122,8 +146,11 @@ impl<const N: usize> CfbCase<N> {
     }
 
     /// A trailing partial block: the ciphertext is a prefix of the full one and
-    /// `ivOut` is the partial ciphertext followed by the rest of the previous
-    /// chaining value. Covers every length from 0 to 64 bytes.
+    /// `ivOut` is the partial ciphertext block zero padded (the TCG
+    /// reference's chaining value, produced by `SymmetricState::crypt`). The
+    /// backend's raw `cfb` method must produce the same output and the partial
+    /// ciphertext in `ivOut[..n]` (the rest of its `ivOut` is unspecified).
+    /// Covers every length from 0 to 64 bytes.
     fn check_partial_blocks(&self) {
         for len in 0..=PLAINTEXT.len() {
             for dir in [Direction::Encrypt, Direction::Decrypt] {
@@ -137,16 +164,31 @@ impl<const N: usize> CfbCase<N> {
                 assert_eq!(data, output[..len], "{} {dir:?} of {len} bytes", self.name);
 
                 let full = len / 16 * 16;
+                let rest = len - full;
                 let mut expected_iv = if full == 0 {
                     IV
                 } else {
                     self.cfb_ciphertext[full - 16..full].try_into().unwrap()
                 };
-                let rest = len - full;
-                expected_iv[..rest].copy_from_slice(&self.cfb_ciphertext[full..len]);
+                if rest != 0 {
+                    expected_iv = [0; 16];
+                    expected_iv[..rest].copy_from_slice(&self.cfb_ciphertext[full..len]);
+                }
                 assert_eq!(
                     iv, expected_iv,
                     "{} {dir:?} ivOut of {len} bytes",
+                    self.name
+                );
+
+                let mut raw_iv = IV;
+                let mut raw_data = input[..len].to_vec();
+                self.raw_cfb(&mut raw_iv, dir, &mut raw_data);
+                assert_eq!(raw_data, output[..len], "{} raw {dir:?} {len}", self.name);
+                let checked = if rest == 0 { 16 } else { rest };
+                assert_eq!(
+                    raw_iv[..checked],
+                    expected_iv[..checked],
+                    "{} raw {dir:?} ivOut of {len} bytes",
                     self.name
                 );
             }
@@ -259,25 +301,30 @@ const CMAC_VECTORS: [CmacVector; 9] = [
     ),
 ];
 
-/// Checks the CMAC context constructor `new` against `expected(vector)` for
-/// every vector, one-shot and fed in pieces (split at every position).
-fn check_cmac<Ctx: Update + Finalize<16>>(
+/// Checks the backend's CMAC state `M` with `key` against `expected(vector)`
+/// for every vector: one-shot (`CmacState::cmac`, also with the message split
+/// into slices) and streamed in pieces (split at every position).
+fn check_cmac<M: CmacState<N>, const N: usize>(
     name: &str,
-    new: impl Fn() -> Result<Ctx, CryptoError>,
+    key: &[u8; N],
     expected: impl Fn(&CmacVector) -> [u8; 16],
 ) {
     for vector in &CMAC_VECTORS {
         let len = vector.0;
         let message = &PLAINTEXT[..len];
 
-        let mut ctx = new().unwrap();
+        let mut ctx = M::init(key).unwrap();
         ctx.update(message).unwrap();
         let mut mac = [0u8; 16];
         ctx.finalize(&mut mac).unwrap();
         assert_eq!(mac, expected(vector), "{name} CMAC of {len} bytes");
 
+        let mut mac = [0u8; 16];
+        M::cmac(key, &[message], &mut mac).unwrap();
+        assert_eq!(mac, expected(vector), "{name} one-shot CMAC of {len} bytes");
+
         for split in 0..=len {
-            let mut ctx = new().unwrap();
+            let mut ctx = M::init(key).unwrap();
             ctx.update(&message[..split]).unwrap();
             ctx.update(&[]).unwrap();
             ctx.update(&message[split..]).unwrap();
@@ -288,6 +335,14 @@ fn check_cmac<Ctx: Update + Finalize<16>>(
                 expected(vector),
                 "{name} CMAC of {len} bytes split at {split}"
             );
+
+            let mut mac = [0u8; 16];
+            M::cmac(key, &[&message[..split], &[], &message[split..]], &mut mac).unwrap();
+            assert_eq!(
+                mac,
+                expected(vector),
+                "{name} one-shot CMAC of {len} bytes split at {split}"
+            );
         }
     }
 }
@@ -296,31 +351,19 @@ fn check_cmac<Ctx: Update + Finalize<16>>(
 /// that are not a multiple of the block size.
 #[test]
 fn camellia128_cmac() {
-    check_cmac(
-        "Camellia-128",
-        || Cmac::camellia128(&TestProvider, &KEY_128),
-        |v| v.1,
-    );
+    check_cmac::<<TestProvider as Cmac>::Camellia128, 16>("Camellia-128", &KEY_128, |v| v.1);
 }
 
 /// Camellia-192-CMAC matches OpenSSL, including the empty message and lengths
 /// that are not a multiple of the block size.
 #[test]
 fn camellia192_cmac() {
-    check_cmac(
-        "Camellia-192",
-        || Cmac::camellia192(&TestProvider, &KEY_192),
-        |v| v.2,
-    );
+    check_cmac::<<TestProvider as Cmac>::Camellia192, 24>("Camellia-192", &KEY_192, |v| v.2);
 }
 
 /// Camellia-256-CMAC matches OpenSSL, including the empty message and lengths
 /// that are not a multiple of the block size.
 #[test]
 fn camellia256_cmac() {
-    check_cmac(
-        "Camellia-256",
-        || Cmac::camellia256(&TestProvider, &KEY_256),
-        |v| v.3,
-    );
+    check_cmac::<<TestProvider as Cmac>::Camellia256, 32>("Camellia-256", &KEY_256, |v| v.3);
 }

@@ -9,10 +9,10 @@ use tpm2::errors::{Position, TpmRc};
 
 use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
-use tpm2::crypto::{CryptoProvider, Rng};
+use tpm2::crypto::{Crypto, Rng};
 use tpm2::{Handle, TpmSe, TpmiAlgHash};
 
-impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
+impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     CommandHandler<'a, 'b, C, S, T, R>
 {
     /// Handles the [TpmCc::PolicyAuthorize] (`0x16A`) command.

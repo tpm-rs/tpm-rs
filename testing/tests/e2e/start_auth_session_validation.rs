@@ -235,7 +235,7 @@ fn public_only_tpm_key_rejected() {
             TpmsRsaParms {
                 symmetric: None,
                 scheme: None,
-                key_bits: TpmiRsaKeyBits(2048),
+                key_bits: TpmiRsaKeyBits::Rsa2048,
                 exponent: 0,
             },
             Tpm2bPublicKeyRsa::default(),

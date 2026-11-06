@@ -1,9 +1,10 @@
-use crate::{errors::*, marshal::max, *};
+use crate::{errors::*, *};
 
 /// `TPMI_ALG_KDF` interface type defined in TPM 2.0 Part 2: Structures, Section 9.31 (Table 77).
 ///
 /// Selects a key derivation function algorithm (MGF1, HKDF, KDF1_SP800_56A, KDF2, KDF1_SP800_108).
 /// Note: `TPM_ALG_NULL` is represented as `Option<TpmiAlgKdf>::None`.
+#[doc(alias = "TPMI_ALG_KDF")]
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 #[repr(u16)]
 pub enum TpmiAlgKdf {
@@ -283,45 +284,62 @@ impl<'a> Unmarshal<'a> for Option<TpmiAlgSymMode> {
 
 /// `TPMI_RSA_KEY_BITS` interface type defined in TPM 2.0 Part 2: Structures, Section 9.29 (Table 60).
 ///
-/// Selects an RSA key size in bits (1024, 2048, 3072, or 4096 bits).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-#[repr(transparent)]
-pub struct TpmiRsaKeyBits(pub u16);
+/// Selects an RSA key size in bits. While [Part 2: Structures] allows for an
+/// implementation to support any set of RSA key sizes, this implementation only
+/// allows for RSA keys sizes of 1024, 2048, 3072, and 4096 (each controlled by
+/// the corresponding `rsa*` Cargo feature); other values are rejected with
+/// `TPM_RC_VALUE`.
+#[doc(alias = "TPMI_RSA_KEY_BITS")]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub enum TpmiRsaKeyBits {
+    #[cfg(feature = "rsa1024")]
+    Rsa1024 = 1024,
+    #[cfg(feature = "rsa2048")]
+    Rsa2048 = 2048,
+    #[cfg(feature = "rsa3072")]
+    Rsa3072 = 3072,
+    #[cfg(feature = "rsa4096")]
+    Rsa4096 = 4096,
+}
 
 impl TpmiRsaKeyBits {
-    pub const MAX_PUB_KEY_BITS: usize = crate::marshal::max(&[
+    const ALL: &[Self] = &[
         #[cfg(feature = "rsa1024")]
-        1024,
+        Self::Rsa1024,
         #[cfg(feature = "rsa2048")]
-        2048,
+        Self::Rsa2048,
         #[cfg(feature = "rsa3072")]
-        3072,
+        Self::Rsa3072,
         #[cfg(feature = "rsa4096")]
-        4096,
-    ]);
-    pub const MAX_PUB_KEY_BYTES: usize = Self::MAX_PUB_KEY_BITS.div_ceil(8);
-    pub const MAX_PRIV_KEY_BYTES: usize = Self::MAX_PUB_KEY_BYTES.div_ceil(2) * 5;
+        Self::Rsa4096,
+    ];
+
+    pub const MAX_PUB_KEY_BITS: u16 = max_by!(Self::ALL, Self::as_u16);
+    pub const MAX_PUB_KEY_BYTES: usize = bits_to_bytes(Self::MAX_PUB_KEY_BITS);
+    /// The TPM spec requires that RSA keys have primes `p` and `q` such that
+    /// `p^2`, `q^2`, and modulus `n` have values between `2^(k-1)` and `2^k`.
+    /// This means each prime is always half the length of the modulus.
+    pub const MAX_PRIV_KEY_BYTES: usize = Self::MAX_PUB_KEY_BYTES.div_ceil(2);
+
+    /// Returns [`None`] if the specified key bit size isn't supported.
+    pub const fn new(bits: u16) -> Option<Self> {
+        find_by!(Self::ALL, |k| k.as_u16() == bits)
+    }
+    /// Convert the typed enum into an integer number of bits.
+    pub const fn as_u16(self) -> u16 {
+        self as u16
+    }
 }
 impl TryFrom<u16> for TpmiRsaKeyBits {
     type Error = UnmarshalError;
     fn try_from(val: u16) -> Result<Self, Self::Error> {
-        match val {
-            #[cfg(feature = "rsa1024")]
-            1024 => Ok(Self(val)),
-            #[cfg(feature = "rsa2048")]
-            2048 => Ok(Self(val)),
-            #[cfg(feature = "rsa3072")]
-            3072 => Ok(Self(val)),
-            #[cfg(feature = "rsa4096")]
-            4096 => Ok(Self(val)),
-            _ => Err(UnmarshalError::VALUE),
-        }
+        Self::new(val).ok_or(UnmarshalError::VALUE)
     }
 }
 
 impl From<TpmiRsaKeyBits> for u16 {
     fn from(val: TpmiRsaKeyBits) -> Self {
-        val.0
+        val.as_u16()
     }
 }
 
@@ -331,7 +349,7 @@ impl Marshal for TpmiRsaKeyBits {
 
     #[inline(always)]
     fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
-        self.0.marshal(dst)
+        self.as_u16().marshal(dst)
     }
 }
 
@@ -342,13 +360,201 @@ impl<'a> Unmarshal<'a> for TpmiRsaKeyBits {
     }
 }
 
+/// `TPMI_MLKEM_PARMS` interface type defined in TPM 2.0 Part 2: Structures, Section 11.2.5.1.
+///
+/// Selects the ML-KEM parameter set (`TPM_MLKEM_512`, `TPM_MLKEM_768`, `TPM_MLKEM_1024`), each
+/// enabled by its `mlkem_*` Cargo feature (without the `mlkem` feature, this enum has no
+/// variants). Unmarshalling an unrecognized or disabled value returns
+/// `TPM_RC_PARMS` ([`UnmarshalError::PARMS`]).
+#[doc(alias = "TPMI_MLKEM_PARMS")]
+#[doc(alias = "TPM_MLKEM_PARMS")]
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub enum TpmiMlkemParms {
+    #[cfg(feature = "mlkem_512")]
+    Mlkem512 = 0x0001,
+    #[cfg(feature = "mlkem_768")]
+    Mlkem768 = 0x0002,
+    #[cfg(feature = "mlkem_1024")]
+    Mlkem1024 = 0x0003,
+}
+
+/// Type alias for `TPM_MLKEM_PARMS` (`TPMI_MLKEM_PARMS`).
+pub type TpmMlkemParms = TpmiMlkemParms;
+
+impl TpmiMlkemParms {
+    const ALL: &[Self] = &[
+        #[cfg(feature = "mlkem_512")]
+        Self::Mlkem512,
+        #[cfg(feature = "mlkem_768")]
+        Self::Mlkem768,
+        #[cfg(feature = "mlkem_1024")]
+        Self::Mlkem1024,
+    ];
+
+    #[doc(alias = "MAX_MLKEM_PUB_SIZE")]
+    pub const MAX_PUB_KEY_BYTES: usize = max_by!(Self::ALL, Self::pub_key_bytes);
+    #[doc(alias = "MAX_MLKEM_CT_SIZE")]
+    pub const MAX_CT_BYTES: usize = max_by!(Self::ALL, Self::ct_bytes);
+    /// The size of an ML-KEM shared secret `K` (`MLKEM_SHARED_SECRET_SIZE`).
+    pub const SHARED_SECRET_BYTES: usize = 32;
+    /// The size of an ML-KEM private key seed `d || z` (`MLKEM_PRIVATE_KEY_SEED_SIZE`,
+    /// `TPM2B_PRIVATE_KEY_MLKEM`), for every parameter set.
+    #[doc(alias = "MAX_MLKEM_PRIV_SIZE")]
+    pub const PRIV_KEY_BYTES: usize = 64;
+
+    const fn info(self) -> (usize, usize) {
+        match self {
+            #[cfg(feature = "mlkem_512")]
+            Self::Mlkem512 => (800, 768),
+            #[cfg(feature = "mlkem_768")]
+            Self::Mlkem768 => (1184, 1088),
+            #[cfg(feature = "mlkem_1024")]
+            Self::Mlkem1024 => (1568, 1568),
+        }
+    }
+
+    /// Returns the encapsulation (public) key size in bytes for this parameter set.
+    pub const fn pub_key_bytes(self) -> usize {
+        self.info().0
+    }
+
+    /// Returns the ciphertext size in bytes for this parameter set.
+    pub const fn ct_bytes(self) -> usize {
+        self.info().1
+    }
+}
+
+impl TryFrom<u16> for TpmiMlkemParms {
+    type Error = UnmarshalError;
+    fn try_from(val: u16) -> Result<Self, Self::Error> {
+        find_by!(Self::ALL, |p| u16::from(p) == val).ok_or(UnmarshalError::PARMS)
+    }
+}
+
+impl From<TpmiMlkemParms> for u16 {
+    fn from(val: TpmiMlkemParms) -> Self {
+        val as u16
+    }
+}
+
+impl Marshal for TpmiMlkemParms {
+    const MAX_SIZE: usize = u16::MAX_SIZE;
+    type MaxBuffer = [u8; Self::MAX_SIZE];
+
+    #[inline(always)]
+    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
+        u16::from(*self).marshal(dst)
+    }
+}
+
+impl<'a> Unmarshal<'a> for TpmiMlkemParms {
+    #[inline(always)]
+    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
+        u16::unmarshal(src)?.try_into()
+    }
+}
+
+/// `TPMI_MLDSA_PARMS` interface type defined in TPM 2.0 Part 2: Structures, Section 11.2.6.1.
+///
+/// Selects the ML-DSA parameter set (`TPM_MLDSA_44`, `TPM_MLDSA_65`, `TPM_MLDSA_87`), each
+/// enabled by its `mldsa_*` Cargo feature (without the `mldsa` feature, this enum has no
+/// variants). Unmarshalling an unrecognized or disabled value returns
+/// `TPM_RC_PARMS` ([`UnmarshalError::PARMS`]).
+#[doc(alias = "TPMI_MLDSA_PARMS")]
+#[doc(alias = "TPM_MLDSA_PARMS")]
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub enum TpmiMldsaParms {
+    #[cfg(feature = "mldsa_44")]
+    Mldsa44 = 0x0001,
+    #[cfg(feature = "mldsa_65")]
+    Mldsa65 = 0x0002,
+    #[cfg(feature = "mldsa_87")]
+    Mldsa87 = 0x0003,
+}
+
+/// Type alias for `TPM_MLDSA_PARMS` (`TPMI_MLDSA_PARMS`).
+pub type TpmMldsaParms = TpmiMldsaParms;
+
+impl TpmiMldsaParms {
+    const ALL: &[Self] = &[
+        #[cfg(feature = "mldsa_44")]
+        Self::Mldsa44,
+        #[cfg(feature = "mldsa_65")]
+        Self::Mldsa65,
+        #[cfg(feature = "mldsa_87")]
+        Self::Mldsa87,
+    ];
+
+    #[doc(alias = "MAX_MLDSA_PUB_SIZE")]
+    pub const MAX_PUB_KEY_BYTES: usize = max_by!(Self::ALL, Self::pub_key_bytes);
+    #[doc(alias = "MAX_MLDSA_SIG_SIZE")]
+    pub const MAX_SIG_BYTES: usize = max_by!(Self::ALL, Self::sig_bytes);
+    /// The size of the ML-DSA message representative `mu` (`MLDSA_MU_SIZE`).
+    pub const MU_BYTES: usize = 64;
+    /// The size of an ML-DSA private key seed `xi` (`MLDSA_PRIVATE_KEY_SEED_SIZE`,
+    /// `TPM2B_PRIVATE_KEY_MLDSA`), for every parameter set.
+    #[doc(alias = "MAX_MLDSA_PRIV_SIZE")]
+    pub const PRIV_KEY_BYTES: usize = 32;
+
+    const fn info(self) -> (usize, usize) {
+        match self {
+            #[cfg(feature = "mldsa_44")]
+            Self::Mldsa44 => (1312, 2420),
+            #[cfg(feature = "mldsa_65")]
+            Self::Mldsa65 => (1952, 3309),
+            #[cfg(feature = "mldsa_87")]
+            Self::Mldsa87 => (2592, 4627),
+        }
+    }
+
+    /// Returns the verification (public) key size in bytes for this parameter set.
+    pub const fn pub_key_bytes(self) -> usize {
+        self.info().0
+    }
+
+    /// Returns the signature size in bytes for this parameter set.
+    pub const fn sig_bytes(self) -> usize {
+        self.info().1
+    }
+}
+
+impl TryFrom<u16> for TpmiMldsaParms {
+    type Error = UnmarshalError;
+    fn try_from(val: u16) -> Result<Self, Self::Error> {
+        find_by!(Self::ALL, |p| u16::from(p) == val).ok_or(UnmarshalError::PARMS)
+    }
+}
+
+impl From<TpmiMldsaParms> for u16 {
+    fn from(val: TpmiMldsaParms) -> Self {
+        val as u16
+    }
+}
+
+impl Marshal for TpmiMldsaParms {
+    const MAX_SIZE: usize = u16::MAX_SIZE;
+    type MaxBuffer = [u8; Self::MAX_SIZE];
+
+    #[inline(always)]
+    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
+        u16::from(*self).marshal(dst)
+    }
+}
+
+impl<'a> Unmarshal<'a> for TpmiMldsaParms {
+    #[inline(always)]
+    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
+        u16::unmarshal(src)?.try_into()
+    }
+}
+
 /// `TPMI_ST_COMMAND_TAG` interface type defined in TPM 2.0 Part 2: Structures, Section 9.30 (Table 61).
 ///
 /// Specifies the structure tag in a command header (`TPM_ST_NO_SESSIONS` or `TPM_ST_SESSIONS`).
-#[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
+#[doc(alias = "TPMI_ST_COMMAND_TAG")]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
 #[repr(u16)]
 pub enum TpmiStCommandTag {
-    #[default]
     NoSessions = TpmSt::NO_SESSIONS.tag(),
     Sessions = TpmSt::SESSIONS.tag(),
 }
@@ -409,6 +615,7 @@ impl<'a> Unmarshal<'a> for TpmiStCommandTag {
 ///
 /// Selects a hash algorithm (SHA1, SHA256, SHA384, SHA512, SM3_256, etc.).
 /// Note: `TPM_ALG_NULL` is represented as `Option<TpmiAlgHash>::None`.
+#[doc(alias = "TPMI_ALG_HASH")]
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 #[repr(u16)]
 pub enum TpmiAlgHash {
@@ -429,18 +636,6 @@ pub enum TpmiAlgHash {
     #[cfg(feature = "sha3_512")]
     Sha3_512 = Alg::SHA3_512.tag(),
 }
-
-#[cfg(not(any(
-    feature = "sha1",
-    feature = "sha256",
-    feature = "sha384",
-    feature = "sha512",
-    feature = "sm3_256",
-    feature = "sha3_256",
-    feature = "sha3_384",
-    feature = "sha3_512",
-)))]
-compile_error!("at least one hash algorithm feature must be enabled");
 
 impl TpmiAlgHash {
     /// Default hash algorithm selected from the enabled hash algorithm features,
@@ -516,82 +711,63 @@ impl TpmiAlgHash {
         }
     };
 
-    /// Private helper to define [Self::MAX_DIGEST_BYTES] and [Self::HASH_COUNT]
-    const DIGEST_SIZES: &'static [usize] = &[
+    const ALL: &[Self] = &[
         #[cfg(feature = "sha1")]
-        Self::Sha1.digest_size(),
+        Self::Sha1,
         #[cfg(feature = "sha256")]
-        Self::Sha256.digest_size(),
+        Self::Sha256,
         #[cfg(feature = "sha384")]
-        Self::Sha384.digest_size(),
+        Self::Sha384,
         #[cfg(feature = "sha512")]
-        Self::Sha512.digest_size(),
+        Self::Sha512,
         #[cfg(feature = "sm3_256")]
-        Self::Sm3_256.digest_size(),
+        Self::Sm3_256,
         #[cfg(feature = "sha3_256")]
-        Self::Sha3_256.digest_size(),
+        Self::Sha3_256,
         #[cfg(feature = "sha3_384")]
-        Self::Sha3_384.digest_size(),
+        Self::Sha3_384,
         #[cfg(feature = "sha3_512")]
-        Self::Sha3_512.digest_size(),
+        Self::Sha3_512,
     ];
 
     /// The maximum digest size (in bytes) across all supported TPM2 hash algorithms.
     #[doc(alias = "MAX_DIGEST_SIZE")]
     #[doc(alias = "MAX_HASH_DIGEST_SIZE")]
-    pub const MAX_DIGEST_BYTES: usize = max(Self::DIGEST_SIZES);
+    pub const MAX_DIGEST_BYTES: usize = max_by!(Self::ALL, Self::digest_size);
     /// The maximum number of implemented hash algorithms.
     #[doc(alias = "TPM2_NUM_PCR_BANKS")]
-    pub const HASH_COUNT: usize = Self::DIGEST_SIZES.len();
+    pub const HASH_COUNT: usize = Self::ALL.len();
+
+    /// Helper returning ([`Self::digest_size`], [`Self::block_size`]) to reduce
+    /// the amount of hash-dependent conditional compilation.
+    const fn info(self) -> (usize, usize) {
+        match self {
+            #[cfg(feature = "sha1")]
+            Self::Sha1 => (20, 64),
+            #[cfg(feature = "sha256")]
+            Self::Sha256 => (32, 64),
+            #[cfg(feature = "sha384")]
+            Self::Sha384 => (48, 128),
+            #[cfg(feature = "sha512")]
+            Self::Sha512 => (64, 128),
+            #[cfg(feature = "sm3_256")]
+            Self::Sm3_256 => (32, 64),
+            #[cfg(feature = "sha3_256")]
+            Self::Sha3_256 => (32, 136),
+            #[cfg(feature = "sha3_384")]
+            Self::Sha3_384 => (48, 104),
+            #[cfg(feature = "sha3_512")]
+            Self::Sha3_512 => (64, 72),
+        }
+    }
 
     /// Returns the digest size (in bytes) of this hash algorithm.
     pub const fn digest_size(self) -> usize {
-        match self {
-            #[cfg(feature = "sha1")]
-            Self::Sha1 => 20,
-            #[cfg(feature = "sha256")]
-            Self::Sha256 => 32,
-            #[cfg(feature = "sha384")]
-            Self::Sha384 => 48,
-            #[cfg(feature = "sha512")]
-            Self::Sha512 => 64,
-            #[cfg(feature = "sm3_256")]
-            Self::Sm3_256 => 32,
-            #[cfg(feature = "sha3_256")]
-            Self::Sha3_256 => 32,
-            #[cfg(feature = "sha3_384")]
-            Self::Sha3_384 => 48,
-            #[cfg(feature = "sha3_512")]
-            Self::Sha3_512 => 64,
-        }
+        self.info().0
     }
-
-    pub const fn block_size(self) -> u16 {
-        match self {
-            #[cfg(feature = "sha1")]
-            Self::Sha1 => 64,
-            #[cfg(feature = "sha256")]
-            Self::Sha256 => 64,
-            #[cfg(feature = "sha384")]
-            Self::Sha384 => 128,
-            #[cfg(feature = "sha512")]
-            Self::Sha512 => 128,
-            #[cfg(feature = "sm3_256")]
-            Self::Sm3_256 => 64,
-            #[cfg(feature = "sha3_256")]
-            Self::Sha3_256 => 136,
-            #[cfg(feature = "sha3_384")]
-            Self::Sha3_384 => 104,
-            #[cfg(feature = "sha3_512")]
-            Self::Sha3_512 => 72,
-        }
-    }
-}
-
-impl Default for TpmiAlgHash {
-    #[inline(always)]
-    fn default() -> Self {
-        Self::DEFAULT_HASH
+    /// Returns the block size (in bytes) of this hash algorithm.
+    pub const fn block_size(self) -> usize {
+        self.info().1
     }
 }
 
@@ -733,6 +909,7 @@ macro_rules! impl_handle_tpmi_flag {
 ///
 /// Validates loaded transient object handles (`TRANSIENT_FIRST..=TRANSIENT_LAST`), persistent object
 /// handles (`PERSISTENT_FIRST..=PERSISTENT_LAST`), and conditionally `TPM_RH_NULL` when `ALLOW_NULL` is `true`.
+#[doc(alias = "TPMI_DH_OBJECT")]
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
 pub struct TpmiDhObject<const ALLOW_NULL: bool = false>(pub Handle);
 
@@ -761,6 +938,7 @@ impl_handle_tpmi_flag!(TpmiDhObject, ALLOW_NULL);
 /// Validates transient object handles (`TRANSIENT_FIRST..=TRANSIENT_LAST`), persistent object handles
 /// (`PERSISTENT_FIRST..=PERSISTENT_LAST`), and hierarchy handles (`TPM_RH_OWNER`, `TPM_RH_PLATFORM`,
 /// `TPM_RH_ENDORSEMENT`, `TPM_RH_NULL`, firmware-limited, and SVN-limited hierarchies).
+#[doc(alias = "TPMI_DH_PARENT")]
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
 pub struct TpmiDhParent(pub Handle);
 
@@ -782,6 +960,7 @@ impl_handle_tpmi!(TpmiDhParent);
 /// `TPMI_DH_PERSISTENT` interface type defined in TPM 2.0 Part 2: Structures, Section 9.5 (Table 46).
 ///
 /// Validates persistent object handles (`PERSISTENT_FIRST..=PERSISTENT_LAST`).
+#[doc(alias = "TPMI_DH_PERSISTENT")]
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
 pub struct TpmiDhPersistent(pub Handle);
 
@@ -803,6 +982,7 @@ impl_handle_tpmi!(TpmiDhPersistent);
 /// `TPM_RH_PLATFORM`, `TPM_RH_LOCKOUT`, auth handles `TPM_RH_AUTH_00..=TPM_RH_AUTH_FF`, transient objects
 /// `TRANSIENT_FIRST..=TRANSIENT_LAST`, persistent objects `PERSISTENT_FIRST..=PERSISTENT_LAST`, NV indices
 /// `NV_INDEX_FIRST..=NV_INDEX_LAST`, PCR handles `PCR_FIRST..=PCR_LAST`, and optionally `TPM_RH_NULL`).
+#[doc(alias = "TPMI_DH_ENTITY")]
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
 pub struct TpmiDhEntity<const ALLOW_NULL: bool = false>(pub Handle);
 
@@ -830,6 +1010,7 @@ impl_handle_tpmi_flag!(TpmiDhEntity, ALLOW_NULL);
 /// `TPMI_DH_PCR` interface type defined in TPM 2.0 Part 2: Structures, Section 9.7 (Table 48).
 ///
 /// Validates PCR handles (`PCR_FIRST..=PCR_LAST`) and optionally `TPM_RH_NULL`.
+#[doc(alias = "TPMI_DH_PCR")]
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
 pub struct TpmiDhPcr<const ALLOW_NULL: bool = false>(pub Handle);
 
@@ -851,6 +1032,7 @@ impl_handle_tpmi_flag!(TpmiDhPcr, ALLOW_NULL);
 ///
 /// Validates HMAC session handles (`HMAC_SESSION_FIRST..=HMAC_SESSION_LAST`), policy session handles
 /// (`POLICY_SESSION_FIRST..=POLICY_SESSION_LAST`), and optionally password session `TPM_RS_PW` (`0x40000009`).
+#[doc(alias = "TPMI_SH_AUTH_SESSION")]
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
 pub struct TpmiShAuthSession<const ALLOW_RS_PW: bool = false>(pub Handle);
 
@@ -872,6 +1054,7 @@ impl_handle_tpmi_flag!(TpmiShAuthSession, ALLOW_RS_PW);
 /// `TPMI_SH_HMAC` interface type defined in TPM 2.0 Part 2: Structures, Section 9.9 (Table 50).
 ///
 /// Validates HMAC session handles (`HMAC_SESSION_FIRST..=HMAC_SESSION_LAST`).
+#[doc(alias = "TPMI_SH_HMAC")]
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
 pub struct TpmiShHmac(pub Handle);
 
@@ -890,6 +1073,7 @@ impl_handle_tpmi!(TpmiShHmac);
 /// `TPMI_SH_POLICY` interface type defined in TPM 2.0 Part 2: Structures, Section 9.10 (Table 51).
 ///
 /// Validates policy session handles (`POLICY_SESSION_FIRST..=POLICY_SESSION_LAST`).
+#[doc(alias = "TPMI_SH_POLICY")]
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
 pub struct TpmiShPolicy(pub Handle);
 
@@ -909,6 +1093,7 @@ impl_handle_tpmi!(TpmiShPolicy);
 ///
 /// Validates handles that can be saved or flushed: HMAC sessions (`HMAC_SESSION_FIRST..=HMAC_SESSION_LAST`),
 /// policy sessions (`POLICY_SESSION_FIRST..=POLICY_SESSION_LAST`), and transient objects (`TRANSIENT_FIRST..=TRANSIENT_LAST`).
+#[doc(alias = "TPMI_DH_CONTEXT")]
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
 pub struct TpmiDhContext(pub Handle);
 
@@ -932,6 +1117,7 @@ impl_handle_tpmi!(TpmiDhContext);
 /// Validates handles that can appear in `TPMS_CONTEXT`: HMAC sessions (`HMAC_SESSION_FIRST..=HMAC_SESSION_LAST`),
 /// policy sessions (`POLICY_SESSION_FIRST..=POLICY_SESSION_LAST`), and saved transient object context markers
 /// (`0x80000000..=0x80000002`).
+#[doc(alias = "TPMI_DH_SAVED")]
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
 pub struct TpmiDhSaved(pub Handle);
 
@@ -955,6 +1141,7 @@ impl_handle_tpmi!(TpmiDhSaved);
 /// Validates permanent hierarchy handles (`TPM_RH_OWNER`, `TPM_RH_PLATFORM`, `TPM_RH_ENDORSEMENT`,
 /// `TPM_RH_NULL`), firmware-limited hierarchy handles (`TPM_RH_FW_OWNER`, `TPM_RH_FW_PLATFORM`,
 /// `TPM_RH_FW_ENDORSEMENT`, `TPM_RH_FW_NULL`), and SVN-limited hierarchy handles (`0x40010000..=0x4004FFFF`).
+#[doc(alias = "TPMI_RH_HIERARCHY")]
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
 pub struct TpmiRhHierarchy(pub Handle);
 
@@ -974,6 +1161,7 @@ impl_handle_tpmi!(TpmiRhHierarchy);
 ///
 /// Validates hierarchy enable handles (`TPM_RH_OWNER`, `TPM_RH_PLATFORM`, `TPM_RH_ENDORSEMENT`,
 /// `TPM_RH_PLATFORM_NV`, and optionally `TPM_RH_NULL`).
+#[doc(alias = "TPMI_RH_ENABLES")]
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
 pub struct TpmiRhEnables<const ALLOW_NULL: bool = false>(pub Handle);
 
@@ -1000,6 +1188,7 @@ impl_handle_tpmi_flag!(TpmiRhEnables, ALLOW_NULL);
 ///
 /// Validates hierarchy auth handles (`TPM_RH_OWNER`, `TPM_RH_PLATFORM`, `TPM_RH_ENDORSEMENT`,
 /// `TPM_RH_LOCKOUT`, and optionally `TPM_RH_NULL`).
+#[doc(alias = "TPMI_RH_HIERARCHY_AUTH")]
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
 pub struct TpmiRhHierarchyAuth<const ALLOW_NULL: bool = false>(pub Handle);
 
@@ -1023,6 +1212,7 @@ impl_handle_tpmi_flag!(TpmiRhHierarchyAuth, ALLOW_NULL);
 ///
 /// Validates hierarchy policy handles (`TPM_RH_OWNER`, `TPM_RH_PLATFORM`, `TPM_RH_ENDORSEMENT`,
 /// `TPM_RH_LOCKOUT`, and ACT handles `0x40000110..=0x4000011F`).
+#[doc(alias = "TPMI_RH_HIERARCHY_POLICY")]
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
 pub struct TpmiRhHierarchyPolicy(pub Handle);
 
@@ -1045,6 +1235,7 @@ impl_handle_tpmi!(TpmiRhHierarchyPolicy);
 /// `TPMI_RH_BASE_HIERARCHY` interface type defined in TPM 2.0 Part 2: Structures, Section 9.16 (Table 50a).
 ///
 /// Validates base hierarchy handles (`TPM_RH_OWNER`, `TPM_RH_PLATFORM`, `TPM_RH_ENDORSEMENT`).
+#[doc(alias = "TPMI_RH_BASE_HIERARCHY")]
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
 pub struct TpmiRhBaseHierarchy(pub Handle);
 
@@ -1066,6 +1257,7 @@ impl_handle_tpmi!(TpmiRhBaseHierarchy);
 /// `TPMI_RH_PLATFORM` interface type defined in TPM 2.0 Part 2: Structures, Section 9.17 (Table 51).
 ///
 /// Validates the platform hierarchy handle (`TPM_RH_PLATFORM`).
+#[doc(alias = "TPMI_RH_PLATFORM")]
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
 pub struct TpmiRhPlatform(pub Handle);
 
@@ -1084,6 +1276,7 @@ impl_handle_tpmi!(TpmiRhPlatform);
 /// `TPMI_RH_OWNER` interface type defined in TPM 2.0 Part 2: Structures, Section 9.18 (Table 52).
 ///
 /// Validates the owner hierarchy handle (`TPM_RH_OWNER`) and optionally `TPM_RH_NULL`.
+#[doc(alias = "TPMI_RH_OWNER")]
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
 pub struct TpmiRhOwner<const ALLOW_NULL: bool = false>(pub Handle);
 
@@ -1102,6 +1295,7 @@ impl_handle_tpmi_flag!(TpmiRhOwner, ALLOW_NULL);
 /// `TPMI_RH_ENDORSEMENT` interface type defined in TPM 2.0 Part 2: Structures, Section 9.19 (Table 53).
 ///
 /// Validates the endorsement hierarchy handle (`TPM_RH_ENDORSEMENT`) and optionally `TPM_RH_NULL`.
+#[doc(alias = "TPMI_RH_ENDORSEMENT")]
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
 pub struct TpmiRhEndorsement<const ALLOW_NULL: bool = false>(pub Handle);
 
@@ -1120,6 +1314,7 @@ impl_handle_tpmi_flag!(TpmiRhEndorsement, ALLOW_NULL);
 /// `TPMI_RH_PROVISION` interface type defined in TPM 2.0 Part 2: Structures, Section 9.20 (Table 54).
 ///
 /// Validates provisioning handles (`TPM_RH_OWNER`, `TPM_RH_PLATFORM`).
+#[doc(alias = "TPMI_RH_PROVISION")]
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
 pub struct TpmiRhProvision(pub Handle);
 
@@ -1138,6 +1333,7 @@ impl_handle_tpmi!(TpmiRhProvision);
 /// `TPMI_RH_CLEAR` interface type defined in TPM 2.0 Part 2: Structures, Section 9.21 (Table 55).
 ///
 /// Validates clear authorization handles (`TPM_RH_LOCKOUT`, `TPM_RH_PLATFORM`).
+#[doc(alias = "TPMI_RH_CLEAR")]
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
 pub struct TpmiRhClear(pub Handle);
 
@@ -1157,6 +1353,7 @@ impl_handle_tpmi!(TpmiRhClear);
 ///
 /// Validates NV authorization handles (`TPM_RH_OWNER`, `TPM_RH_PLATFORM`, and NV index handles
 /// `0x01000000..=0x01FFFFFF`).
+#[doc(alias = "TPMI_RH_NV_AUTH")]
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
 pub struct TpmiRhNvAuth(pub Handle);
 
@@ -1177,6 +1374,7 @@ impl_handle_tpmi!(TpmiRhNvAuth);
 /// `TPMI_RH_LOCKOUT` interface type defined in TPM 2.0 Part 2: Structures, Section 9.23 (Table 57).
 ///
 /// Validates the lockout handle (`TPM_RH_LOCKOUT`).
+#[doc(alias = "TPMI_RH_LOCKOUT")]
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
 pub struct TpmiRhLockout(pub Handle);
 
@@ -1195,6 +1393,7 @@ impl_handle_tpmi!(TpmiRhLockout);
 /// `TPMI_RH_NV_INDEX` interface type defined in TPM 2.0 Part 2: Structures, Section 9.24 (Table 58).
 ///
 /// Validates NV index handles (`0x01000000..=0x01FFFFFF` and `0x11000000..=0x12FFFFFF`).
+#[doc(alias = "TPMI_RH_NV_INDEX")]
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
 pub struct TpmiRhNvIndex(pub Handle);
 
@@ -1215,6 +1414,7 @@ impl_handle_tpmi!(TpmiRhNvIndex);
 /// `TPMI_RH_NV_DEFINED_INDEX` interface type defined in TPM 2.0 Part 2: Structures, Section 9.24.
 ///
 /// Validates defined NV index handles (`0x01000000..=0x01FFFFFF` and `0x11000000..=0x11FFFFFF`).
+#[doc(alias = "TPMI_RH_NV_DEFINED_INDEX")]
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
 pub struct TpmiRhNvDefinedIndex(pub Handle);
 
@@ -1235,6 +1435,7 @@ impl_handle_tpmi!(TpmiRhNvDefinedIndex);
 /// `TPMI_RH_NV_LEGACY_INDEX` interface type defined in TPM 2.0 Part 2: Structures, Section 9.24.
 ///
 /// Validates legacy NV index handles (`0x01000000..=0x01FFFFFF`).
+#[doc(alias = "TPMI_RH_NV_LEGACY_INDEX")]
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
 pub struct TpmiRhNvLegacyIndex(pub Handle);
 
@@ -1253,6 +1454,7 @@ impl_handle_tpmi!(TpmiRhNvLegacyIndex);
 /// `TPMI_RH_NV_EXP_INDEX` interface type defined in TPM 2.0 Part 2: Structures, Section 9.24.
 ///
 /// Validates extended NV index handles (`0x11000000..=0x11FFFFFF`).
+#[doc(alias = "TPMI_RH_NV_EXP_INDEX")]
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
 pub struct TpmiRhNvExpIndex(pub Handle);
 
@@ -1271,6 +1473,7 @@ impl_handle_tpmi!(TpmiRhNvExpIndex);
 /// `TPMI_RH_AC` interface type defined in TPM 2.0 Part 2: Structures, Section 9.25 (Table 59).
 ///
 /// Validates attached component handles (`0x90000000..=0x9000FFFF`).
+#[doc(alias = "TPMI_RH_AC")]
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
 pub struct TpmiRhAc(pub Handle);
 
@@ -1289,6 +1492,7 @@ impl_handle_tpmi!(TpmiRhAc);
 /// `TPMI_RH_ACT` interface type defined in TPM 2.0 Part 2: Structures, Section 9.26 (Table 60).
 ///
 /// Validates authenticated countdown timer handles (`0x40000110..=0x4000011F`).
+#[doc(alias = "TPMI_RH_ACT")]
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
 pub struct TpmiRhAct(pub Handle);
 
@@ -1308,6 +1512,7 @@ impl_handle_tpmi!(TpmiRhAct);
 ///
 /// Selects a MAC algorithm (`TPM_ALG_CMAC`, or a hash algorithm used for HMAC).
 /// Note: `TPM_ALG_NULL` is represented as `Option<TpmiAlgMacScheme>::None`.
+#[doc(alias = "TPMI_ALG_MAC_SCHEME")]
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 #[repr(u16)]
 pub enum TpmiAlgMacScheme {
@@ -1467,7 +1672,7 @@ pub enum TpmiAlgSigScheme {
     Ecschnorr = Alg::ECSCHNORR.tag(),
     /// `TPM_ALG_EDDSA` (converted and unmarshaled only with the `eddsa` Cargo feature).
     Eddsa = Alg::EDDSA.tag(),
-    /// `TPM_ALG_HASH_EDDSA` (converted and unmarshaled only with the `eddsa` Cargo feature).
+    /// `TPM_ALG_HASH_EDDSA` (converted and unmarshaled only with the `hash_eddsa` Cargo feature).
     HashEddsa = Alg::HASH_EDDSA.tag(),
     Hmac = Alg::HMAC.tag(),
     /// `TPM_ALG_MLDSA` (converted and unmarshaled only with the `mldsa` Cargo feature).
@@ -1494,7 +1699,7 @@ impl TryFrom<Alg> for TpmiAlgSigScheme {
             Alg::ECSCHNORR => Ok(Self::Ecschnorr),
             #[cfg(feature = "eddsa")]
             Alg::EDDSA => Ok(Self::Eddsa),
-            #[cfg(feature = "eddsa")]
+            #[cfg(feature = "hash_eddsa")]
             Alg::HASH_EDDSA => Ok(Self::HashEddsa),
             Alg::HMAC => Ok(Self::Hmac),
             #[cfg(feature = "mldsa")]
@@ -1579,10 +1784,11 @@ impl<'a> Unmarshal<'a> for Option<TpmiAlgSigScheme> {
 ///
 /// Selects an ECC key exchange scheme (`TPM_ALG_ECDH`, `TPM_ALG_SM2`, `TPM_ALG_ECMQV`).
 /// Note: `TPM_ALG_NULL` is represented as `Option<TpmiEccKeyExchange>::None`.
+#[doc(alias = "TPMI_ECC_KEY_EXCHANGE")]
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
-#[cfg_attr(any(feature = "ecdh", feature = "sm2", feature = "ecmqv"), repr(u16))]
+#[cfg_attr(any(feature = "ecc", feature = "sm2", feature = "ecmqv"), repr(u16))]
 pub enum TpmiEccKeyExchange {
-    #[cfg(feature = "ecdh")]
+    #[cfg(feature = "ecc")]
     Ecdh = Alg::ECDH.tag(),
     #[cfg(feature = "sm2")]
     Sm2 = Alg::SM2.tag(),
@@ -1594,7 +1800,7 @@ impl TryFrom<Alg> for TpmiEccKeyExchange {
     type Error = UnmarshalError;
     fn try_from(a: Alg) -> Result<Self, Self::Error> {
         match a {
-            #[cfg(feature = "ecdh")]
+            #[cfg(feature = "ecc")]
             Alg::ECDH => Ok(Self::Ecdh),
             #[cfg(feature = "sm2")]
             Alg::SM2 => Ok(Self::Sm2),
@@ -1615,7 +1821,7 @@ impl TryFrom<u16> for TpmiEccKeyExchange {
 impl From<TpmiEccKeyExchange> for Alg {
     fn from(val: TpmiEccKeyExchange) -> Alg {
         match val {
-            #[cfg(feature = "ecdh")]
+            #[cfg(feature = "ecc")]
             TpmiEccKeyExchange::Ecdh => Alg::ECDH,
             #[cfg(feature = "sm2")]
             TpmiEccKeyExchange::Sm2 => Alg::SM2,
@@ -1672,184 +1878,6 @@ impl<'a> Unmarshal<'a> for Option<TpmiEccKeyExchange> {
     #[inline(always)]
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         Alg::unmarshal(src)?.try_into()
-    }
-}
-
-/// `TPMI_MLKEM_PARMS` interface type defined in TPM 2.0 Part 2: Structures, Section 11.2.5.1.
-///
-/// Selects the ML-KEM parameter set (`TPM_MLKEM_512`, `TPM_MLKEM_768`, `TPM_MLKEM_1024`).
-/// Unmarshalling an unrecognized value returns `TPM_RC_PARMS` (`UnmarshalError::PARMS`).
-#[doc(alias = "TPMI_MLKEM_PARMS")]
-#[doc(alias = "TPM_MLKEM_PARMS")]
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
-#[repr(u16)]
-pub enum TpmiMlkemParms {
-    Mlkem512 = 0x0001,
-    Mlkem768 = 0x0002,
-    Mlkem1024 = 0x0003,
-}
-
-/// Type alias for `TPM_MLKEM_PARMS` (`TPMI_MLKEM_PARMS`).
-pub type TpmMlkemParms = TpmiMlkemParms;
-
-impl TpmiMlkemParms {
-    pub const TPM_MLKEM_512: Self = Self::Mlkem512;
-    pub const TPM_MLKEM_768: Self = Self::Mlkem768;
-    pub const TPM_MLKEM_1024: Self = Self::Mlkem1024;
-
-    /// Returns the encapsulation (public) key size in bytes for this parameter set.
-    #[inline]
-    pub const fn public_key_bytes(self) -> usize {
-        match self {
-            Self::Mlkem512 => 800,
-            Self::Mlkem768 => 1184,
-            Self::Mlkem1024 => 1568,
-        }
-    }
-
-    /// Returns the decapsulation (private) seed size (`d || z`) in bytes for this parameter set.
-    #[inline]
-    pub const fn private_key_bytes(self) -> usize {
-        64
-    }
-
-    /// Returns the ciphertext size in bytes for this parameter set.
-    #[inline]
-    pub const fn ciphertext_bytes(self) -> usize {
-        match self {
-            Self::Mlkem512 => 768,
-            Self::Mlkem768 => 1088,
-            Self::Mlkem1024 => 1568,
-        }
-    }
-
-    /// Returns the shared secret size in bytes for this parameter set.
-    #[inline]
-    pub const fn shared_secret_bytes(self) -> usize {
-        32
-    }
-}
-
-impl TryFrom<u16> for TpmiMlkemParms {
-    type Error = UnmarshalError;
-    #[inline]
-    fn try_from(val: u16) -> Result<Self, Self::Error> {
-        match val {
-            0x0001 => Ok(Self::Mlkem512),
-            0x0002 => Ok(Self::Mlkem768),
-            0x0003 => Ok(Self::Mlkem1024),
-            _ => Err(UnmarshalError::PARMS),
-        }
-    }
-}
-
-impl From<TpmiMlkemParms> for u16 {
-    #[inline]
-    fn from(val: TpmiMlkemParms) -> u16 {
-        val as u16
-    }
-}
-
-impl Marshal for TpmiMlkemParms {
-    const MAX_SIZE: usize = u16::MAX_SIZE;
-    type MaxBuffer = [u8; Self::MAX_SIZE];
-
-    #[inline(always)]
-    fn marshal(&self, dst: &mut [u8; Self::MAX_SIZE]) -> usize {
-        u16::from(*self).marshal(dst)
-    }
-}
-
-impl<'a> Unmarshal<'a> for TpmiMlkemParms {
-    #[inline(always)]
-    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
-        u16::unmarshal(src)?.try_into()
-    }
-}
-
-/// `TPMI_MLDSA_PARMS` interface type defined in TPM 2.0 Part 2: Structures, Section 11.2.6.1.
-///
-/// Selects the ML-DSA parameter set (`TPM_MLDSA_44`, `TPM_MLDSA_65`, `TPM_MLDSA_87`).
-/// Unmarshalling an unrecognized value returns `TPM_RC_PARMS` (`UnmarshalError::PARMS`).
-#[doc(alias = "TPMI_MLDSA_PARMS")]
-#[doc(alias = "TPM_MLDSA_PARMS")]
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
-#[repr(u16)]
-pub enum TpmiMldsaParms {
-    Mldsa44 = 0x0001,
-    Mldsa65 = 0x0002,
-    Mldsa87 = 0x0003,
-}
-
-/// Type alias for `TPM_MLDSA_PARMS` (`TPMI_MLDSA_PARMS`).
-pub type TpmMldsaParms = TpmiMldsaParms;
-
-impl TpmiMldsaParms {
-    pub const TPM_MLDSA_44: Self = Self::Mldsa44;
-    pub const TPM_MLDSA_65: Self = Self::Mldsa65;
-    pub const TPM_MLDSA_87: Self = Self::Mldsa87;
-
-    /// Returns the verification (public) key size in bytes for this parameter set.
-    #[inline]
-    pub const fn public_key_bytes(self) -> usize {
-        match self {
-            Self::Mldsa44 => 1312,
-            Self::Mldsa65 => 1952,
-            Self::Mldsa87 => 2592,
-        }
-    }
-
-    /// Returns the signing (private) seed size (`xi`) in bytes for this parameter set.
-    #[inline]
-    pub const fn private_key_bytes(self) -> usize {
-        32
-    }
-
-    /// Returns the signature size in bytes for this parameter set.
-    #[inline]
-    pub const fn signature_bytes(self) -> usize {
-        match self {
-            Self::Mldsa44 => 2420,
-            Self::Mldsa65 => 3309,
-            Self::Mldsa87 => 4627,
-        }
-    }
-}
-
-impl TryFrom<u16> for TpmiMldsaParms {
-    type Error = UnmarshalError;
-    #[inline]
-    fn try_from(val: u16) -> Result<Self, Self::Error> {
-        match val {
-            0x0001 => Ok(Self::Mldsa44),
-            0x0002 => Ok(Self::Mldsa65),
-            0x0003 => Ok(Self::Mldsa87),
-            _ => Err(UnmarshalError::PARMS),
-        }
-    }
-}
-
-impl From<TpmiMldsaParms> for u16 {
-    #[inline]
-    fn from(val: TpmiMldsaParms) -> u16 {
-        val as u16
-    }
-}
-
-impl Marshal for TpmiMldsaParms {
-    const MAX_SIZE: usize = u16::MAX_SIZE;
-    type MaxBuffer = [u8; Self::MAX_SIZE];
-
-    #[inline(always)]
-    fn marshal(&self, dst: &mut [u8; Self::MAX_SIZE]) -> usize {
-        u16::from(*self).marshal(dst)
-    }
-}
-
-impl<'a> Unmarshal<'a> for TpmiMldsaParms {
-    #[inline(always)]
-    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
-        u16::unmarshal(src)?.try_into()
     }
 }
 

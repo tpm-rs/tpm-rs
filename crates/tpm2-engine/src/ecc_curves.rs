@@ -1,7 +1,8 @@
-//! ECC curve domain parameters and the affine point arithmetic the crypto provider does not
+//! ECC curve domain parameters and the affine point arithmetic the crypto backend does not
 //! offer.
 //!
-//! The crypto provider ([`tpm2::crypto::Ecc`]) multiplies points by scalars and validates them;
+//! The crypto backend (the [`tpm2::crypto::EccPublicKey`]/[`tpm2::crypto::EccPrivateKey`]
+//! dispatch over [`tpm2::crypto::backend::Ecc`]) multiplies points by scalars and validates them;
 //! the TPM's split-signing schemes (SM2, EC-Schnorr verification) and key-exchange schemes
 //! (ECMQV, SM2) also need point addition, which is implemented here on top of the field
 //! arithmetic of [`crate::modular`] and the curve table of [`tpm2::crypto::ecc_params`].
@@ -16,6 +17,7 @@
 #![allow(dead_code)]
 
 use crate::modular::{add_mod, inv_mod, is_zero, mul_mod, sub_mod};
+use tpm2::crypto::{Crypto, CryptoError, EccPublicKey};
 
 #[allow(unused_imports)]
 pub(crate) use tpm2::crypto::{EccCurveParams as CurveParams, ecc_curve_params as curve_params};
@@ -24,6 +26,36 @@ pub(crate) use tpm2::crypto::{EccCurveParams as CurveParams, ecc_curve_params as
 /// implemented.
 pub(crate) fn param_size(curve: tpm2::TpmEccCurve) -> Option<usize> {
     curve_params(curve).map(CurveParams::coordinate_size)
+}
+
+/// Loads the point `point` (`x || y`, each coordinate the size of `curve`) of `curve` as a public
+/// key of the crypto backend ([`EccPublicKey::load`], which validates it): `Ok(None)` if `point`
+/// is not `2 * size` octets long or not a point of `curve`.
+pub(crate) fn load_point<C: Crypto>(
+    curve: tpm2::TpmEccCurve,
+    point: &[u8],
+) -> Result<Option<EccPublicKey<C>>, CryptoError> {
+    let size = curve.key_bytes();
+    if point.len() != 2 * size {
+        return Ok(None);
+    }
+    let (x, y) = point.split_at(size);
+    let (Some(x), Some(y)) = (
+        tpm2::Tpm2bEccParameter::new(x),
+        tpm2::Tpm2bEccParameter::new(y),
+    ) else {
+        return Ok(None);
+    };
+    EccPublicKey::load(curve, None, tpm2::TpmsEccPoint { x, y })
+}
+
+/// Whether `point` (`x || y`, each coordinate the size of `curve`) is a point of `curve`
+/// ([`load_point`]).
+pub(crate) fn validate_point<C: Crypto>(
+    curve: tpm2::TpmEccCurve,
+    point: &[u8],
+) -> Result<bool, CryptoError> {
+    Ok(load_point::<C>(curve, point)?.is_some())
 }
 
 /// Largest coordinate size of the registered curves (BN P-638).
@@ -144,16 +176,16 @@ mod tests {
     #[test]
     fn group_law_on_every_curve() {
         for curve in [
-            #[cfg(feature = "ecc_curve_nist_p192")]
+            #[cfg(feature = "nist_p192")]
             TpmEccCurve::NistP192,
             TpmEccCurve::NistP224,
             TpmEccCurve::NistP256,
             TpmEccCurve::NistP384,
             TpmEccCurve::NistP521,
             TpmEccCurve::BNP256,
-            #[cfg(feature = "ecc_curve_bn_p638")]
+            #[cfg(feature = "bn_p638")]
             TpmEccCurve::BNP638,
-            #[cfg(feature = "ecc_curve_sm2_p256")]
+            #[cfg(feature = "sm2_p256")]
             TpmEccCurve::SM2P256,
         ] {
             let c = curve_params(curve).unwrap();

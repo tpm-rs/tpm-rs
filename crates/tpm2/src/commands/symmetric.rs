@@ -191,7 +191,7 @@ pub struct Hash<'a> {
 }
 /// [TPM2.0 1.83] 15.4 TPM2_Hash (Response)
 #[doc(alias = "Hash_Out")]
-#[derive(Clone, Copy, PartialEq, Debug, Default, Eq)]
+#[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct HashRsp<'a> {
     pub out_hash: Tpm2bDigest<'a>,
     pub validation: TpmtTkHashcheck<'a>,

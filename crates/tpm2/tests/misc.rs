@@ -8,11 +8,20 @@ fn test_attributes_field() {
     assert_eq!(cc.get_command_index(), 0xA0);
 
     // Set a field to a value that is wider than the field.
-    cc.set_c_handles(0xFFFFFFFF);
+    cc.set_c_handles(0xFF);
     assert_eq!(cc.get_c_handles(), 0x7, "Only the field bits should be set");
     assert_eq!(cc.get_command_index(), 0xA0);
     assert!(cc.contains(TpmaCc::NV));
     assert!((cc & TpmaCc::FLUSHED).0 != 0);
+
+    let nv = TpmaNv::from(TpmNt::Counter) | TpmaNv::OWNERWRITE;
+    let mut nv_exp = TpmaNvExp::from(nv) | TpmaNvExp::EXTERNAL_NV_ENCRYPTION;
+    assert_eq!(nv_exp.get_index_type(), Ok(TpmNt::Counter));
+    nv_exp.set_type(TpmNt::Extend);
+    assert_eq!(nv_exp.get_index_type(), Ok(TpmNt::Extend));
+    assert!(nv_exp.contains(TpmaNvExp::OWNERWRITE | TpmaNvExp::EXTERNAL_NV_ENCRYPTION));
+    assert_eq!(TpmaNv::try_from(TpmaNvExp::from(nv)), Ok(nv));
+    assert!(TpmaNv::try_from(nv_exp).is_err());
 }
 
 #[test]

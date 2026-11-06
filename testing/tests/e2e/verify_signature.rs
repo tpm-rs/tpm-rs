@@ -1,7 +1,7 @@
 //! TPM2_VerifySignature: signature/scheme validation and verification tickets.
 
 use crate::_common::{
-    CC_VERIFY_SIGNATURE, CLIENT_CRYPTO, CONTEXT_INTEGRITY_DIGEST_SIZE, ECC_D, ECC_X, ECC_Y, RSA_N,
+    CC_VERIFY_SIGNATURE, CONTEXT_INTEGRITY_DIGEST_SIZE, ClientCrypto, ECC_D, ECC_X, ECC_Y, RSA_N,
     base_attrs, create_primary_returning_public, create_primary_with_auth_in,
     create_primary_with_data_handle, ecc_storage_template_derived, ecc_template, execute_sign,
     execute_with_password_sessions, flush_context, hmac_key_and_signature, keyed_hash_public,
@@ -196,7 +196,7 @@ fn verify_null_signature_scheme_rejected() {
                 TpmsRsaParms {
                     symmetric: None,
                     scheme: Some(TpmtRsaScheme::Rsassa(TpmiAlgHash::Sha256)),
-                    key_bits: TpmiRsaKeyBits(2048),
+                    key_bits: TpmiRsaKeyBits::Rsa2048,
                     exponent: 65537,
                 },
                 Tpm2bPublicKeyRsa::default(),
@@ -242,11 +242,10 @@ fn verify_signature_accepts_hmac_signature() {
     );
 
     let mut hmac_buf = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
-    let expected_ha = tpm2::crypto::hmac(
-        CLIENT_CRYPTO,
+    let expected_ha = tpm2::crypto::hmac::<ClientCrypto>(
         TpmiAlgHash::Sha256,
         hmac_key,
-        b"digest12",
+        &[b"digest12"],
         &mut hmac_buf,
     )
     .unwrap();
@@ -388,7 +387,7 @@ fn verify_signature_rejects_decrypt_only_key_and_mismatched_signature() {
             TpmsRsaParms {
                 symmetric: None,
                 scheme: Some(TpmtRsaScheme::Rsassa(TpmiAlgHash::Sha256)),
-                key_bits: TpmiRsaKeyBits(2048),
+                key_bits: TpmiRsaKeyBits::Rsa2048,
                 exponent: 0,
             },
             Tpm2bPublicKeyRsa::default(),
@@ -427,7 +426,7 @@ fn verify_signature_rejects_decrypt_only_key_and_mismatched_signature() {
             TpmsRsaParms {
                 symmetric: None,
                 scheme: None,
-                key_bits: TpmiRsaKeyBits(2048),
+                key_bits: TpmiRsaKeyBits::Rsa2048,
                 exponent: 0,
             },
             Tpm2bPublicKeyRsa::default(),
@@ -460,7 +459,7 @@ fn verify_signature_rejects_decrypt_only_key_and_mismatched_signature() {
         key_handle: sign_key_handle,
         digest: Tpm2bDigest::from_bytes(&digest).unwrap(),
         in_scheme: Some(TpmtSigScheme::Rsassa(TpmiAlgHash::Sha256)),
-        validation: TpmtTkHashcheck::default(),
+        validation: TpmtTkHashcheck::new(Handle::RH_NULL, Tpm2bDigest::default()),
     };
     let mut resp_buffer = [0u8; 4096];
     let sign_resp =

@@ -14,6 +14,24 @@ members = [
     "crates/tpm2-crypto/weierstrass",
     "testing",
 ]
+# Every member except `tpm2`, whose default features are every algorithm: a
+# build that selects `tpm2` itself (e.g. `cargo check` with all members) enables
+# them, and Cargo unifies them into the `tpm2` of `tpm2-engine`, widening the TPM
+# beyond the algorithms it implements (see the `tpm2` dependency below). `tpm2`
+# is built, linted and tested on its own (`cargo test -p tpm2`, `make
+# test-tpm2`); `--workspace` selects it as well and is therefore not supported.
+default-members = [
+    "crates/tpm2-client",
+    "crates/tpm2-engine",
+    "crates/tpm2-platforms/linux",
+    "crates/tpm2-simulator",
+    "crates/tpm2-crypto/rust",
+    "crates/tpm2-crypto/crux",
+    "crates/tpm2-crypto/bssl",
+    "crates/tpm2-crypto/tests",
+    "crates/tpm2-crypto/weierstrass",
+    "testing",
+]
 exclude = [
     "crates/tpm2-crypto/bssl/bssl-sys",
     # The differential fuzzer: its own workspace, built with `cargo fuzz`
@@ -23,12 +41,13 @@ exclude = [
 
 # Package keys that should be used by all packages.
 # We don't set: authors (deprecated), license-file, exclude, include, or publish
-# Defaults are fine for: documentation (crates.io) and readme (README.md)
+# Defaults are fine for: documentation (crates.io)
 # Packages should set their own: name and description
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.100"
+readme = "README.md"
 homepage = "https://github.com/tpm-rs"
 repository = "https://github.com/tpm-rs/tpm-rs"
 license = "Apache-2.0"
@@ -36,55 +55,41 @@ keywords = ["tpm", "tss", "tpm2"]
 categories = ["cryptography", "no-std"]
 
 [workspace.dependencies]
-# Third party dependencies
-bitflags = "2.4.2"
+# Common third-party dependencies used across crates.
+# Dependencies only used by a single crate are in that crate's Cargo.toml.
+bitflags = "2.13"
 hex-literal = { version = "0.4.1" }
-proc-macro2 = "1"
-quote = "1"
-syn = { version = "2", features = ["full"] }
-tempfile = "3.25.0"
-trybuild = { version = "1.0.89", features = ["diff"] }
-zerocopy = { version = "0.8.33", features = ["derive"] }
 
-# Common workspace crates
-# The algorithms of the TPM are the default features of `tpm2` (see
-# crates/tpm2/Cargo.toml), except SHA-512: it is optional, enabled by the
-# default `sha512` feature of every crate that uses `tpm2` (which forwards it to
-# `tpm2/sha512`), so that a build without it (every dependency with
-# `default-features = false`) is a TPM without SHA-512.
+# Workspace crates used by other workspace crates.
+#
+# The algorithms of the TPM (`tpm2-engine`, `TPM_CAP_ALGS` and
+# `TPM_CAP_ECC_CURVES`) are the features enabled here: the default features of
+# `tpm2` are every algorithm (see crates/tpm2/Cargo.toml), so this dependency
+# disables them and lists the implemented ones. `rsa` (with OAEP) and `ecc`
+# (with ECDH) are implied by the key sizes and curves. SHA-512 is optional: it
+# is enabled by the default `sha512` feature of every crate that uses `tpm2`
+# (which forwards it to `tpm2/sha512`), so that a build without it (every
+# dependency with `default-features = false`) is a TPM without SHA-512.
 tpm2 = { path = "crates/tpm2", default-features = false, features = [
     "sha1", "sha256", "sha384",
     "aes128", "aes256",
     "ctr", "ofb", "cbc", "ecb",
-    "ecc_curve_nist_p224",
-    "ecc_curve_nist_p256",
-    "ecc_curve_nist_p384",
-    "ecc_curve_nist_p521",
-    "ecc_curve_bn_p256",
-    "rsa1024",
-    "rsa2048",
-    "rsassa",
-    "rsapss",
-    "rsaes",
-    "oaep",
-    "ecdsa",
-    "ecdh",
-    "ecdaa",
+    "nist_p224", "nist_p256", "nist_p384", "nist_p521", "bn_p256",
+    "rsa1024", "rsa2048",
+    "rsassa", "rsapss", "rsaes",
+    "ecdsa", "ecdaa",
 ] }
-tpm2-client = { path = "crates/tpm2-client" }
 # Without their default features (`sha512`), which each dependent forwards from its own `sha512`.
 tpm2-engine = { path = "crates/tpm2-engine", default-features = false }
 tpm2-crypto-rust = { path = "crates/tpm2-crypto/rust", default-features = false }
 tpm2-crypto-crux = { path = "crates/tpm2-crypto/crux", default-features = false }
 tpm2-crypto-bssl = { path = "crates/tpm2-crypto/bssl", default-features = false }
-tpm2-crypto-tests = { path = "crates/tpm2-crypto/tests" }
 tpm2-crypto-weierstrass = { path = "crates/tpm2-crypto/weierstrass", default-features = false }
 
 [profile.release]
-lto = true # default is lto = false
+lto = true        # default is lto = false
 codegen-units = 1 # default is codegen-units = 16
-strip = true # default is strip = "none"
+strip = true      # default is strip = "none"
 
 [patch."https://boringssl.googlesource.com/boringssl"]
 bssl-sys = { path = "crates/tpm2-crypto/bssl/bssl-sys" }
-

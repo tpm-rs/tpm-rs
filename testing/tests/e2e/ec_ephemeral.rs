@@ -2,11 +2,11 @@
 //! counter it returns (shared with TPM2_Commit) and the validation of `curveID`.
 
 use crate::_common::{
-    CLIENT_CRYPTO, create_primary_returning_public, ecc_point_bytes, ecc_public, rc_at, sdo_user,
+    client_ecc_public, create_primary_returning_public, ecc_point_bytes, ecc_public, rc_at,
+    sdo_user,
 };
 use testing::tpm::Tpm;
 use tpm2::commands::{Commit, ECEphemeral};
-use tpm2::crypto::Ecc;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
     Tpm2b, Tpm2bEccPoint, Tpm2bSensitiveData, TpmEccCurve, TpmaObject, TpmiAlgHash, TpmsEccPoint,
@@ -32,14 +32,7 @@ fn returns_point_on_each_curve() {
             .unwrap_or_else(|e| panic!("TPM2_EC_Ephemeral({curve:?}) failed: {e:?}"));
         let q = ecc_point_bytes(&rsp.q.0);
         assert_eq!(q.len(), 2 * size, "{curve:?}");
-        // The client crypto implements every curve except BN P-256.
-        if curve != TpmEccCurve::BNP256 {
-            assert_eq!(
-                CLIENT_CRYPTO.validate_point(curve, &q),
-                Ok(true),
-                "{curve:?}"
-            );
-        }
+        assert!(client_ecc_public(curve, &q).is_some(), "{curve:?}");
     }
 }
 

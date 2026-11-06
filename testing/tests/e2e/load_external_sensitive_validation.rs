@@ -295,7 +295,7 @@ fn rsa_modulus_ecc_scalar_and_binding_checks() {
         TpmsRsaParms {
             symmetric: None,
             scheme: None,
-            key_bits: TpmiRsaKeyBits(2048),
+            key_bits: TpmiRsaKeyBits::Rsa2048,
             exponent: 0,
         },
         Tpm2bPublicKeyRsa::from_bytes(leak_bytes(&modulus)).unwrap(),

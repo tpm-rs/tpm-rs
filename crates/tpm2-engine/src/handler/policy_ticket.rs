@@ -7,10 +7,10 @@ use crate::timer::TpmTimer;
 use tpm2::TpmCc;
 use tpm2::TpmSe;
 use tpm2::commands::PolicyTicket;
-use tpm2::crypto::{CryptoProvider, Rng};
+use tpm2::crypto::{Crypto, Rng};
 use tpm2::errors::{Position, TpmRc};
 
-impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
+impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     CommandHandler<'a, 'b, C, S, T, R>
 {
     /// Handles the [TpmCc::PolicyTicket] (`0x172`) command.
@@ -148,14 +148,15 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         }
 
         let mut hmac_digest_bytes = [0u8; tpm2::TpmiAlgHash::MAX_DIGEST_BYTES];
-        let hmac_digest = tpm2::crypto::hmac(
-            &self.crypto(),
-            crate::handler::context_integrity_hash_alg(),
-            proof.as_bytes(),
-            &hmac_input[..offset],
-            &mut hmac_digest_bytes,
-        )
-        .map_err(|_| TpmRc::FAILURE)?;
+        let hmac_digest = self
+            .crypto()
+            .hmac(
+                crate::handler::context_integrity_hash_alg(),
+                proof.as_bytes(),
+                &[&hmac_input[..offset]],
+                &mut hmac_digest_bytes,
+            )
+            .map_err(|_| TpmRc::FAILURE)?;
 
         if cmd.ticket.digest().get_buffer() != hmac_digest.digest() {
             return Err(TpmRc::TICKET.with(Position::parameter(5)));

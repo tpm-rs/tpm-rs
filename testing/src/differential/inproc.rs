@@ -823,7 +823,9 @@ mod references {
             let cmd = CreatePrimary {
                 primary_handle: Handle::RH_OWNER,
                 in_public: Tpm2b(get_ecc_srk_template()),
-                ..Default::default()
+                in_sensitive: Default::default(),
+                outside_info: Default::default(),
+                creation_pcr: Default::default(),
             };
             build_cmd(&cmd, &[pw()])
         }

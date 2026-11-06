@@ -126,7 +126,7 @@ impl<'a> UnmarshalMessage<'a> for TestParms {
 /// [TPM2.0 1.83] 30.4 TPM2_SetCapability (Command)
 #[doc(alias = "TPM2_SetCapability")]
 #[doc(alias = "SetCapability_In")]
-#[derive(Clone, Copy, PartialEq, Debug, Default, Eq)]
+#[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct SetCapability<'a> {
     pub auth_handle: Handle,
     pub set_capability_data: Tpm2bSetCapabilityData<'a>,

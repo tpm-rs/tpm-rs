@@ -22,8 +22,7 @@ compile_error!("Features 'crux' and 'bssl' are mutually exclusive.");
 use std::fs::File;
 use std::sync::{LazyLock, Mutex, OnceLock};
 use std::time::Instant;
-use tpm2::crypto::Rng;
-use tpm2::crypto::{CryptoError, CryptoProvider};
+use tpm2::crypto::{Crypto, CryptoError, Random, Rng};
 use tpm2::platform::TpmFirmware;
 use tpm2_engine::TpmPlatform;
 use tpm2_engine::storage::NvStorage;
@@ -108,8 +107,9 @@ static URANDOM_FILE: OnceLock<Mutex<File>> = OnceLock::new();
 /// Linux-specific random number generator reading from OS entropy source.
 ///
 /// Implements the platform [`Rng`] of [`TpmPlatform`]: [`Rng::fill_bytes`]
-/// draws from the [`PlatformCryptoProvider`]'s CSPRNG (the `getrandom`
-/// syscall), falling back to `/dev/urandom`. [`Rng::reseed`] is a no-op,
+/// draws from the [`PlatformCryptoProvider`]'s entropy source
+/// ([`Random::rand_bytes`], the `getrandom` syscall), falling back to
+/// `/dev/urandom`. [`Rng::stir_bytes`] is a no-op,
 /// because the OS entropy source cannot be stirred.
 ///
 /// With the `reference-rng` feature, [`LinuxRng::reference`] additionally
@@ -169,7 +169,7 @@ impl Rng for LinuxRng {
 
         // 1. Try PlatformCryptoProvider (getrandom syscall) in a loop to handle EINTR.
         for _ in 0..10_000 {
-            if PlatformCryptoProvider.get_random(dest).is_ok() {
+            if PlatformCryptoProvider::rand_bytes(dest).is_ok() {
                 return Ok(());
             }
         }
@@ -238,7 +238,7 @@ impl Rng for LinuxRng {
 
     /// Ignores `data`: the OS entropy source cannot be stirred, so
     /// `TPM2_StirRandom` input has no effect on the platform RNG.
-    fn reseed(&mut self, _data: &[u8]) -> Result<(), CryptoError> {
+    fn stir_bytes(&mut self, _data: &[u8]) -> Result<(), CryptoError> {
         Ok(())
     }
 
@@ -265,7 +265,7 @@ pub fn create_linux_platform<'a, C, S>(
     firmware: &'a (dyn TpmFirmware + Sync),
 ) -> TpmPlatform<'a, C, S, LinuxTimer, LinuxRng>
 where
-    C: CryptoProvider,
+    C: Crypto,
     S: NvStorage,
 {
     TpmPlatform::new(crypto, storage, timer, platform_rng).with_firmware(firmware)

@@ -13,9 +13,9 @@ use tpm2::commands::{
 };
 use tpm2::errors::{Position, TpmRc, UnmarshalError};
 use tpm2::{
-    Alg, Handle, Marshal, PublicParmsAndId, Tpm2bAuth, TpmaSession, TpmsAuthCommand,
-    TpmsAuthResponse, TpmsContext, TpmtPublic, TpmtSensitive, TpmtTkAuth, TpmtTkCreation,
-    TpmtTkHashcheck, TpmtTkVerified, TpmuSensitiveComposite, Unmarshal, UnmarshalMessage,
+    Alg, Handle, Marshal, PublicParmsAndId, TpmaSession, TpmsAuthCommand, TpmsContext, TpmtPublic,
+    TpmtSensitive, TpmtTkAuth, TpmtTkCreation, TpmtTkHashcheck, TpmtTkVerified,
+    TpmuSensitiveComposite, Unmarshal, UnmarshalMessage,
 };
 
 /// Unmarshals a command handle area the way the TPM validates it: each handle is read with
@@ -119,7 +119,10 @@ fn test_tpms_auth_command_unmarshal_errors() {
 }
 
 #[test]
+#[cfg(feature = "sha512")]
 fn test_tpms_auth_response_hmac_size_limit() {
+    use tpm2::{Tpm2bAuth, TpmsAuthResponse};
+
     // Verify MAX_SIZE matches Tpm2bNonce::MAX_SIZE (66) + TpmaSession::MAX_SIZE (1) + Tpm2bAuth::MAX_SIZE (66) = 133
     assert_eq!(TpmsAuthResponse::MAX_SIZE, 66 + 1 + 66);
     assert_eq!(Tpm2bAuth::MAX_BUFFER_SIZE, 64);
@@ -171,8 +174,9 @@ fn test_tpmt_public_and_sensitive_selector_validation() {
     let mut slice = &buf_invalid_type[..];
     assert_eq!(TpmtPublic::unmarshal(&mut slice), Err(UnmarshalError::TYPE));
 
-    // TpmtPublic with valid selector (0x0001 = Alg::RSA) but truncated buffer returns INSUFFICIENT.
-    let buf_valid_type_truncated = [0x00, 0x01];
+    // TpmtPublic with valid selector (0x0025 = Alg::SYMCIPHER) but truncated buffer returns
+    // INSUFFICIENT.
+    let buf_valid_type_truncated = [0x00, 0x25];
     let mut slice = &buf_valid_type_truncated[..];
     assert_eq!(
         TpmtPublic::unmarshal(&mut slice),
@@ -794,6 +798,7 @@ fn test_non_null_scheme_structures_reject_tpm_alg_null_inner_algorithms() {
     );
 
     // 5. TpmtSigScheme non-null variants with inner 0x0010 -> HASH
+    #[allow(clippy::single_element_loop)]
     for scheme_alg in [
         #[cfg(feature = "rsassa")]
         0x0014u16, // RSASSA
@@ -805,7 +810,7 @@ fn test_non_null_scheme_structures_reject_tpm_alg_null_inner_algorithms() {
         0x001B, // SM2
         #[cfg(feature = "ecschnorr")]
         0x001C, // ECSCHNORR
-        0x0005, // HMAC
+        0x0005u16, // HMAC
     ] {
         let mut buf = [0u8; 4];
         buf[0..2].copy_from_slice(&scheme_alg.to_be_bytes());
@@ -834,7 +839,7 @@ fn test_non_null_scheme_structures_reject_tpm_alg_null_inner_algorithms() {
         0x0014u16, // RSASSA
         #[cfg(feature = "rsapss")]
         0x0016, // RSAPSS
-        #[cfg(feature = "oaep")]
+        #[cfg(feature = "rsa")]
         0x0017, // OAEP
     ];
     for &scheme_alg in rsa_hash_schemes {
@@ -871,7 +876,7 @@ fn test_non_null_scheme_structures_reject_tpm_alg_null_inner_algorithms() {
             sig_alg
         );
     }
-    #[cfg(feature = "oaep")]
+    #[cfg(feature = "rsa")]
     {
         let oaep_null_hash = [0x00, 0x17, 0x00, 0x10];
         let mut slice = &oaep_null_hash[..];
@@ -894,7 +899,7 @@ fn test_non_null_scheme_structures_reject_tpm_alg_null_inner_algorithms() {
         0x001B, // SM2
         #[cfg(feature = "ecschnorr")]
         0x001C, // ECSCHNORR
-        #[cfg(feature = "ecdh")]
+        #[cfg(feature = "ecc")]
         0x0019, // ECDH
         #[cfg(feature = "ecmqv")]
         0x001D, // ECMQV

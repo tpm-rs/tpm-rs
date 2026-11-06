@@ -308,7 +308,8 @@ fn pcr_extend_after_policy_pcr_fails_with_pcr_changed() {
         primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
 
     let rsp_handles = execute_with_password_sessions(&mut sim, &create_primary, 1, &[])
@@ -463,7 +464,8 @@ fn policy_pcr_combined_with_policy_auth_value() {
         primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
 
     let rsp_handles = execute_with_password_sessions(&mut sim, &create_primary, 1, &[])
@@ -805,7 +807,8 @@ fn selected_pcr_extended_after_gating_fails() {
         primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
 
     let rsp_handles = execute_with_password_sessions(&mut sim, &create_primary, 1, &[]).unwrap();
@@ -1125,7 +1128,8 @@ fn unselected_pcr_extended_after_gating_fails() {
         primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
 
     let rsp_handles = execute_with_password_sessions(&mut sim, &create_primary, 1, &[]).unwrap();

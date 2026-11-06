@@ -31,7 +31,7 @@ use crate::storage::NvStorage;
 #[cfg(test)]
 use crate::storage::nv::{AUDIT_EXT_LEN, AUDIT_EXT_MARKER};
 use crate::timer::TpmTimer;
-use tpm2::crypto::{CryptoProvider, Rng};
+use tpm2::crypto::{Crypto, Rng};
 use tpm2::errors::TpmRc;
 use tpm2::{TpmCc, TpmiAlgHash, TpmtHa};
 
@@ -186,6 +186,7 @@ impl GlobalState {
 /// `global_state` into `dst`, which must hold at least
 /// [`AUDIT_EXT_LEN`](crate::storage::nv::AUDIT_EXT_LEN) bytes. Returns the number
 /// of bytes written.
+#[cfg(test)]
 pub(crate) fn encode_audit_ext(global_state: &GlobalState, dst: &mut [u8]) -> usize {
     crate::storage::nv::NvAuditExt {
         hash_alg: global_state.audit_hash_alg,
@@ -198,6 +199,7 @@ pub(crate) fn encode_audit_ext(global_state: &GlobalState, dst: &mut [u8]) -> us
 /// Loads the persistent command audit record written by [`encode_audit_ext`] from the start of
 /// `src`. Returns `false` (leaving `global_state` untouched) if `src` does not start with a
 /// complete record or the record names an unsupported hash algorithm.
+#[cfg(test)]
 pub(crate) fn decode_audit_ext(global_state: &mut GlobalState, src: &[u8]) -> bool {
     let Some(ext) = crate::storage::nv::NvAuditExt::decode(src) else {
         return false;
@@ -208,7 +210,7 @@ pub(crate) fn decode_audit_ext(global_state: &mut GlobalState, src: &[u8]) -> bo
     true
 }
 
-impl<C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<'_, C, S, T, R> {
+impl<C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<'_, C, S, T, R> {
     /// Prepares the command audit of `cc` before the command is executed (`CheckCommandAudit()`,
     /// called from `ParseSessionBuffer()` / `CheckAuthNoSession()` once authorization has
     /// succeeded and before any parameter decryption).

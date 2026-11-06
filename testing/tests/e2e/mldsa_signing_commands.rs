@@ -266,7 +266,7 @@ fn hash_mldsa_signs_pre_hashed_message() {
     let hashed_signature = |signature: &tpm2::TpmtSignature<'_>| match signature {
         tpm2::TpmtSignature::HashMldsa(sig) => {
             assert_eq!(sig.hash, TpmiAlgHash::Sha256);
-            sig.sig.get_buffer().to_vec()
+            sig.signature.get_buffer().to_vec()
         }
         other => panic!("not a HashML-DSA signature: {other:?}"),
     };

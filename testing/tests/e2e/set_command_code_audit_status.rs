@@ -6,11 +6,11 @@
 //! signed audit reports and power cycles.
 
 use crate::_common::{
-    ALG_SHA1, CLIENT_CRYPTO, RC_AUTH_MISSING, RC_BAD_AUTH_S1, RC_NV_UNAVAILABLE, RC_VALUE_H1,
-    RC_VALUE_P1, SHA512_IMPLEMENTED, ST_NO_SESSIONS, ST_SESSIONS, STRONGEST_DIGEST_SIZE,
-    STRONGEST_HASH_ALG, aes_cfb, audit_commands, build_pw_cmd, build_raw_cmd, command_audit_report,
-    create_primary, get_ecc_signing_key_template, hash_parts, hmac_sha256, kdfa_by_alg, nv_off,
-    nv_on, parse_command_audit_report, power_cycle, power_cycle_with, send_raw, send_rc,
+    ALG_SHA1, RC_AUTH_MISSING, RC_BAD_AUTH_S1, RC_NV_UNAVAILABLE, RC_VALUE_H1, RC_VALUE_P1,
+    SHA512_IMPLEMENTED, ST_NO_SESSIONS, ST_SESSIONS, STRONGEST_DIGEST_SIZE, STRONGEST_HASH_ALG,
+    aes_cfb, audit_commands, build_pw_cmd, build_raw_cmd, command_audit_report, create_primary,
+    get_ecc_signing_key_template, hash_parts, hmac_sha256, kdfa_by_alg, nv_off, nv_on,
+    parse_command_audit_report, power_cycle, power_cycle_with, send_raw, send_rc,
     set_command_code_audit_status, start_auth_session,
 };
 use testing::tpm::Tpm;
@@ -813,7 +813,6 @@ fn audited_command_with_parameter_encryption_hashes_ciphertext() {
     let cfb_key = |newer: &[u8], older: &[u8]| {
         let mut k = [0u8; 32];
         kdfa_by_alg(
-            CLIENT_CRYPTO,
             TpmiAlgHash::Sha256,
             &session.session_key,
             b"CFB",

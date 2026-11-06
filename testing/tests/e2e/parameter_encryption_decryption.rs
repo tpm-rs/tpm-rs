@@ -111,7 +111,8 @@ fn create_primary_with_auth_decrypt_and_encrypt() {
         primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
 
     let resp =

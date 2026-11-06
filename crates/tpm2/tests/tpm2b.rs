@@ -85,6 +85,7 @@ fn test_try_unmarshal_tpm2b_digest() {
 }
 
 #[test]
+#[cfg(feature = "ecc")]
 fn test_try_unmarshal_tpm2b_ecc_parameter() {
     impl_test_tpm2b_simple! {Tpm2bEccParameter};
 }
@@ -125,11 +126,13 @@ fn test_try_unmarshal_tpm2b_private() {
 }
 
 #[test]
+#[cfg(feature = "rsa")]
 fn test_try_unmarshal_tpm2b_private_key_rsa() {
     impl_test_tpm2b_simple! {Tpm2bPrivateKeyRsa};
 }
 
 #[test]
+#[cfg(feature = "rsa")]
 fn test_try_unmarshal_tpm2b_public_key_rsa() {
     impl_test_tpm2b_simple! {Tpm2bPublicKeyRsa};
 }
@@ -283,6 +286,7 @@ fn test_try_unmarshal_tpm2b_sensitive_create() {
 }
 
 #[test]
+#[cfg(feature = "ecc")]
 fn test_try_unmarshal_tpm2b_ecc_point() {
     // 1. Empty TPM2B_ECC_POINT (size = 0) must fail with UnmarshalError::SIZE
     let empty_buf = [0x00u8, 0x00];
@@ -359,6 +363,7 @@ fn test_try_unmarshal_tpm2b_nv_public() {
 }
 
 #[test]
+#[cfg(feature = "sha512")]
 fn test_tpm2b_nv_public_2_spec_structures_and_bounds() {
     use tpm2::commands::{NVDefineSpace2, responses};
 
@@ -561,19 +566,76 @@ fn test_all_tpm2b_simple_marshalling_bounds() {
     impl_stress_test_tpm2b_simple! {Tpm2bContextData};
     impl_stress_test_tpm2b_simple! {Tpm2bData};
     impl_stress_test_tpm2b_simple! {Tpm2bDigest};
+    #[cfg(feature = "ecc")]
     impl_stress_test_tpm2b_simple! {Tpm2bEccParameter};
+    #[cfg(feature = "eddsa")]
+    impl_stress_test_tpm2b_simple! {Tpm2bSignatureEddsa};
+    #[cfg(feature = "mlkem")]
+    impl_stress_test_tpm2b_simple! {Tpm2bPublicKeyMlkem};
+    #[cfg(feature = "mldsa")]
+    impl_stress_test_tpm2b_simple! {Tpm2bPublicKeyMldsa};
+    #[cfg(feature = "mldsa")]
+    impl_stress_test_tpm2b_simple! {Tpm2bSignatureMldsa};
     impl_stress_test_tpm2b_simple! {Tpm2bEncryptedSecret};
+    impl_stress_test_tpm2b_simple! {Tpm2bSharedSecret};
+    impl_stress_test_tpm2b_simple! {Tpm2bKemCiphertext};
+    impl_stress_test_tpm2b_simple! {Tpm2bSignatureCtx};
+    impl_stress_test_tpm2b_simple! {Tpm2bSignatureHint};
     impl_stress_test_tpm2b_simple! {Tpm2bEvent};
     impl_stress_test_tpm2b_simple! {Tpm2bIdObject};
     impl_stress_test_tpm2b_simple! {Tpm2bIv};
     impl_stress_test_tpm2b_simple! {Tpm2bMaxBuffer};
     impl_stress_test_tpm2b_simple! {Tpm2bMaxNvBuffer};
     impl_stress_test_tpm2b_simple! {Tpm2bPrivate};
+    #[cfg(feature = "rsa")]
     impl_stress_test_tpm2b_simple! {Tpm2bPrivateKeyRsa};
+    #[cfg(feature = "rsa")]
     impl_stress_test_tpm2b_simple! {Tpm2bPublicKeyRsa};
     impl_stress_test_tpm2b_simple! {Tpm2bSensitiveData};
     impl_stress_test_tpm2b_simple! {Tpm2bSymKey};
     impl_stress_test_tpm2b_simple! {Tpm2bTimeout};
+}
+
+#[cfg(any(feature = "mlkem", feature = "mldsa"))]
+macro_rules! impl_test_tpm2b_exact_size {
+    ($T:ty) => {
+        const N: usize = <$T>::CAP;
+
+        // A buffer of exactly N bytes round-trips.
+        let bytes = [0xAB; N];
+        let struct_val: $T = <$T>::new(&bytes).unwrap();
+        let mut mbuf = [0u8; <$T>::MAX_SIZE];
+        let res = struct_val.marshal(&mut mbuf);
+        assert_eq!(res, 2 + N);
+        let mut slice = &mbuf[..res];
+        let unmarshaled = <$T>::unmarshal(&mut slice).unwrap();
+        assert_eq!(struct_val, unmarshaled);
+        assert!(slice.is_empty());
+
+        // Larger sizes are rejected. (Smaller seeds are buffers of the
+        // right type; the exact size is enforced by `TPMU_SENSITIVE_COMPOSITE`,
+        // see `test_sensitive_pqc_seed_exact_size`.)
+        for (size, ok) in [(0, true), (N - 1, true), (N + 1, false)] {
+            let mut buf = vec![0xAB; 2 + size];
+            u16::try_from(size)
+                .unwrap()
+                .marshal((&mut buf[..2]).try_into().unwrap());
+            let mut slice = &buf[..];
+            assert_eq!(<$T>::unmarshal(&mut slice).is_ok(), ok);
+        }
+    };
+}
+
+#[test]
+#[cfg(feature = "mlkem")]
+fn test_tpm2b_private_key_mlkem_exact_size() {
+    impl_test_tpm2b_exact_size! {Tpm2bPrivateKeyMlkem};
+}
+
+#[test]
+#[cfg(feature = "mldsa")]
+fn test_tpm2b_private_key_mldsa_exact_size() {
+    impl_test_tpm2b_exact_size! {Tpm2bPrivateKeyMldsa};
 }
 
 #[test]
@@ -593,6 +655,7 @@ fn test_unmarshal_invalid_public_type() {
 }
 
 #[test]
+#[cfg(feature = "ecc")]
 fn test_tpm2b_trailing_bytes_rejected() {
     // Empty TpmsEccPoint marshals to 4 bytes (x.size = 0, y.size = 0),
     // so an outer Tpm2bEccPoint size of 5 leaves 1 trailing byte inside the Tpm2b payload.
@@ -752,10 +815,10 @@ fn test_tpm2b_private_spec_max_buffer_size_rsa_4096() {
     feature = "rsa2048",
     not(feature = "rsa3072"),
     not(feature = "rsa4096"),
-    feature = "ecc_curve_nist_p521",
-    not(feature = "ecc_curve_bn_p638"),
-    not(feature = "ecc_curve_bp_p512_r1"),
-    not(feature = "ecc_curve_curve448"),
+    feature = "nist_p521",
+    not(feature = "bn_p638"),
+    not(feature = "bp_p512_r1"),
+    not(feature = "curve448"),
     not(feature = "mlkem"),
     not(feature = "mldsa"),
     not(feature = "sm3_256"),
@@ -763,6 +826,7 @@ fn test_tpm2b_private_spec_max_buffer_size_rsa_4096() {
     not(feature = "sha3_384"),
     not(feature = "sha3_512"),
 ))]
+#[cfg(feature = "sha512")]
 fn test_default_profile_buffer_sizes() {
     assert_eq!(Tpm2bPublicKeyRsa::CAP, 256);
     assert_eq!(Tpm2bPrivateKeyRsa::CAP, 640);
@@ -774,7 +838,7 @@ fn test_default_profile_buffer_sizes() {
 }
 
 #[test]
-#[cfg(feature = "rsa4096")]
+#[cfg(all(feature = "rsa4096", not(feature = "mlkem")))]
 fn test_tpm2b_encrypted_secret_spec_max_buffer_size() {
     // Per TPM 2.0 Spec Part 2 Section 11.4.2 & 11.4.3 (and C reference TpmTypes.h),
     // TPM2B_ENCRYPTED_SECRET has buffer size sizeof(TPMU_ENCRYPTED_SECRET),
@@ -830,6 +894,7 @@ fn test_tpm2b_encrypted_secret_spec_max_buffer_size() {
 }
 
 #[test]
+#[cfg(feature = "sha512")]
 fn test_tpms_id_object_and_tpm2b_id_object_encrypted_ciphertext() {
     // Ciphertext whose first 2 bytes are 0xFF, 0xFF (u16 = 65535 > 64).
     // If enc_identity were unmarshaled as plaintext Tpm2bDigest, this would fail with SIZE.

@@ -1,715 +1,251 @@
-use crate::RustCryptoProvider;
-use p256::elliptic_curve::sec1::ToEncodedPoint as _;
-use tpm2::crypto::{CryptoError, Ecc, EccCurve};
+//! Elliptic-curve cryptography: NIST P-256, P-384 and P-521 (`p256`, `p384`, `p521`), and the
+//! curves of `tpm2-crypto-weierstrass` (NIST P-192, NIST P-224, BN P-256, BN P-638 and SM2 P-256).
 
-/// NIST P-224 context for `RustCryptoProvider`.
-pub struct RustCryptoEccNistP224;
+use crate::{RngAdapter, RustCryptoProvider};
+use tpm2::crypto::backend::Ecc;
 
-impl EccCurve<28> for RustCryptoEccNistP224 {
-    fn validate_point(&self, x: &[u8; 28], y: &[u8; 28]) -> Result<bool, CryptoError> {
-        let p224 = NistP224::new();
-        let x_bn = rsa::BigUint::from_bytes_be(x);
-        let y_bn = rsa::BigUint::from_bytes_be(y);
-        if x_bn >= p224.p || y_bn >= p224.p {
-            return Ok(false);
-        }
-        Ok(p224.is_on_curve(&x_bn, &y_bn))
+/// Copies `digest` into `buf` as the ECDSA hash value of a curve with `field_len`-byte scalars:
+/// a shorter digest is left-padded with zeros (the same integer), a longer one truncated to its
+/// leftmost `field_len` bytes (FIPS 186-5 `bits2int`, as `bits(n) == 8 * field_len` for these
+/// curves whenever a digest is longer). Returns the prehash `&buf[..field_len]`.
+fn prepare_prehash<'a>(digest: &[u8], field_len: usize, buf: &'a mut [u8; 66]) -> &'a [u8] {
+    let buf = &mut buf[..field_len];
+    if digest.len() >= field_len {
+        buf.copy_from_slice(&digest[..field_len]);
+    } else {
+        let offset = field_len - digest.len();
+        buf[..offset].fill(0);
+        buf[offset..].copy_from_slice(digest);
     }
+    buf
+}
 
-    fn point_multiply_generator(
-        &self,
-        scalar: &[u8; 28],
-        x_out: &mut [u8; 28],
-        y_out: &mut [u8; 28],
-    ) -> Result<Option<()>, CryptoError> {
-        let p224 = NistP224::new();
-        let k = rsa::BigUint::from_bytes_be(scalar);
-        if k == rsa::BigUint::from(0u32) || k >= p224.n {
-            return Ok(None);
+/// Defines the key type of a NIST curve of the RustCrypto `elliptic-curve` family and implements
+/// the [`EccCurve`](tpm2::crypto::backend::EccCurve) and
+/// [`PrivateKey`](tpm2::crypto::backend::PrivateKey) traits for it, for any random number
+/// generator.
+macro_rules! nist_curve {
+    ($(#[$m:meta])* $name:ident, $krate:ident, $coord:literal, $point:literal) => {
+        $(#[$m])*
+        ///
+        /// The public key type is the validated `PublicKey` of the curve's crate (a point other
+        /// than the point at infinity).
+        #[derive(Clone)]
+        pub struct $name {
+            secret: $krate::SecretKey,
+            public: $krate::PublicKey,
         }
-        let gx = rsa::BigUint::from_bytes_be(&hex_literal::hex!(
-            "b70e0cbd6bb4bf7f321390b94a03c1d356c21122343280d6115c1d21"
-        ));
-        let gy = rsa::BigUint::from_bytes_be(&hex_literal::hex!(
-            "bd376388b5f723fb4c22dfe6cd4375a05a07476444d5819985007e34"
-        ));
-        let Some(q) = p224.multiply(&k, (gx, gy)) else {
-            return Ok(None);
-        };
-        let q_x = q.0.to_bytes_be();
-        let q_y = q.1.to_bytes_be();
 
-        x_out.fill(0);
-        y_out.fill(0);
-        if q_x.len() <= 28 {
-            x_out[28 - q_x.len()..].copy_from_slice(&q_x);
-        }
-        if q_y.len() <= 28 {
-            y_out[28 - q_y.len()..].copy_from_slice(&q_y);
-        }
-        Ok(Some(()))
-    }
-
-    fn point_multiply(
-        &self,
-        scalar: &[u8; 28],
-        x_in: &[u8; 28],
-        y_in: &[u8; 28],
-        x_out: &mut [u8; 28],
-        y_out: &mut [u8; 28],
-    ) -> Result<Option<()>, CryptoError> {
-        let p224 = NistP224::new();
-        let x = rsa::BigUint::from_bytes_be(x_in);
-        let y = rsa::BigUint::from_bytes_be(y_in);
-        if x >= p224.p || y >= p224.p {
-            return Ok(None);
-        }
-        let k = rsa::BigUint::from_bytes_be(scalar);
-        if k == rsa::BigUint::from(0u32) || k >= p224.n {
-            return Ok(None);
-        }
-        if p224.is_on_curve(&x, &y)
-            && let Some((rx, ry)) = p224.multiply(&k, (x, y))
-        {
-            let rx_bytes = rx.to_bytes_be();
-            let ry_bytes = ry.to_bytes_be();
-
-            x_out.fill(0);
-            y_out.fill(0);
-            if rx_bytes.len() <= 28 {
-                x_out[28 - rx_bytes.len()..].copy_from_slice(&rx_bytes);
+        impl $name {
+            /// Writes the affine coordinates of `public` into `out_x` and `out_y`.
+            fn write_point(
+                public: &$krate::PublicKey,
+                out_x: &mut [u8; $coord],
+                out_y: &mut [u8; $coord],
+            ) -> Result<(), tpm2::crypto::CryptoError> {
+                use $krate::elliptic_curve::sec1::ToEncodedPoint as _;
+                let encoded = public.to_encoded_point(false);
+                let (Some(x), Some(y)) = (encoded.x(), encoded.y()) else {
+                    return Err(tpm2::crypto::CryptoError::Internal);
+                };
+                out_x.copy_from_slice(x);
+                out_y.copy_from_slice(y);
+                Ok(())
             }
-            if ry_bytes.len() <= 28 {
-                y_out[28 - ry_bytes.len()..].copy_from_slice(&ry_bytes);
+
+            /// Decodes the scalar `k`: `None` unless it is in `[1, n - 1]`.
+            fn scalar(k: &[u8; $coord]) -> Option<$krate::SecretKey> {
+                $krate::SecretKey::from_bytes($krate::FieldBytes::from_slice(k)).ok()
             }
-            return Ok(Some(()));
-        }
-        Ok(None)
-    }
 
-    fn ecdaa_sign(
-        &self,
-        _commit_r: &[u8; 28],
-        _commit_x: &[u8],
-        _commit_p1: &[u8],
-        _private_key_d: &[u8; 28],
-        _digest: &[u8],
-        _nonce_k_out: &mut [u8; 28],
-        _s_out: &mut [u8; 28],
-    ) -> Result<Option<()>, CryptoError> {
-        Err(CryptoError::Unsupported)
-    }
-}
-
-/// NIST P-256 context for `RustCryptoProvider`.
-pub struct RustCryptoEccNistP256;
-
-impl EccCurve<32> for RustCryptoEccNistP256 {
-    fn validate_point(&self, x: &[u8; 32], y: &[u8; 32]) -> Result<bool, CryptoError> {
-        let mut sec1 = [0u8; 65];
-        sec1[0] = 0x04;
-        sec1[1..33].copy_from_slice(x);
-        sec1[33..65].copy_from_slice(y);
-        Ok(p256::PublicKey::from_sec1_bytes(&sec1).is_ok())
-    }
-
-    fn point_multiply_generator(
-        &self,
-        scalar: &[u8; 32],
-        x_out: &mut [u8; 32],
-        y_out: &mut [u8; 32],
-    ) -> Result<Option<()>, CryptoError> {
-        let Ok(secret_key) = p256::SecretKey::from_slice(scalar) else {
-            return Ok(None);
-        };
-        let public_key = secret_key.public_key();
-        let encoded_point = public_key.to_encoded_point(false);
-        let public_sec1 = encoded_point.as_bytes();
-        if public_sec1.len() != 65 || public_sec1[0] != 0x04 {
-            return Err(CryptoError::Internal);
-        }
-        x_out.copy_from_slice(&public_sec1[1..33]);
-        y_out.copy_from_slice(&public_sec1[33..65]);
-        Ok(Some(()))
-    }
-
-    fn point_multiply(
-        &self,
-        scalar: &[u8; 32],
-        x_in: &[u8; 32],
-        y_in: &[u8; 32],
-        x_out: &mut [u8; 32],
-        y_out: &mut [u8; 32],
-    ) -> Result<Option<()>, CryptoError> {
-        let mut sec1 = [0u8; 65];
-        sec1[0] = 0x04;
-        sec1[1..33].copy_from_slice(x_in);
-        sec1[33..65].copy_from_slice(y_in);
-        let Ok(public_key) = p256::PublicKey::from_sec1_bytes(&sec1) else {
-            return Ok(None);
-        };
-        let affine_point = public_key.as_affine();
-        let projective_point = p256::ProjectivePoint::from(*affine_point);
-
-        let Ok(secret_key) = p256::SecretKey::from_slice(scalar) else {
-            return Ok(None);
-        };
-        let scalar_val = secret_key.to_nonzero_scalar();
-        let result_projective = projective_point * scalar_val.as_ref();
-        let Ok(result_public) = p256::PublicKey::from_affine(result_projective.to_affine()) else {
-            return Ok(None);
-        };
-        let encoded_point = result_public.to_encoded_point(false);
-        let result_sec1 = encoded_point.as_bytes();
-        if result_sec1.len() == 65 && result_sec1[0] == 0x04 {
-            x_out.copy_from_slice(&result_sec1[1..33]);
-            y_out.copy_from_slice(&result_sec1[33..65]);
-            Ok(Some(()))
-        } else {
-            Err(CryptoError::Internal)
-        }
-    }
-
-    /// Not provided: ECDAA signing (TPM 2.0 Part 1, "ECDAA Sign Operation") needs the
-    /// signing scheme's hash, which this interface does not carry, so `tpm2-engine` computes it
-    /// itself from the generic primitives. The previous implementation did not follow the
-    /// spec (it derived the nonce from the digest and special-cased fixed test points).
-    fn ecdaa_sign(
-        &self,
-        _commit_r: &[u8; 32],
-        _commit_x: &[u8],
-        _commit_p1: &[u8],
-        _private_key_d: &[u8; 32],
-        _digest: &[u8],
-        _nonce_k_out: &mut [u8; 32],
-        _s_out: &mut [u8; 32],
-    ) -> Result<Option<()>, CryptoError> {
-        Err(CryptoError::Unsupported)
-    }
-}
-
-/// NIST P-384 context for `RustCryptoProvider`.
-pub struct RustCryptoEccNistP384;
-
-impl EccCurve<48> for RustCryptoEccNistP384 {
-    fn validate_point(&self, x: &[u8; 48], y: &[u8; 48]) -> Result<bool, CryptoError> {
-        let mut sec1 = [0u8; 97];
-        sec1[0] = 0x04;
-        sec1[1..49].copy_from_slice(x);
-        sec1[49..97].copy_from_slice(y);
-        Ok(p384::PublicKey::from_sec1_bytes(&sec1).is_ok())
-    }
-
-    fn point_multiply_generator(
-        &self,
-        scalar: &[u8; 48],
-        x_out: &mut [u8; 48],
-        y_out: &mut [u8; 48],
-    ) -> Result<Option<()>, CryptoError> {
-        let Ok(secret_key) = p384::SecretKey::from_slice(scalar) else {
-            return Ok(None);
-        };
-        let public_key = secret_key.public_key();
-        let encoded_point = public_key.to_encoded_point(false);
-        let public_sec1 = encoded_point.as_bytes();
-        if public_sec1.len() != 97 || public_sec1[0] != 0x04 {
-            return Err(CryptoError::Internal);
-        }
-        x_out.copy_from_slice(&public_sec1[1..49]);
-        y_out.copy_from_slice(&public_sec1[49..97]);
-        Ok(Some(()))
-    }
-
-    fn point_multiply(
-        &self,
-        scalar: &[u8; 48],
-        x_in: &[u8; 48],
-        y_in: &[u8; 48],
-        x_out: &mut [u8; 48],
-        y_out: &mut [u8; 48],
-    ) -> Result<Option<()>, CryptoError> {
-        let mut sec1 = [0u8; 97];
-        sec1[0] = 0x04;
-        sec1[1..49].copy_from_slice(x_in);
-        sec1[49..97].copy_from_slice(y_in);
-        let Ok(public_key) = p384::PublicKey::from_sec1_bytes(&sec1) else {
-            return Ok(None);
-        };
-        let affine_point = public_key.as_affine();
-        let projective_point = p384::ProjectivePoint::from(*affine_point);
-
-        let Ok(secret_key) = p384::SecretKey::from_slice(scalar) else {
-            return Ok(None);
-        };
-        let scalar_val = secret_key.to_nonzero_scalar();
-        let result_projective = projective_point * scalar_val.as_ref();
-        let Ok(result_public) = p384::PublicKey::from_affine(result_projective.to_affine()) else {
-            return Ok(None);
-        };
-        let encoded_point = result_public.to_encoded_point(false);
-        let result_sec1 = encoded_point.as_bytes();
-        if result_sec1.len() == 97 && result_sec1[0] == 0x04 {
-            x_out.copy_from_slice(&result_sec1[1..49]);
-            y_out.copy_from_slice(&result_sec1[49..97]);
-            Ok(Some(()))
-        } else {
-            Err(CryptoError::Internal)
-        }
-    }
-
-    fn ecdaa_sign(
-        &self,
-        _commit_r: &[u8; 48],
-        _commit_x: &[u8],
-        _commit_p1: &[u8],
-        _private_key_d: &[u8; 48],
-        _digest: &[u8],
-        _nonce_k_out: &mut [u8; 48],
-        _s_out: &mut [u8; 48],
-    ) -> Result<Option<()>, CryptoError> {
-        Err(CryptoError::Unsupported)
-    }
-}
-
-/// NIST P-521 context for `RustCryptoProvider`.
-pub struct RustCryptoEccNistP521;
-
-impl EccCurve<66> for RustCryptoEccNistP521 {
-    fn validate_point(&self, x: &[u8; 66], y: &[u8; 66]) -> Result<bool, CryptoError> {
-        let mut sec1 = [0u8; 133];
-        sec1[0] = 0x04;
-        sec1[1..67].copy_from_slice(x);
-        sec1[67..133].copy_from_slice(y);
-        Ok(p521::PublicKey::from_sec1_bytes(&sec1).is_ok())
-    }
-
-    fn point_multiply_generator(
-        &self,
-        scalar: &[u8; 66],
-        x_out: &mut [u8; 66],
-        y_out: &mut [u8; 66],
-    ) -> Result<Option<()>, CryptoError> {
-        let Ok(secret_key) = p521::SecretKey::from_slice(scalar) else {
-            return Ok(None);
-        };
-        let public_key = secret_key.public_key();
-        let encoded_point = public_key.to_encoded_point(false);
-        let public_sec1 = encoded_point.as_bytes();
-        if public_sec1.len() != 133 || public_sec1[0] != 0x04 {
-            return Err(CryptoError::Internal);
-        }
-        x_out.copy_from_slice(&public_sec1[1..67]);
-        y_out.copy_from_slice(&public_sec1[67..133]);
-        Ok(Some(()))
-    }
-
-    fn point_multiply(
-        &self,
-        scalar: &[u8; 66],
-        x_in: &[u8; 66],
-        y_in: &[u8; 66],
-        x_out: &mut [u8; 66],
-        y_out: &mut [u8; 66],
-    ) -> Result<Option<()>, CryptoError> {
-        let mut sec1 = [0u8; 133];
-        sec1[0] = 0x04;
-        sec1[1..67].copy_from_slice(x_in);
-        sec1[67..133].copy_from_slice(y_in);
-        let Ok(public_key) = p521::PublicKey::from_sec1_bytes(&sec1) else {
-            return Ok(None);
-        };
-        let affine_point = public_key.as_affine();
-        let projective_point = p521::ProjectivePoint::from(*affine_point);
-
-        let Ok(secret_key) = p521::SecretKey::from_slice(scalar) else {
-            return Ok(None);
-        };
-        let scalar_val = secret_key.to_nonzero_scalar();
-        let result_projective = projective_point * scalar_val.as_ref();
-        let Ok(result_public) = p521::PublicKey::from_affine(result_projective.to_affine()) else {
-            return Ok(None);
-        };
-        let encoded_point = result_public.to_encoded_point(false);
-        let result_sec1 = encoded_point.as_bytes();
-        if result_sec1.len() == 133 && result_sec1[0] == 0x04 {
-            x_out.copy_from_slice(&result_sec1[1..67]);
-            y_out.copy_from_slice(&result_sec1[67..133]);
-            Ok(Some(()))
-        } else {
-            Err(CryptoError::Internal)
-        }
-    }
-
-    fn ecdaa_sign(
-        &self,
-        _commit_r: &[u8; 66],
-        _commit_x: &[u8],
-        _commit_p1: &[u8],
-        _private_key_d: &[u8; 66],
-        _digest: &[u8],
-        _nonce_k_out: &mut [u8; 66],
-        _s_out: &mut [u8; 66],
-    ) -> Result<Option<()>, CryptoError> {
-        Err(CryptoError::Unsupported)
-    }
-}
-
-/// BN-P256 context for `RustCryptoProvider`.
-pub struct RustCryptoEccBnP256;
-
-impl EccCurve<32> for RustCryptoEccBnP256 {
-    fn validate_point(&self, x: &[u8; 32], y: &[u8; 32]) -> Result<bool, CryptoError> {
-        let bn = BNP256::new();
-        let x_bn = rsa::BigUint::from_bytes_be(x);
-        let y_bn = rsa::BigUint::from_bytes_be(y);
-        if x_bn >= bn.p || y_bn >= bn.p {
-            return Ok(false);
-        }
-        Ok(bn.is_on_curve(&x_bn, &y_bn))
-    }
-
-    fn point_multiply_generator(
-        &self,
-        scalar: &[u8; 32],
-        x_out: &mut [u8; 32],
-        y_out: &mut [u8; 32],
-    ) -> Result<Option<()>, CryptoError> {
-        let bn = BNP256::new();
-        let k = rsa::BigUint::from_bytes_be(scalar);
-        if k == rsa::BigUint::from(0u32) || k >= bn.n {
-            return Ok(None);
-        }
-        let g = (rsa::BigUint::from(1u32), rsa::BigUint::from(2u32));
-        let Some(q) = bn.multiply(&k, g) else {
-            return Ok(None);
-        };
-        let q_x = q.0.to_bytes_be();
-        let q_y = q.1.to_bytes_be();
-
-        x_out.fill(0);
-        y_out.fill(0);
-        if q_x.len() <= 32 {
-            x_out[32 - q_x.len()..].copy_from_slice(&q_x);
-        }
-        if q_y.len() <= 32 {
-            y_out[32 - q_y.len()..].copy_from_slice(&q_y);
-        }
-        Ok(Some(()))
-    }
-
-    fn point_multiply(
-        &self,
-        scalar: &[u8; 32],
-        x_in: &[u8; 32],
-        y_in: &[u8; 32],
-        x_out: &mut [u8; 32],
-        y_out: &mut [u8; 32],
-    ) -> Result<Option<()>, CryptoError> {
-        let bn = BNP256::new();
-        let x = rsa::BigUint::from_bytes_be(x_in);
-        let y = rsa::BigUint::from_bytes_be(y_in);
-        if x >= bn.p || y >= bn.p {
-            return Ok(None);
-        }
-        let k = rsa::BigUint::from_bytes_be(scalar);
-        if k == rsa::BigUint::from(0u32) || k >= bn.n {
-            return Ok(None);
-        }
-        if bn.is_on_curve(&x, &y)
-            && let Some((rx, ry)) = bn.multiply(&k, (x, y))
-        {
-            let rx_bytes = rx.to_bytes_be();
-            let ry_bytes = ry.to_bytes_be();
-
-            x_out.fill(0);
-            y_out.fill(0);
-            if rx_bytes.len() <= 32 {
-                x_out[32 - rx_bytes.len()..].copy_from_slice(&rx_bytes);
+            /// Decodes the signature `(r, s)`: `None` unless both are in `[1, n - 1]`.
+            fn signature(r: &[u8; $coord], s: &[u8; $coord]) -> Option<$krate::ecdsa::Signature> {
+                $krate::ecdsa::Signature::from_scalars(
+                    *$krate::FieldBytes::from_slice(r),
+                    *$krate::FieldBytes::from_slice(s),
+                )
+                .ok()
             }
-            if ry_bytes.len() <= 32 {
-                y_out[32 - ry_bytes.len()..].copy_from_slice(&ry_bytes);
-            }
-            return Ok(Some(()));
         }
-        Ok(None)
-    }
 
-    fn ecdaa_sign(
-        &self,
-        _commit_r: &[u8; 32],
-        _commit_x: &[u8],
-        _commit_p1: &[u8],
-        _private_key_d: &[u8; 32],
-        _digest: &[u8],
-        _nonce_k_out: &mut [u8; 32],
-        _s_out: &mut [u8; 32],
-    ) -> Result<Option<()>, CryptoError> {
-        Err(CryptoError::Unsupported)
-    }
+        impl<R: tpm2::crypto::Rng> tpm2::crypto::backend::PrivateKey<$point, $coord, R> for $name {
+            type PublicKey = $krate::PublicKey;
+
+            fn generate(rng: &mut R, _: ()) -> Result<Self, tpm2::crypto::CryptoError> {
+                let mut rng = RngAdapter::new(rng);
+                let secret = $krate::SecretKey::random(&mut rng);
+                let public = secret.public_key();
+                rng.finish(Self { secret, public })
+            }
+
+            fn load(
+                public: Self::PublicKey,
+                private: &[u8; $coord],
+            ) -> Result<Option<Self>, tpm2::crypto::CryptoError> {
+                Ok(Self::scalar(private)
+                    .filter(|secret| secret.public_key() == public)
+                    .map(|secret| Self { secret, public }))
+            }
+
+            fn store(&self, out: &mut [u8; $coord]) -> Result<(), tpm2::crypto::CryptoError> {
+                out.copy_from_slice(&self.secret.to_bytes());
+                Ok(())
+            }
+
+            fn as_public(&self) -> &Self::PublicKey {
+                &self.public
+            }
+
+            fn load_public(
+                _: (),
+                public: &[u8; $point],
+            ) -> Result<Option<Self::PublicKey>, tpm2::crypto::CryptoError> {
+                let mut sec1 = [0x04; 1 + $point];
+                sec1[1..].copy_from_slice(public);
+                Ok($krate::PublicKey::from_sec1_bytes(&sec1).ok())
+            }
+
+            fn store_public(
+                public: &Self::PublicKey,
+                out: &mut [u8; $point],
+            ) -> Result<(), tpm2::crypto::CryptoError> {
+                let (x, y) = out.split_at_mut($coord);
+                Self::write_point(
+                    public,
+                    x.try_into().map_err(|_| tpm2::crypto::CryptoError::Internal)?,
+                    y.try_into().map_err(|_| tpm2::crypto::CryptoError::Internal)?,
+                )
+            }
+        }
+
+        impl<R: tpm2::crypto::Rng> tpm2::crypto::backend::EccCurve<$coord, $point, R> for $name {
+            /// The cofactor of the NIST curves is 1, so this is `[d]Q`.
+            fn ecdh(
+                &self,
+                peer_public: &Self::PublicKey,
+                out_x: &mut [u8; $coord],
+                out_y: &mut [u8; $coord],
+            ) -> Result<Option<()>, tpm2::crypto::CryptoError> {
+                let product = peer_public.to_projective() * *self.secret.to_nonzero_scalar();
+                let Ok(z) = $krate::PublicKey::from_affine(product.to_affine()) else {
+                    return Ok(None);
+                };
+                Self::write_point(&z, out_x, out_y).map(Some)
+            }
+
+            /// ECDSA with the per-message secret of RFC 6979, with additional randomness from
+            /// `rng` (`RandomizedPrehashSigner`).
+            fn sign(
+                &self,
+                rng: &mut R,
+                digest: &[u8],
+                out_r: &mut [u8; $coord],
+                out_s: &mut [u8; $coord],
+            ) -> Result<(), tpm2::crypto::CryptoError> {
+                use $krate::ecdsa::signature::hazmat::RandomizedPrehashSigner as _;
+                let signing_key = $krate::ecdsa::SigningKey::from_bytes(&self.secret.to_bytes())
+                    .map_err(|_| tpm2::crypto::CryptoError::Internal)?;
+                let mut buf = [0u8; 66];
+                let prehash = prepare_prehash(digest, $coord, &mut buf);
+                let mut rng = RngAdapter::new(rng);
+                let signature: $krate::ecdsa::Signature = signing_key
+                    .sign_prehash_with_rng(&mut rng, prehash)
+                    .map_err(|_| tpm2::crypto::CryptoError::Internal)?;
+                let signature = rng.finish(signature)?;
+                let (r, s) = signature.split_bytes();
+                out_r.copy_from_slice(&r);
+                out_s.copy_from_slice(&s);
+                Ok(())
+            }
+
+            fn verify(
+                public: &Self::PublicKey,
+                digest: &[u8],
+                sig_r: &[u8; $coord],
+                sig_s: &[u8; $coord],
+            ) -> Result<bool, tpm2::crypto::CryptoError> {
+                use $krate::ecdsa::signature::hazmat::PrehashVerifier as _;
+                let Some(signature) = Self::signature(sig_r, sig_s) else {
+                    return Ok(false);
+                };
+                let verifying_key = $krate::ecdsa::VerifyingKey::from_affine(*public.as_affine())
+                    .map_err(|_| tpm2::crypto::CryptoError::Internal)?;
+                let mut buf = [0u8; 66];
+                let prehash = prepare_prehash(digest, $coord, &mut buf);
+                Ok(verifying_key.verify_prehash(prehash, &signature).is_ok())
+            }
+
+            fn mul_generator(
+                k: &[u8; $coord],
+                out_x: &mut [u8; $coord],
+                out_y: &mut [u8; $coord],
+            ) -> Result<Option<()>, tpm2::crypto::CryptoError> {
+                let Some(k) = Self::scalar(k) else {
+                    return Ok(None);
+                };
+                Self::write_point(&k.public_key(), out_x, out_y).map(Some)
+            }
+
+            fn mul_point(
+                point: &Self::PublicKey,
+                k: &[u8; $coord],
+                out_x: &mut [u8; $coord],
+                out_y: &mut [u8; $coord],
+            ) -> Result<Option<()>, tpm2::crypto::CryptoError> {
+                let Some(k) = Self::scalar(k) else {
+                    return Ok(None);
+                };
+                let product = point.to_projective() * *k.to_nonzero_scalar();
+                let Ok(result) = $krate::PublicKey::from_affine(product.to_affine()) else {
+                    return Ok(None);
+                };
+                Self::write_point(&result, out_x, out_y).map(Some)
+            }
+        }
+    };
 }
 
+nist_curve!(
+    /// NIST P-256 keys for `RustCryptoProvider` (`p256`).
+    RustCryptoEccNistP256,
+    p256,
+    32,
+    64
+);
+nist_curve!(
+    /// NIST P-384 keys for `RustCryptoProvider` (`p384`).
+    RustCryptoEccNistP384,
+    p384,
+    48,
+    96
+);
+nist_curve!(
+    /// NIST P-521 keys for `RustCryptoProvider` (`p521`).
+    RustCryptoEccNistP521,
+    p521,
+    66,
+    132
+);
+
+/// NIST P-256/384/521 with the RustCrypto curve crates; NIST P-192, NIST P-224, BN P-256,
+/// BN P-638 and SM2 P-256 with the generic constant-time short-Weierstrass arithmetic of
+/// `tpm2-crypto-weierstrass` (which also implements `SM2` signatures on them).
+///
+/// The Brainpool curves, Curve25519 and Curve448 are not supported (`!`).
 impl Ecc for RustCryptoProvider {
-    type NistP224Context = RustCryptoEccNistP224;
-    fn nist_p224(&self) -> Result<Self::NistP224Context, CryptoError> {
-        Ok(RustCryptoEccNistP224)
-    }
-
-    type NistP256Context = RustCryptoEccNistP256;
-    fn nist_p256(&self) -> Result<Self::NistP256Context, CryptoError> {
-        Ok(RustCryptoEccNistP256)
-    }
-
-    type NistP384Context = RustCryptoEccNistP384;
-    fn nist_p384(&self) -> Result<Self::NistP384Context, CryptoError> {
-        Ok(RustCryptoEccNistP384)
-    }
-
-    type NistP521Context = RustCryptoEccNistP521;
-    fn nist_p521(&self) -> Result<Self::NistP521Context, CryptoError> {
-        Ok(RustCryptoEccNistP521)
-    }
-
-    type BnP256Context = RustCryptoEccBnP256;
-    fn bn_p256(&self) -> Result<Self::BnP256Context, CryptoError> {
-        Ok(RustCryptoEccBnP256)
-    }
-
-    // NIST P-192, BN P-638 and SM2 P-256: the generic constant-time short-Weierstrass
-    // arithmetic of `tpm2-crypto-weierstrass` (no ECDAA, as for the other curves).
-    type NistP192Context = tpm2_crypto_weierstrass::NistP192;
-    fn nist_p192(&self) -> Result<Self::NistP192Context, CryptoError> {
-        tpm2_crypto_weierstrass::nist_p192()
-    }
-
-    type BnP638Context = tpm2_crypto_weierstrass::BnP638;
-    fn bn_p638(&self) -> Result<Self::BnP638Context, CryptoError> {
-        tpm2_crypto_weierstrass::bn_p638()
-    }
-
-    type Sm2P256Context = tpm2_crypto_weierstrass::Sm2P256;
-    fn sm2_p256(&self) -> Result<Self::Sm2P256Context, CryptoError> {
-        tpm2_crypto_weierstrass::sm2_p256()
-    }
-
-    type BpP256R1Context = !;
-    type BpP384R1Context = !;
-    type BpP512R1Context = !;
-    type Curve25519Context = !;
-    type Curve448Context = !;
-}
-
-/// A software implementation of the Barreto-Naehrig 256-bit (BNP256) elliptic curve over a prime field.
-///
-/// The curve equation is defined as: y^2 = x^3 + 3 (over F_p).
-pub(crate) struct BNP256 {
-    /// The prime modulus representing the base field order.
-    pub(crate) p: rsa::BigUint,
-    /// The prime order representing the subgroup of points.
-    pub(crate) n: rsa::BigUint,
-}
-
-impl BNP256 {
-    /// Creates a new instance of `BNP256` with the pre-defined curve parameters.
-    pub fn new() -> Self {
-        let p_bytes =
-            hex_literal::hex!("fffffffffffcf0cd46e5f25eee71a49f0cdc65fb12980a82d3292ddbaed33013");
-        let n_bytes =
-            hex_literal::hex!("fffffffffffcf0cd46e5f25eee71a49e0cdc65fb1299921af62d536cd10b500d");
-        Self {
-            p: rsa::BigUint::from_bytes_be(&p_bytes),
-            n: rsa::BigUint::from_bytes_be(&n_bytes),
-        }
-    }
-
-    /// Verifies if a given point (x, y) satisfies the elliptic curve equation: y^2 = x^3 + 3 mod p.
-    pub fn is_on_curve(&self, x: &rsa::BigUint, y: &rsa::BigUint) -> bool {
-        if x >= &self.p || y >= &self.p {
-            return false;
-        }
-        let y2 = (y * y) % &self.p;
-        let x3 = (x * x * x) % &self.p;
-        let rhs = (x3 + rsa::BigUint::from(3u32)) % &self.p;
-        y2 == rhs
-    }
-
-    /// Computes modular inverse using Fermat's Little Theorem (a^(p-2) mod p).
-    fn mod_inverse(&self, a: &rsa::BigUint) -> rsa::BigUint {
-        let p_minus_2 = &self.p - rsa::BigUint::from(2u32);
-        a.modpow(&p_minus_2, &self.p)
-    }
-
-    /// Adds two elliptic curve points p1 and p2 using standard Weierstrass addition formulas.
-    ///
-    /// `None` is used to represent the Point at Infinity (the identity element).
-    pub fn add(
-        &self,
-        p1: Option<(rsa::BigUint, rsa::BigUint)>,
-        p2: Option<(rsa::BigUint, rsa::BigUint)>,
-    ) -> Option<(rsa::BigUint, rsa::BigUint)> {
-        match (p1, p2) {
-            (None, p2) => p2,
-            (p1, None) => p1,
-            (Some((x1, y1)), Some((x2, y2))) => {
-                if x1 == x2 {
-                    if y1 == y2 {
-                        if y1 == rsa::BigUint::from(0u32) {
-                            None
-                        } else {
-                            let num = (rsa::BigUint::from(3u32) * &x1 * &x1) % &self.p;
-                            let den = (rsa::BigUint::from(2u32) * &y1) % &self.p;
-                            let s = (num * self.mod_inverse(&den)) % &self.p;
-                            let x3 = (&s * &s + &self.p * 2u32 - &x1 - &x2) % &self.p;
-                            let y3 = (&s * (&x1 + &self.p - &x3) + &self.p - &y1) % &self.p;
-                            Some((x3, y3))
-                        }
-                    } else {
-                        None
-                    }
-                } else {
-                    let mut num = &y2 + &self.p - &y1;
-                    num %= &self.p;
-                    let mut den = &x2 + &self.p - &x1;
-                    den %= &self.p;
-                    let s = (num * self.mod_inverse(&den)) % &self.p;
-                    let mut x3 = &s * &s + &self.p * 2u32 - &x1 - &x2;
-                    x3 %= &self.p;
-                    let mut y3 = &s * (&x1 + &self.p - &x3) + &self.p - &y1;
-                    y3 %= &self.p;
-                    Some((x3, y3))
-                }
-            }
-        }
-    }
-
-    /// Performs scalar multiplication Q = k * P using the double-and-add algorithm.
-    pub fn multiply(
-        &self,
-        k: &rsa::BigUint,
-        p: (rsa::BigUint, rsa::BigUint),
-    ) -> Option<(rsa::BigUint, rsa::BigUint)> {
-        let mut r = None;
-        let mut base = Some(p);
-        let mut k_mut = k.clone();
-        let zero = rsa::BigUint::from(0u32);
-        let one = rsa::BigUint::from(1u32);
-        let two = rsa::BigUint::from(2u32);
-
-        while k_mut > zero {
-            if (&k_mut % &two) == one {
-                r = self.add(r, base.clone());
-            }
-            base = self.add(base.clone(), base);
-            k_mut /= &two;
-        }
-        r
-    }
-}
-
-/// A software implementation of the NIST P-224 (secp224r1) elliptic curve over a prime field.
-///
-/// The curve equation is defined as: y^2 = x^3 - 3*x + b (over F_p).
-pub(crate) struct NistP224 {
-    /// The prime modulus representing the base field order.
-    pub(crate) p: rsa::BigUint,
-    /// The prime order representing the subgroup of points.
-    pub(crate) n: rsa::BigUint,
-    /// The curve parameter b.
-    pub(crate) b: rsa::BigUint,
-}
-
-impl NistP224 {
-    /// Creates a new instance of `NistP224` with the pre-defined NIST P-224 curve parameters.
-    pub fn new() -> Self {
-        let p_bytes = hex_literal::hex!("ffffffffffffffffffffffffffffffff000000000000000000000001");
-        let n_bytes = hex_literal::hex!("fffffffffffffffffffffffeffffbce6faada7179e84f3b9cac2fc63");
-        let b_bytes = hex_literal::hex!("b4050a850c04b3abf54132565044b0b7d7bfd8ba270b39432355ffb4");
-        Self {
-            p: rsa::BigUint::from_bytes_be(&p_bytes),
-            n: rsa::BigUint::from_bytes_be(&n_bytes),
-            b: rsa::BigUint::from_bytes_be(&b_bytes),
-        }
-    }
-
-    /// Verifies if a given point (x, y) satisfies the elliptic curve equation: y^2 = x^3 - 3*x + b mod p.
-    pub fn is_on_curve(&self, x: &rsa::BigUint, y: &rsa::BigUint) -> bool {
-        if x >= &self.p || y >= &self.p {
-            return false;
-        }
-        let y2 = (y * y) % &self.p;
-        let x3 = (x * x * x) % &self.p;
-        let three_x = (x * 3u32) % &self.p;
-        let rhs = (&x3 + &self.p + &self.b - &three_x) % &self.p;
-        y2 == rhs
-    }
-
-    /// Computes modular inverse using Fermat's Little Theorem (a^(p-2) mod p).
-    fn mod_inverse(&self, a: &rsa::BigUint) -> rsa::BigUint {
-        let p_minus_2 = &self.p - rsa::BigUint::from(2u32);
-        a.modpow(&p_minus_2, &self.p)
-    }
-
-    /// Adds two elliptic curve points p1 and p2 using standard Weierstrass addition formulas.
-    pub fn add(
-        &self,
-        p1: Option<(rsa::BigUint, rsa::BigUint)>,
-        p2: Option<(rsa::BigUint, rsa::BigUint)>,
-    ) -> Option<(rsa::BigUint, rsa::BigUint)> {
-        match (p1, p2) {
-            (None, p2) => p2,
-            (p1, None) => p1,
-            (Some((x1, y1)), Some((x2, y2))) => {
-                if x1 == x2 {
-                    if y1 == y2 {
-                        if y1 == rsa::BigUint::from(0u32) {
-                            None
-                        } else {
-                            let three_x1_sq = (rsa::BigUint::from(3u32) * &x1 * &x1) % &self.p;
-                            let num = (&three_x1_sq + &self.p - 3u32) % &self.p;
-                            let den = (rsa::BigUint::from(2u32) * &y1) % &self.p;
-                            let s = (num * self.mod_inverse(&den)) % &self.p;
-                            let x3 = (&s * &s + &self.p * 2u32 - &x1 - &x2) % &self.p;
-                            let y3 = (&s * (&x1 + &self.p - &x3) + &self.p - &y1) % &self.p;
-                            Some((x3, y3))
-                        }
-                    } else {
-                        None
-                    }
-                } else {
-                    let mut num = &y2 + &self.p - &y1;
-                    num %= &self.p;
-                    let mut den = &x2 + &self.p - &x1;
-                    den %= &self.p;
-                    let s = (num * self.mod_inverse(&den)) % &self.p;
-                    let mut x3 = &s * &s + &self.p * 2u32 - &x1 - &x2;
-                    x3 %= &self.p;
-                    let mut y3 = &s * (&x1 + &self.p - &x3) + &self.p - &y1;
-                    y3 %= &self.p;
-                    Some((x3, y3))
-                }
-            }
-        }
-    }
-
-    /// Performs scalar multiplication Q = k * P using the double-and-add algorithm.
-    pub fn multiply(
-        &self,
-        k: &rsa::BigUint,
-        p: (rsa::BigUint, rsa::BigUint),
-    ) -> Option<(rsa::BigUint, rsa::BigUint)> {
-        let mut r = None;
-        let mut base = Some(p);
-        let mut k_mut = k.clone();
-        let zero = rsa::BigUint::from(0u32);
-        let one = rsa::BigUint::from(1u32);
-        let two = rsa::BigUint::from(2u32);
-
-        while k_mut > zero {
-            if (&k_mut % &two) == one {
-                r = self.add(r, base.clone());
-            }
-            base = self.add(base.clone(), base);
-            k_mut /= &two;
-        }
-        r
-    }
+    type NistP192 = tpm2_crypto_weierstrass::NistP192;
+    type NistP224 = tpm2_crypto_weierstrass::NistP224;
+    type NistP256 = RustCryptoEccNistP256;
+    type NistP384 = RustCryptoEccNistP384;
+    type NistP521 = RustCryptoEccNistP521;
+    type BNP256 = tpm2_crypto_weierstrass::BnP256;
+    type BNP638 = tpm2_crypto_weierstrass::BnP638;
+    type SM2P256 = tpm2_crypto_weierstrass::Sm2P256;
+    type BpP256R1 = !;
+    type BpP384R1 = !;
+    type BpP512R1 = !;
+    type Ed25519 = !;
+    type Ed448 = !;
+    type X25519 = !;
+    type X448 = !;
 }

@@ -1,12 +1,13 @@
 use crate::{
     errors::{TpmRc, UnmarshalError},
-    marshal::{marshal_helper, max},
+    marshal::marshal_helper,
     *,
 };
 
 /// `TPMS_CLOCK_INFO` structure defined in TPM 2.0 Part 2: Structures, Section 10.4.14 (Table 135).
 ///
 /// Holds time information including the clock counter, reset count, restart count, and safe flag.
+#[doc(alias = "TPMS_CLOCK_INFO")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct TpmsClockInfo {
     pub clock: u64,
@@ -240,6 +241,7 @@ impl<'a> Unmarshal<'a> for TpmsPcrSelection {
 /// `TPMS_QUOTE_INFO` structure defined in TPM 2.0 Part 2: Structures, Section 10.4.18 (Table 139).
 ///
 /// Contains quote attestation data including the PCR selection bitmap and PCR composite digest.
+#[doc(alias = "TPMS_QUOTE_INFO")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct TpmsQuoteInfo<'a> {
     pub pcr_select: TpmlPcrSelection,
@@ -267,6 +269,7 @@ impl<'a> Unmarshal<'a> for TpmsQuoteInfo<'a> {
 /// `TPMS_CREATION_INFO` structure defined in TPM 2.0 Part 2: Structures, Section 10.4.21 (Table 140).
 ///
 /// Contains creation attestation data including the created object's Name and creation digest.
+#[doc(alias = "TPMS_CREATION_INFO")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct TpmsCreationInfo<'a> {
     pub object_name: Tpm2bName<'a>,
@@ -294,6 +297,7 @@ impl<'a> Unmarshal<'a> for TpmsCreationInfo<'a> {
 /// `TPMS_CERTIFY_INFO` structure defined in TPM 2.0 Part 2: Structures, Section 10.4.17 (Table 138).
 ///
 /// Contains certification attestation data including the object Name and qualified Name of a certified key.
+#[doc(alias = "TPMS_CERTIFY_INFO")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct TpmsCertifyInfo<'a> {
     pub name: Tpm2bName<'a>,
@@ -321,6 +325,7 @@ impl<'a> Unmarshal<'a> for TpmsCertifyInfo<'a> {
 /// `TPMS_COMMAND_AUDIT_INFO` structure defined in TPM 2.0 Part 2: Structures, Section 10.4.19 (Table 140).
 ///
 /// Contains command audit attestation data including audit counter, digest algorithm, audit digest, and command digest.
+#[doc(alias = "TPMS_COMMAND_AUDIT_INFO")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct TpmsCommandAuditInfo<'a> {
     pub audit_counter: u64,
@@ -355,6 +360,7 @@ impl<'a> Unmarshal<'a> for TpmsCommandAuditInfo<'a> {
 /// `TPMS_SESSION_AUDIT_INFO` structure defined in TPM 2.0 Part 2: Structures, Section 10.4.20 (Table 141).
 ///
 /// Contains session audit attestation data including exclusive session flag and session digest.
+#[doc(alias = "TPMS_SESSION_AUDIT_INFO")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct TpmsSessionAuditInfo<'a> {
     pub exclusive_session: bool,
@@ -382,6 +388,7 @@ impl<'a> Unmarshal<'a> for TpmsSessionAuditInfo<'a> {
 /// `TPMS_TIME_INFO` structure defined in TPM 2.0 Part 2: Structures, Section 10.4.15 (Table 136).
 ///
 /// Contains timestamp information including current time and clock info.
+#[doc(alias = "TPMS_TIME_INFO")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct TpmsTimeInfo {
     pub time: u64,
@@ -409,6 +416,7 @@ impl<'a> Unmarshal<'a> for TpmsTimeInfo {
 /// `TPMS_TIME_ATTEST_INFO` structure defined in TPM 2.0 Part 2: Structures, Section 10.4.16 (Table 137).
 ///
 /// Contains time attestation data including timestamp info and TPM firmware version.
+#[doc(alias = "TPMS_TIME_ATTEST_INFO")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct TpmsTimeAttestInfo {
     pub time: TpmsTimeInfo,
@@ -436,6 +444,7 @@ impl<'a> Unmarshal<'a> for TpmsTimeAttestInfo {
 /// `TPMS_NV_CERTIFY_INFO` structure defined in TPM 2.0 Part 2: Structures, Section 10.4.22 (Table 141).
 ///
 /// Contains NV Index certification attestation data including NV Index Name, offset, and data contents.
+#[doc(alias = "TPMS_NV_CERTIFY_INFO")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct TpmsNvCertifyInfo<'a> {
     pub index_name: Tpm2bName<'a>,
@@ -466,6 +475,7 @@ impl<'a> Unmarshal<'a> for TpmsNvCertifyInfo<'a> {
 /// `TPMS_NV_DIGEST_CERTIFY_INFO` structure defined in TPM 2.0 Part 2: Structures, Section 10.12.9 (Table 153).
 ///
 /// Contains NV Index certification digest data including NV Index Name and NV digest.
+#[doc(alias = "TPMS_NV_DIGEST_CERTIFY_INFO")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct TpmsNvDigestCertifyInfo<'a> {
     pub index_name: Tpm2bName<'a>,
@@ -493,6 +503,7 @@ impl<'a> Unmarshal<'a> for TpmsNvDigestCertifyInfo<'a> {
 /// `TPMS_ATTEST` structure defined in TPM 2.0 Part 2: Structures, Section 10.4.24 (Table 143).
 ///
 /// Standard attestation structure signed during TPM attestation commands (`TPM2_Certify`, `TPM2_Quote`, `TPM2_GetTime`, etc.).
+#[doc(alias = "TPMS_ATTEST")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct TpmsAttest<'a> {
     pub magic: TpmGenerated,
@@ -580,6 +591,7 @@ impl Default for TpmsAttest<'_> {
 /// `TPMS_DERIVE` structure defined in TPM 2.0 Part 2: Structures, Section 11.1.9 (Table 156).
 ///
 /// Parameters for key derivation input (`label`, `context`).
+#[doc(alias = "TPMS_DERIVE")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct TpmsDerive<'a> {
     pub label: Tpm2bLabel<'a>,
@@ -607,6 +619,7 @@ impl<'a> Unmarshal<'a> for TpmsDerive<'a> {
 /// `TPMS_SENSITIVE_CREATE` structure defined in TPM 2.0 Part 2: Structures, Section 12.2.2 (Table 162).
 ///
 /// Sensitive creation data structure containing the user authorization value and sensitive data buffer.
+#[doc(alias = "TPMS_SENSITIVE_CREATE")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct TpmsSensitiveCreate<'a> {
     pub user_auth: Tpm2bAuth<'a>,
@@ -634,6 +647,7 @@ impl<'a> Unmarshal<'a> for TpmsSensitiveCreate<'a> {
 /// `TPMS_ECC_POINT` structure defined in TPM 2.0 Part 2: Structures, Section 11.2.2.2 (Table 189).
 ///
 /// Holds the affine coordinates (X, Y) of an Elliptic Curve cryptography point.
+#[doc(alias = "TPMS_ECC_POINT")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct TpmsEccPoint<'a> {
     pub x: Tpm2bEccParameter<'a>,
@@ -661,6 +675,7 @@ impl<'a> Unmarshal<'a> for TpmsEccPoint<'a> {
 /// `TPMS_SCHEME_XOR` structure defined in TPM 2.0 Part 2: Structures, Section 11.1.10 (Table 163).
 ///
 /// Parameter structure for XOR obfuscation scheme specifying hash algorithm and KDF.
+#[doc(alias = "TPMS_SCHEME_XOR")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct TpmsSchemeXor {
     pub hash_alg: TpmiAlgHash,
@@ -688,6 +703,7 @@ impl<'a> Unmarshal<'a> for TpmsSchemeXor {
 /// `TPMS_SIGNATURE_RSA` structure defined in TPM 2.0 Part 2: Structures, Section 11.2.3.1 (Table 198).
 ///
 /// Signature structure for RSA signatures, containing hash algorithm and signature buffer.
+#[doc(alias = "TPMS_SIGNATURE_RSA")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct TpmsSignatureRsa<'a> {
     pub hash: TpmiAlgHash,
@@ -715,6 +731,7 @@ impl<'a> Unmarshal<'a> for TpmsSignatureRsa<'a> {
 /// `TPMS_SIGNATURE_ECC` structure defined in TPM 2.0 Part 2: Structures, Section 11.2.3.3 (Table 199).
 ///
 /// Signature structure for ECC signatures, containing hash algorithm and (r, s) signature coordinates.
+#[doc(alias = "TPMS_SIGNATURE_ECC")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct TpmsSignatureEcc<'a> {
     pub hash: TpmiAlgHash,
@@ -746,6 +763,7 @@ impl<'a> Unmarshal<'a> for TpmsSignatureEcc<'a> {
 /// `TPMS_SCHEME_ECDAA` structure defined in TPM 2.0 Part 2: Structures, Section 11.2.2.3 (Table 192).
 ///
 /// Parameter structure for ECDAA scheme specifying hash algorithm and commit count.
+#[doc(alias = "TPMS_SCHEME_ECDAA")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct TpmsSchemeEcdaa {
     pub hash_alg: TpmiAlgHash,
@@ -772,6 +790,7 @@ impl<'a> Unmarshal<'a> for TpmsSchemeEcdaa {
 /// `TPMS_RSA_PARMS` structure defined in TPM 2.0 Part 2: Structures, Section 12.2.3.4 (Table 206).
 ///
 /// Parameter structure for RSA objects, specifying symmetric cipher, scheme, key bits, and public exponent.
+#[doc(alias = "TPMS_RSA_PARMS")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct TpmsRsaParms {
     pub symmetric: Option<TpmtSymDefObject>,
@@ -812,6 +831,7 @@ impl<'a> Unmarshal<'a> for TpmsRsaParms {
 /// `TPMS_ECC_PARMS` structure defined in TPM 2.0 Part 2: Structures, Section 12.2.3.5 (Table 208).
 ///
 /// Parameter structure for ECC objects, specifying symmetric cipher, scheme, curve ID, and KDF.
+#[doc(alias = "TPMS_ECC_PARMS")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct TpmsEccParms {
     pub symmetric: Option<TpmtSymDefObject>,
@@ -953,7 +973,7 @@ impl<'a> Unmarshal<'a> for TpmsMlkemParms {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct TpmsSignatureHashMldsa<'a> {
     pub hash: TpmiAlgHash,
-    pub sig: Tpm2bSignatureMldsa<'a>,
+    pub signature: Tpm2bSignatureMldsa<'a>,
 }
 
 impl Marshal for TpmsSignatureHashMldsa<'_> {
@@ -962,7 +982,7 @@ impl Marshal for TpmsSignatureHashMldsa<'_> {
 
     fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
         let count = marshal_helper(&self.hash, dst, 0);
-        marshal_helper(&self.sig, dst, count)
+        marshal_helper(&self.signature, dst, count)
     }
 }
 
@@ -970,7 +990,7 @@ impl<'a> Unmarshal<'a> for TpmsSignatureHashMldsa<'a> {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         Ok(Self {
             hash: Unmarshal::unmarshal(src)?,
-            sig: Unmarshal::unmarshal(src)?,
+            signature: Unmarshal::unmarshal(src)?,
         })
     }
 }
@@ -978,6 +998,7 @@ impl<'a> Unmarshal<'a> for TpmsSignatureHashMldsa<'a> {
 /// `TPMS_ALGORITHM_DETAIL_ECC` structure defined in TPM 2.0 Part 2: Structures, Section 11.2.2.6 (Table 194).
 ///
 /// Details structure for ECC curve parameters returned by `TPM2_ECC_Parameters`.
+#[doc(alias = "TPMS_ALGORITHM_DETAIL_ECC")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct TpmsAlgorithmDetailEcc<'a> {
     pub curve_id: TpmEccCurve,
@@ -1053,6 +1074,7 @@ impl<'a> Unmarshal<'a> for TpmsAlgorithmDetailEcc<'a> {
 /// `TPMS_ACT_DATA` structure defined in TPM 2.0 Part 2: Structures, Section 10.6.1 (Table 127).
 ///
 /// Contains data for an Authenticated Countdown Timer (ACT) returned by `TPM2_GetCapability(TPM_CAP_ACT)`.
+#[doc(alias = "TPMS_ACT_DATA")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct TpmsActData {
     pub handle: Handle,
@@ -1082,6 +1104,7 @@ impl<'a> Unmarshal<'a> for TpmsActData {
 /// `TPMS_SPDM_SESSION_INFO` structure defined in TPM 2.0 Part 2: Structures, Section 10.6.1a (Table 127a).
 ///
 /// Contains SPDM session information returned by `TPM2_GetCapability(TPM_CAP_SPDM_SESSION_INFO)`.
+#[doc(alias = "TPMS_SPDM_SESSION_INFO")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct TpmsSpdmSessionInfo<'a> {
     pub req_key_name: Tpm2bName<'a>,
@@ -1108,6 +1131,7 @@ impl<'a> Unmarshal<'a> for TpmsSpdmSessionInfo<'a> {
 /// `TPMS_CAPABILITY_DATA` union structure defined in TPM 2.0 Part 2: Structures, Section 10.6.2 (Table 128).
 ///
 /// Data area returned in response to `TPM2_GetCapability`.
+#[doc(alias = "TPMS_CAPABILITY_DATA")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(u32)]
 pub enum TpmsCapabilityData<'a> {
@@ -1119,6 +1143,7 @@ pub enum TpmsCapabilityData<'a> {
     AssignedPcr(TpmlPcrSelection) = TpmCap::PCRs.tag(),
     TpmProperties(TpmlTaggedTpmProperty) = TpmCap::TPMProperties.tag(),
     PcrProperties(TpmlTaggedPcrProperty) = TpmCap::PCRProperties.tag(),
+    #[cfg(feature = "ecc")]
     EccCurves(TpmlEccCurve) = TpmCap::ECCCurves.tag(),
     AuthPolicies(TpmlTaggedPolicy<'a>) = TpmCap::AuthPolicies.tag(),
     ActData(TpmlActData) = TpmCap::ACT.tag(),
@@ -1128,7 +1153,7 @@ pub enum TpmsCapabilityData<'a> {
 }
 
 impl<'a> Marshal for TpmsCapabilityData<'a> {
-    const MAX_SIZE: usize = 4 + max(&[
+    const MAX_SIZE: usize = 4 + max!(
         TpmlAlgProperty::MAX_SIZE,
         TpmlHandle::MAX_SIZE,
         TpmlCca::MAX_SIZE,
@@ -1136,13 +1161,14 @@ impl<'a> Marshal for TpmsCapabilityData<'a> {
         TpmlPcrSelection::MAX_SIZE,
         TpmlTaggedTpmProperty::MAX_SIZE,
         TpmlTaggedPcrProperty::MAX_SIZE,
+        #[cfg(feature = "ecc")]
         TpmlEccCurve::MAX_SIZE,
         TpmlTaggedPolicy::MAX_SIZE,
         TpmlActData::MAX_SIZE,
         TpmlPubKey::MAX_SIZE,
         TpmlSpdmSessionInfo::MAX_SIZE,
         TpmlVendorProperty::MAX_SIZE,
-    ]);
+    );
     type MaxBuffer = [u8; TpmsCapabilityData::MAX_SIZE];
 
     fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
@@ -1179,6 +1205,7 @@ impl<'a> Marshal for TpmsCapabilityData<'a> {
                 let count = marshal_helper(&(TpmCap::PCRProperties.tag()), dst, 0);
                 marshal_helper(x, dst, count)
             }
+            #[cfg(feature = "ecc")]
             Self::EccCurves(x) => {
                 let count = marshal_helper(&(TpmCap::ECCCurves.tag()), dst, 0);
                 marshal_helper(x, dst, count)
@@ -1223,7 +1250,11 @@ impl<'a> Unmarshal<'a> for TpmsCapabilityData<'a> {
             TpmCap::PCRProperties => {
                 Ok(Self::PcrProperties(TpmlTaggedPcrProperty::unmarshal(src)?))
             }
+            #[cfg(feature = "ecc")]
             TpmCap::ECCCurves => Ok(Self::EccCurves(TpmlEccCurve::unmarshal(src)?)),
+            // `TPML_ECC_CURVE` needs the `ecc` Cargo feature.
+            #[cfg(not(feature = "ecc"))]
+            TpmCap::ECCCurves => Err(UnmarshalError::SELECTOR),
             TpmCap::AuthPolicies => Ok(Self::AuthPolicies(TpmlTaggedPolicy::unmarshal(src)?)),
             TpmCap::ACT => Ok(Self::ActData(TpmlActData::unmarshal(src)?)),
             TpmCap::PubKeys => Ok(Self::PubKeys(TpmlPubKey::unmarshal(src)?)),
@@ -1239,7 +1270,7 @@ impl<'a> Unmarshal<'a> for TpmsCapabilityData<'a> {
 ///
 /// Specifies the capability and capability data to be set in `TPM2_SetCapability`.
 #[doc(alias = "TPMS_SET_CAPABILITY_DATA")]
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct TpmsSetCapabilityData<'a> {
     pub set_capability: TpmCap,
     pub data: TpmuSetCapabilities<'a>,
@@ -1269,6 +1300,7 @@ impl<'a> Unmarshal<'a> for TpmsSetCapabilityData<'a> {
 /// `TPMS_ALG_PROPERTY` structure defined in TPM 2.0 Part 2: Structures, Section 10.4.9 (Table 108).
 ///
 /// Structure reporting algorithm properties (`alg`, `algProperties`).
+#[doc(alias = "TPMS_ALG_PROPERTY")]
 #[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
 pub struct TpmsAlgProperty {
     pub alg: Alg,
@@ -1296,6 +1328,7 @@ impl<'a> Unmarshal<'a> for TpmsAlgProperty {
 /// `TPMS_TAGGED_PROPERTY` structure defined in TPM 2.0 Part 2: Structures, Section 10.4.10 (Table 109).
 ///
 /// Structure reporting tagged UINT32 TPM properties (`property`, `value`).
+#[doc(alias = "TPMS_TAGGED_PROPERTY")]
 #[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
 pub struct TpmsTaggedProperty {
     pub property: TpmPt,
@@ -1427,6 +1460,7 @@ impl<'a> Unmarshal<'a> for TpmsTaggedPcrSelect {
 ///
 /// When a permanent handle does not have an authorization policy set, `policy_hash`
 /// is `None` (representing `TPM_ALG_NULL` with an empty digest).
+#[doc(alias = "TPMS_TAGGED_POLICY")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct TpmsTaggedPolicy<'a> {
     pub handle: Handle,
@@ -1455,6 +1489,7 @@ impl<'a> Unmarshal<'a> for TpmsTaggedPolicy<'a> {
 /// `TPMS_AUTH_COMMAND` structure defined in TPM 2.0 Part 2: Structures, Section 10.4.25 (Table 144).
 ///
 /// Format for each authorization in the session area of a command.
+#[doc(alias = "TPMS_AUTH_COMMAND")]
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
 pub struct TpmsAuthCommand<'a> {
     pub session_handle: Handle,
@@ -1489,6 +1524,7 @@ impl<'a> Unmarshal<'a> for TpmsAuthCommand<'a> {
 
 /// `TPMS_AUTH_RESPONSE` structure defined in TPM 2.0 Part 2: Structures, Section 10.4.26 (Table 146).
 /// Format for each authorization in the session area of a response.
+#[doc(alias = "TPMS_AUTH_RESPONSE")]
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
 pub struct TpmsAuthResponse<'a> {
     pub nonce: Tpm2bNonce<'a>,
@@ -1639,6 +1675,7 @@ impl<'a> Unmarshal<'a> for TpmsNvPinCounterParameters {
 /// `TPMS_NV_PUBLIC` structure defined in TPM 2.0 Part 2: Structures, Section 13.2 (Table 227).
 ///
 /// Defines the public area parameters for an NV Index (index handle, name hash algorithm, attributes, policy, and data size).
+#[doc(alias = "TPMS_NV_PUBLIC")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct TpmsNvPublic<'a> {
     pub nv_index: Handle,
@@ -1761,6 +1798,7 @@ impl Default for TpmsNvPublicExpAttr<'_> {
 /// `TPMS_CONTEXT_DATA` structure defined in TPM 2.0 Part 2: Structures, Section 14.3 (Table 234).
 ///
 /// Holds integrity values and encrypted data for a saved context in `TPM2_ContextSave` and `TPM2_ContextLoad`.
+#[doc(alias = "TPMS_CONTEXT_DATA")]
 #[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
 pub struct TpmsContextData<'a> {
     pub integrity: Tpm2bDigest<'a>,

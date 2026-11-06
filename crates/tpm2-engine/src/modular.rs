@@ -1,5 +1,5 @@
 //! Small fixed-size big-endian modular arithmetic for values up to the largest registered curve
-//! prime/order (BN P-638, 80 bytes), used where the crypto provider offers no primitive: deriving
+//! prime/order (BN P-638, 80 bytes), used where the crypto backend offers no primitive: deriving
 //! ECC private scalars with the "extra random bits" method, computing ECDAA, SM2 and EC-Schnorr
 //! signatures, and the affine point arithmetic of [`crate::ecc_curves`].
 //!
@@ -213,6 +213,7 @@ pub(crate) fn mul_mod(a: &[u8], b: &[u8], m: &[u8], out: &mut [u8]) {
 /// Writes the inverse `a^-1 mod p` into `out` for a prime modulus `p` (a curve's group order)
 /// and `0 < a < p`, all of length `p.len()`, as `a^(p - 2) mod p` (Fermat) with [`mul_mod`]: the
 /// running time depends only on `p`, so `a` may be secret. Returns `false` if `a` is zero.
+#[cfg(any(test, not(feature = "reference-rng")))]
 pub(crate) fn inv_mod_prime(a: &[u8], p: &[u8], out: &mut [u8]) -> bool {
     let len = p.len();
     if is_zero(a) {
@@ -328,7 +329,7 @@ mod tests {
         // Large moduli: the inverses of p - 2 and of 2 modulo every curve prime of the build.
         for curve in [
             tpm2::TpmEccCurve::NistP521,
-            #[cfg(feature = "ecc_curve_bn_p638")]
+            #[cfg(feature = "bn_p638")]
             tpm2::TpmEccCurve::BNP638,
         ] {
             let p = tpm2::crypto::ecc_curve_params(curve).unwrap().p;

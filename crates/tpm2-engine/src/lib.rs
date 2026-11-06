@@ -51,7 +51,6 @@
 // FFI boundary (`reference_rng::ffi`) is the only module allowed to use `unsafe`.
 #![cfg_attr(not(feature = "reference-rng"), forbid(unsafe_code))]
 #![cfg_attr(feature = "reference-rng", deny(unsafe_code))]
-#![allow(dead_code)] // rustc >= 1.90.0 (1159e78c4 2025-09-14)
 
 #[cfg(test)]
 extern crate alloc;
@@ -92,6 +91,7 @@ mod util;
 mod engine;
 mod req_resp;
 mod rng;
+mod rsa;
 #[cfg(feature = "sec-channel")]
 mod sec_channel;
 pub use engine::{

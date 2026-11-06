@@ -430,7 +430,8 @@ pub struct PersistedTransientObject {
     pub qualified_name: Array<u8, NAME_CAP>,
     /// The marshaled public area (`TPMT_PUBLIC`).
     pub public_bytes: Array<u8, { TpmtPublic::MAX_SIZE }>,
-    /// The private key in the crypto provider's format.
+    /// The private value of the object ([`crate::handler::TransientObject::private`]: the prime
+    /// `p` of an RSA key).
     pub private: Array<u8, MAX_PRIVATE_KEY_SIZE>,
 }
 

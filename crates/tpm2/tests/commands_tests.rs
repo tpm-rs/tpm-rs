@@ -14,7 +14,7 @@
 
 use tpm2::commands::responses::FieldUpgradeData as FieldUpgradeDataRsp;
 use tpm2::commands::*;
-use tpm2::errors::{Position, TpmRc, UnmarshalError};
+use tpm2::errors::{Position, UnmarshalError};
 use tpm2::*;
 
 /// Defines a typed view of a command's handle area, as validated by the TPM.
@@ -798,7 +798,10 @@ fn test_set_capability_handles_validation() {
     ] {
         let cmd = SetCapability {
             auth_handle: valid_handle,
-            ..Default::default()
+            set_capability_data: Tpm2b(TpmsSetCapabilityData {
+                set_capability: TpmCap::Algs,
+                data: TpmuSetCapabilities::new(&[]),
+            }),
         };
         let [auth_handle] = cmd.handles();
         let mut buf = [0u8; Handle::MAX_SIZE];
@@ -972,6 +975,7 @@ fn test_rsa_encrypt_and_decrypt_reject_signature_schemes_on_unmarshal() {
     // Verify valid schemes roundtrip
     for scheme in [
         None,
+        #[cfg(feature = "rsaes")]
         Some(TpmtRsaDecrypt::Rsaes),
         Some(TpmtRsaDecrypt::Oaep(TpmiAlgHash::Sha256)),
     ] {
@@ -1007,7 +1011,7 @@ fn test_rsa_encrypt_and_decrypt_reject_signature_schemes_on_unmarshal() {
     }
 }
 
-#[cfg(all(feature = "ecc", feature = "ecdh"))]
+#[cfg(all(feature = "ecc", feature = "ecc"))]
 #[test]
 fn test_zgen_2phase_in_scheme_rejects_null_and_roundtrips_valid_schemes() {
     let point_a = Tpm2bEccPoint::new(TpmsEccPoint {
@@ -1020,7 +1024,7 @@ fn test_zgen_2phase_in_scheme_rejects_null_and_roundtrips_valid_schemes() {
     });
 
     let valid_schemes: &[TpmiEccKeyExchange] = &[
-        #[cfg(feature = "ecdh")]
+        #[cfg(feature = "ecc")]
         TpmiEccKeyExchange::Ecdh,
         #[cfg(feature = "sm2")]
         TpmiEccKeyExchange::Sm2,
@@ -1077,10 +1081,10 @@ fn test_zgen_2phase_in_scheme_rejects_null_and_roundtrips_valid_schemes() {
             "ZGen2Phase should reject scheme {:?} with SCHEME in parameter 3",
             invalid_alg
         );
-        let rc = TpmRc::from(err);
+        let rc = tpm2::errors::TpmRc::from(err);
         assert_eq!(
             rc,
-            TpmRc::SCHEME.with(Position::parameter(3)),
+            tpm2::errors::TpmRc::SCHEME.with(Position::parameter(3)),
             "Expected TPM_RC_SCHEME + TPM_RC_P + TPM_RC_3"
         );
         assert_eq!(rc.get(), 0x000003D2);

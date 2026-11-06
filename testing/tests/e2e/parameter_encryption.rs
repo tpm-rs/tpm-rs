@@ -104,7 +104,8 @@ fn create_primary_response_encrypted() {
         primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
 
     let resp_handles =
@@ -242,7 +243,8 @@ fn encrypt_on_second_session_with_owner_auth() {
         primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
 
     let mut sessions = [session1, session2];
@@ -496,7 +498,7 @@ fn response_encrypt_on_second_auth_session() {
     let rsa_parms = tpm2::TpmsRsaParms {
         symmetric: None,
         scheme: Some(tpm2::TpmtRsaScheme::Rsassa(TpmiAlgHash::Sha256)),
-        key_bits: tpm2::TpmiRsaKeyBits(2048),
+        key_bits: tpm2::TpmiRsaKeyBits::Rsa2048,
         exponent: 0,
     };
     let pub_area = TpmtPublic {
@@ -521,7 +523,8 @@ fn response_encrypt_on_second_auth_session() {
         primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     let create_rsp_handles = execute_with_password_sessions(&mut sim, &create_cmd, 1, &[]).unwrap();
     let sign_handle = create_rsp_handles.object_handle;
@@ -664,7 +667,8 @@ fn third_session_encrypt_key_derivation() {
         primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
 
     // Case A: Client uses empty auth for session 3 (correct index 2 alignment). This must SUCCEED.

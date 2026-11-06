@@ -21,7 +21,7 @@ pub(crate) fn combined_context_create_primary() -> CreatePrimary<'static> {
     let rsa_parms = TpmsRsaParms {
         symmetric: None,
         scheme: Some(TpmtRsaScheme::Rsassa(TpmiAlgHash::Sha256)),
-        key_bits: TpmiRsaKeyBits(2048),
+        key_bits: TpmiRsaKeyBits::Rsa2048,
         exponent: 0,
     };
 

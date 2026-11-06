@@ -393,7 +393,7 @@ impl<'a> UnmarshalMessage<'a> for PolicyLocality {
 /// [TPM2.0 1.83] 23.9 TPM2_PolicyNV (Command)
 #[doc(alias = "TPM2_PolicyNV")]
 #[doc(alias = "PolicyNV_In")]
-#[derive(Clone, Copy, PartialEq, Debug, Default, Eq)]
+#[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct PolicyNV<'a> {
     /// Handle indicating the source of the authorization value for the NV Index.
     pub auth_handle: Handle,
@@ -447,7 +447,7 @@ impl<'a> UnmarshalMessage<'a> for PolicyNV<'a> {
 /// [TPM2.0 1.83] 23.10 TPM2_PolicyCounterTimer (Command)
 #[doc(alias = "TPM2_PolicyCounterTimer")]
 #[doc(alias = "PolicyCounterTimer_In")]
-#[derive(Clone, Copy, PartialEq, Debug, Default, Eq)]
+#[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct PolicyCounterTimer<'a> {
     /// Handle for the policy session being extended.
     pub policy_session: Handle,
@@ -695,7 +695,7 @@ impl<'a> UnmarshalMessage<'a> for PolicyDuplicationSelect<'a> {
 /// [TPM2.0 1.83] 23.16 TPM2_PolicyAuthorize (Command)
 #[doc(alias = "TPM2_PolicyAuthorize")]
 #[doc(alias = "PolicyAuthorize_In")]
-#[derive(Clone, Copy, PartialEq, Debug, Default, Eq)]
+#[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct PolicyAuthorize<'a> {
     /// Handle for the policy session being extended.
     pub policy_session: Handle,
@@ -1002,7 +1002,7 @@ impl<'a> UnmarshalMessage<'a> for PolicyAuthorizeNV {
 /// [TPM2.0 1.83] 23.23 TPM2_PolicyCapability (Command)
 #[doc(alias = "TPM2_PolicyCapability")]
 #[doc(alias = "PolicyCapability_In")]
-#[derive(Clone, Copy, PartialEq, Debug, Default, Eq)]
+#[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct PolicyCapability<'a> {
     pub policy_session: Handle,
     pub operand_b: Tpm2bOperand<'a>,

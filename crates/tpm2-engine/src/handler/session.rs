@@ -8,7 +8,7 @@ use crate::timer::TpmTimer;
 use tpm2::TpmCc;
 use tpm2::commands::responses;
 use tpm2::commands::{PolicyCommandCode, PolicyGetDigest, PolicyRestart, StartAuthSession};
-use tpm2::crypto::{CryptoProvider, Rng};
+use tpm2::crypto::{Crypto, Rng};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Handle, TPM2_MAX_ACTIVE_SESSIONS, TpmSe};
 use tpm2::{
@@ -16,7 +16,7 @@ use tpm2::{
     TpmsAuthCommand, TpmsAuthResponse, Unmarshal,
 };
 
-impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
+impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     CommandHandler<'a, 'b, C, S, T, R>
 {
     /// Handles the [TpmCc::StartAuthSession] (`0x11F`) command.
@@ -742,14 +742,15 @@ pub(crate) fn compute_bound_entity(
     crate::owned::OwnedName::from_bytes(&bind).map_err(|_| TpmRc::FAILURE)
 }
 
-fn compute_hash<C: CryptoProvider>(
+fn compute_hash<C: Crypto>(
     crypto: &crate::self_test::Tested<'_, C>,
     auth_hash: TpmiAlgHash,
     data: &[u8],
     hash_out: &mut [u8],
 ) -> Result<usize, TpmRc> {
     let mut digest_buf = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
-    let digest = tpm2::crypto::hash(crypto, auth_hash, data, &mut digest_buf)
+    let digest = crypto
+        .hash(auth_hash, &[data], &mut digest_buf)
         .map_err(|_| TpmRc::HASH.to_rc())?;
     let slice = digest.digest();
     let len = slice.len();

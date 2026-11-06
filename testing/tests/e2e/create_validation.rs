@@ -402,7 +402,7 @@ fn null_public_type_rejected() {
             TpmsRsaParms {
                 symmetric: Some(AES128_CFB),
                 scheme: None,
-                key_bits: TpmiRsaKeyBits(2048),
+                key_bits: TpmiRsaKeyBits::Rsa2048,
                 exponent: 0,
             },
             Tpm2bPublicKeyRsa::default(),
@@ -647,7 +647,7 @@ fn rsa_sign_and_decrypt_with_null_scheme() {
             TpmsRsaParms {
                 symmetric: None,
                 scheme: None,
-                key_bits: TpmiRsaKeyBits(2048),
+                key_bits: TpmiRsaKeyBits::Rsa2048,
                 exponent: 0,
             },
             Tpm2bPublicKeyRsa::default(),

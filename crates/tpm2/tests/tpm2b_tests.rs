@@ -206,14 +206,20 @@ fn test_tpm2b_encrypted_secret_max_size_sizeof_tpmu_encrypted_secret() {
 
 #[test]
 fn test_tpm2b_signature_eddsa() {
-    assert_eq!(
-        Tpm2bSignatureEddsa::MAX_BUFFER_SIZE,
-        2 * (TPM2_MAX_ECC_KEY_BYTES as usize)
-    );
-    assert_eq!(Tpm2bSignatureEddsa::CAP, 256);
+    // `2 * MAX_ECC_KEY_BYTES` of the enabled curves with EdDSA, 0 without it.
+    const CAP: usize = if cfg!(feature = "eddsa") {
+        2 * TpmEccCurve::MAX_ECC_KEY_BYTES
+    } else {
+        0
+    };
+    assert_eq!(Tpm2bSignatureEddsa::MAX_BUFFER_SIZE, CAP);
+    assert_eq!(Tpm2bSignatureEddsa::CAP, CAP);
 
-    for size in [0usize, 64, 114, 256] {
-        let payload = [0x42u8; 256];
+    let payload = [0x42u8; CAP + 1];
+    for size in [0usize, 64, 114, CAP] {
+        if size > CAP {
+            continue;
+        }
         let sig = Tpm2bSignatureEddsa::from_bytes(&payload[..size]).unwrap();
         assert_eq!(sig.get_size() as usize, size);
         assert_eq!(sig.get_buffer(), &payload[..size]);
@@ -227,15 +233,14 @@ fn test_tpm2b_signature_eddsa() {
         assert!(src.is_empty());
     }
 
-    // Oversize (> 256 bytes) must fail with UnmarshalError::SIZE
-    let oversize_payload = [0x42u8; 257];
+    // Oversize (> CAP bytes) must fail with UnmarshalError::SIZE
     assert_eq!(
-        Tpm2bSignatureEddsa::from_bytes(&oversize_payload),
+        Tpm2bSignatureEddsa::from_bytes(&payload),
         Err(UnmarshalError::SIZE)
     );
-    let mut wire = [0u8; 260];
-    wire[0..2].copy_from_slice(&257u16.to_be_bytes());
-    let mut src = &wire[..259];
+    let mut wire = [0u8; CAP + 4];
+    wire[0..2].copy_from_slice(&u16::try_from(CAP + 1).unwrap().to_be_bytes());
+    let mut src = &wire[..CAP + 3];
     assert_eq!(
         Tpm2bSignatureEddsa::unmarshal(&mut src),
         Err(UnmarshalError::SIZE)
@@ -371,8 +376,10 @@ fn test_tpm2b_signature_ctx_and_kem_ciphertext_max_buffer_sizes() {
     // with ECDAA).
     let cap = if cfg!(feature = "mldsa") || cfg!(feature = "sm2") {
         255
-    } else {
+    } else if cfg!(feature = "ecdaa") {
         2
+    } else {
+        0
     };
     assert_eq!(TPM2_MAX_SIGNATURE_CTX_SIZE, cap);
     assert_eq!(tags::SignatureCtx::CAP, cap);
@@ -380,7 +387,7 @@ fn test_tpm2b_signature_ctx_and_kem_ciphertext_max_buffer_sizes() {
     assert_eq!(Tpm2bSignatureCtx::MAX_BUFFER_SIZE, cap);
     assert_eq!(Tpm2bSignatureCtx::MAX_SIZE, cap + 2);
 
-    for valid_len in [0usize, 1, 2, cap] {
+    for valid_len in [0usize, 1, 2, cap].into_iter().filter(|&len| len <= cap) {
         let payload = [0x11u8; 255];
         let ctx = Tpm2bSignatureCtx::from_bytes(&payload[..valid_len]).unwrap();
         assert_eq!(ctx.get_size() as usize, valid_len);

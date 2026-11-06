@@ -133,8 +133,9 @@ use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
 use crate::{GlobalState, TpmEngine};
 use tpm2::Alg;
-use tpm2::crypto::asymmetric::KeyParams;
-use tpm2::crypto::{CryptoError, CryptoProvider, Direction, ModeIv, Rng, Symmetric, SymmetricKey};
+use tpm2::crypto::{
+    CipherInput, Crypto, CryptoError, Direction, Rng, RsaPrivateKey, RsaPublicKey, SymmetricKey,
+};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Handle, TpmSe};
 use tpm2::{Marshal, Unmarshal};
@@ -174,15 +175,30 @@ pub struct AttestHeader<'c> {
     pub firmware_version: u64,
 }
 
-/// The capacity of a loaded object's private key in the crypto provider's format
-/// ([`TransientObject::private`]): at least 1536 octets, and enough for the PKCS#8 DER encoding of
-/// the largest RSA key of the profile (`TPMI_RSA_KEY_BITS`, which grows with the `rsa3072` and
-/// `rsa4096` features). A two-prime `RSAPrivateKey` (RFC 8017, A.1.2) of an `n`-octet modulus
-/// takes at most `4.5 * n` octets of integers plus a few dozen of DER headers and the PKCS#8
-/// wrapper (about 2380 octets for RSA-4096); 128 octets of margin cover the headers.
+/// The capacity of a loaded object's private value ([`TransientObject::private`]): a member of
+/// `TPMU_SENSITIVE_COMPOSITE` in its compact form (TPM 2.0 Part 2, Table "Definition of
+/// TPMU_SENSITIVE_COMPOSITE Union"): an RSA prime (`MAX_RSA_KEY_BYTES` / 2, which grows with the
+/// `rsa3072` and `rsa4096` features; the RSA private key is rebuilt from the prime and the public
+/// modulus and exponent for every use), an ECC private scalar (`TPM2B_ECC_PARAMETER`), the data of
+/// a keyed-hash object (`TPM2B_SENSITIVE_DATA`), a symmetric key (`TPM2B_SYM_KEY`), or the seed of
+/// an ML-KEM or ML-DSA key. A saved object context holds the private value as it is.
 pub const MAX_PRIVATE_KEY_SIZE: usize = {
-    let rsa = tpm2::TpmiRsaKeyBits::MAX_PUB_KEY_BYTES * 9 / 2 + 128;
-    if rsa > 1536 { rsa } else { 1536 }
+    let mut max = tpm2::TpmiRsaKeyBits::MAX_PUB_KEY_BYTES / 2;
+    let others = [
+        tpm2::Tpm2bEccParameter::CAP,
+        tpm2::Tpm2bSensitiveData::CAP,
+        tpm2::Tpm2bSymKey::CAP,
+        tpm2::Tpm2bPrivateKeyMlkem::CAP,
+        tpm2::Tpm2bPrivateKeyMldsa::CAP,
+    ];
+    let mut i = 0;
+    while i < others.len() {
+        if others[i] > max {
+            max = others[i];
+        }
+        i += 1;
+    }
+    max
 };
 
 /// Represents an object loaded into the TPM's volatile memory.
@@ -213,7 +229,11 @@ pub struct TransientObject {
     pub auth: OwnedAuth,
     /// The public area of the object, describing its attributes and public key.
     pub public: OwnedPublic,
-    /// The encrypted private area of the object, containing sensitive data like the private key.
+    /// The private value of the object (the sensitive data like the private key, see
+    /// [`MAX_PRIVATE_KEY_SIZE`]): the prime `p` of an RSA key (as
+    /// [`RsaPrivateKey::prime_p`] writes it, `keyBits / 16` octets; see
+    /// `TransientObject::rsa_private_key`), the private scalar of an ECC key, the seed of an
+    /// ML-KEM or ML-DSA key, the key of a SYMCIPHER object or the data of a KEYEDHASH object.
     pub private: [u8; MAX_PRIVATE_KEY_SIZE],
     /// The actual length of the data stored in the `private` array.
     pub private_len: usize,
@@ -239,6 +259,77 @@ impl TransientObject {
         seed[..len].copy_from_slice(&bytes[..len]);
         (seed, len)
     }
+
+    /// The meaningful bytes of the object's private value (`private[..private_len]`).
+    pub fn private_bytes(&self) -> &[u8] {
+        &self.private[..self.private_len]
+    }
+
+    /// The RSA public key of the object's public area (`Ok(None)`: not an RSA object, or an
+    /// invalid modulus or exponent).
+    pub(crate) fn rsa_public_key<C: Crypto>(&self) -> Result<Option<RsaPublicKey<C>>, CryptoError> {
+        match &self.public.parms_and_id {
+            OwnedPublicParmsAndId::Rsa(parms, unique) => rsa_public_key(parms, unique.get_buffer()),
+            _ => Ok(None),
+        }
+    }
+
+    /// The RSA private key of the object, rebuilt from the modulus and exponent of its public
+    /// area and the prime in [`Self::private`] (`Ok(None)`: not an RSA object with a private
+    /// key, or a prime that does not factor the modulus).
+    pub(crate) fn rsa_private_key<C: Crypto>(
+        &self,
+    ) -> Result<Option<RsaPrivateKey<C>>, CryptoError> {
+        match &self.public.parms_and_id {
+            OwnedPublicParmsAndId::Rsa(parms, unique) if self.private_len > 0 => {
+                rsa_private_key(parms, unique.get_buffer(), self.private_bytes())
+            }
+            _ => Ok(None),
+        }
+    }
+}
+
+/// The RSA public key with the parameters `parms` (key size and exponent; exponent 0 is 65537)
+/// and the modulus `modulus` (`Ok(None)`: an invalid modulus or exponent for the key size).
+pub(crate) fn rsa_public_key<C: Crypto>(
+    parms: &TpmsRsaParms,
+    modulus: &[u8],
+) -> Result<Option<RsaPublicKey<C>>, CryptoError> {
+    match tpm2::Tpm2bPublicKeyRsa::new(modulus) {
+        Some(modulus) => RsaPublicKey::load(parms.key_bits, parms.exponent, modulus),
+        None => Ok(None),
+    }
+}
+
+/// The RSA private key of the public key [`rsa_public_key`]`(parms, modulus)` and the prime
+/// `prime` (either prime factor; `Ok(None)`: an invalid public key, or `prime` does not factor
+/// the modulus).
+pub(crate) fn rsa_private_key<C: Crypto>(
+    parms: &TpmsRsaParms,
+    modulus: &[u8],
+    prime: &[u8],
+) -> Result<Option<RsaPrivateKey<C>>, CryptoError> {
+    let Some(public) = rsa_public_key::<C>(parms, modulus)? else {
+        return Ok(None);
+    };
+    match tpm2::Tpm2bPrivateKeyRsa::new(prime) {
+        Some(prime) => RsaPrivateKey::load(public, prime),
+        None => Ok(None),
+    }
+}
+
+/// Writes the prime `p` of `key` ([`RsaPrivateKey::prime_p`], `keyBits / 16` octets: the form of
+/// [`TransientObject::private`]) to `out` and returns its length.
+pub(crate) fn rsa_private_prime<C: Crypto>(
+    key: &RsaPrivateKey<C>,
+    out: &mut [u8],
+) -> Result<usize, CryptoError> {
+    let mut prime = [0u8; tpm2::TpmiRsaKeyBits::MAX_PRIV_KEY_BYTES];
+    let prime = key.prime_p(&mut prime)?.as_slice();
+    out.get_mut(..prime.len())
+        .ok_or(CryptoError::Internal)?
+        .copy_from_slice(prime);
+    Ok(prime.len())
 }
 
 /// Represents the state of an active authorization session.
@@ -431,24 +522,23 @@ pub struct KeyDerivationArgs<'a> {
 }
 
 /// Encrypts or decrypts `data` in place with the symmetric algorithm and block cipher mode of
-/// `alg`, the key `key` and the IV `iv`. `iv` is updated in place with the chaining value for a
-/// following call (`ivOut` of `TPM2_EncryptDecrypt`).
+/// `alg`, the key `key` and the IV `iv` ([`crate::self_test::Tested::crypt`], which tests the
+/// block cipher first). `iv` is updated in place with the chaining value for a following call
+/// (`ivOut` of `TPM2_EncryptDecrypt`).
 ///
-/// PORTING: this is exp's `tpm2::crypto::{encrypt, decrypt, encrypt_decrypt}(s, alg, key, iv,
-/// ..)` on top of the upstream one-shot [`tpm2::crypto::encrypt_decrypt`]. It fails in the same
-/// cases as exp (every caller maps any failure to its own response code), checked in exp's order
-/// before `data` is touched:
+/// It fails, checked in this order before `data` is touched (every caller maps any failure to its
+/// own response code):
 /// - `alg.mode` is `None` or not a block cipher mode (`TPM_ALG_CMAC`):
-///   [`CryptoError::Unsupported`] (exp: `unimplemented(TPM_ALG_NULL)` / an unsupported mode).
-/// - `iv` is not exactly one block (16 bytes) long, or not empty for ECB:
-///   [`CryptoError::Internal`] (exp: `invalid_iv()`).
-/// - `key` does not have the key size of `alg.alg`: [`CryptoError::Internal`] (exp:
-///   `invalid_key()`).
+///   [`CryptoError::Unsupported`].
+/// - `iv` is not exactly one block (16 bytes) long, or not empty for ECB, or `data` is not a
+///   multiple of the block size for CBC and ECB ([`CipherInput::new`]):
+///   [`CryptoError::Internal`].
+/// - `key` does not have the key size of `alg.alg`: [`CryptoError::Internal`].
 ///
 /// Errors of the backend itself (for example [`CryptoError::Unsupported`] for an algorithm or
 /// mode it does not implement) are passed through.
-pub fn sym_encrypt_decrypt(
-    s: &impl Symmetric,
+pub fn sym_encrypt_decrypt<C: Crypto>(
+    crypto: &crate::self_test::Tested<'_, C>,
     alg: TpmtSymDefObject,
     key: &[u8],
     iv: &mut [u8],
@@ -459,14 +549,14 @@ pub fn sym_encrypt_decrypt(
         Some(TpmiAlgSymMode::Cipher(mode)) => mode,
         _ => return Err(CryptoError::Unsupported),
     };
-    let mode_iv = ModeIv::new(mode, iv).ok_or(CryptoError::Internal)?;
+    let input = CipherInput::new(mode, iv, data).ok_or(CryptoError::Internal)?;
     let key = SymmetricKey::new(alg.alg, key).ok_or(CryptoError::Internal)?;
-    tpm2::crypto::encrypt_decrypt(s, key, mode_iv, dir, data)
+    crypto.crypt(key, dir, input)
 }
 
 /// The context that all command handler functions are given access to in order for them to process
 /// their given command.
-pub struct CommandHandler<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> {
+pub struct CommandHandler<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync> {
     /// The engine (platform and TPM state) the command operates on.
     pub context: &'b mut TpmEngine<'a, C, S, T, R>,
 }
@@ -559,7 +649,7 @@ pub(crate) const TICKET_DIGEST_SIZE: usize = 64;
 /// A ticket digest: an HMAC with [`context_integrity_hash_alg`].
 pub(crate) type TicketDigest = crate::owned::OwnedTpm2b<TICKET_DIGEST_SIZE>;
 
-impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
+impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     CommandHandler<'a, 'b, C, S, T, R>
 {
     /// Creates a new `CommandHandler` object.
@@ -881,7 +971,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         Ok((out, len))
     }
 
-    /// [`sym_encrypt_decrypt`] with this TPM's crypto provider: encrypts or decrypts `data` in
+    /// [`sym_encrypt_decrypt`] with this TPM's crypto backend: encrypts or decrypts `data` in
     /// place with the algorithm and mode of `alg`, `key` and `iv` (updated in place).
     pub fn sym_encrypt_decrypt(
         &self,
@@ -1049,7 +1139,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 self.crypto()
                     .do_self_test(Alg::MLKEM)
                     .map_err(|_| TpmRc::FAILURE)?;
-                let mut seed = [0u8; tpm2::crypto::MLKEM_SEED_SIZE];
+                let mut seed = [0u8; tpm2::TpmiMlkemParms::PRIV_KEY_BYTES];
                 self.pqc_creation_entropy(name_alg, &args, &mut seed)?;
                 let mut public_key = [0u8; tpm2::TPM2_MAX_MLKEM_PUB_SIZE];
                 let len = self.mlkem_public_key(param_set, &seed, &mut public_key)?;
@@ -1067,7 +1157,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 self.crypto()
                     .do_self_test(Alg::MLDSA)
                     .map_err(|_| TpmRc::FAILURE)?;
-                let mut seed = [0u8; tpm2::crypto::MLDSA_SEED_SIZE];
+                let mut seed = [0u8; tpm2::TpmiMldsaParms::PRIV_KEY_BYTES];
                 self.pqc_creation_entropy(name_alg, &args, &mut seed)?;
                 let mut public_key = [0u8; tpm2::TPM2_MAX_MLDSA_PUB_SIZE];
                 let len = self.mldsa_public_key(param_set, &seed, &mut public_key)?;
@@ -1080,7 +1170,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
     /// The seed of an ML-KEM or ML-DSA key created without the `reference-rng` feature: derived
     /// from the creation seed of a Primary Object (KDFa with the label `PQC Key Seed`), or drawn
-    /// from the crypto provider's CSPRNG for an ordinary object.
+    /// from the crypto backend's entropy source ([`Random::rand_bytes`](tpm2::crypto::Random::rand_bytes)) for an ordinary object.
     fn pqc_creation_entropy(
         &self,
         name_alg: TpmiAlgHash,
@@ -1103,11 +1193,15 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             out.copy_from_slice(&derived[..out.len()]);
             Ok(())
         } else {
-            self.crypto().get_random(out).map_err(|_| TpmRc::FAILURE)
+            C::rand_bytes(out).map_err(|_| TpmRc::FAILURE)
         }
     }
 
     /// Generates key bytes for an ECC curve and populates the public point coordinates.
+    ///
+    /// The key of a Primary Object is derived from its creation seed `gen_seed_arg` (with the
+    /// backend's deterministic generator [`Random::from_seed`](tpm2::crypto::Random::from_seed)); any other key is drawn from the
+    /// backend's entropy source.
     fn generate_ecc_key(
         &self,
         parms: &mut TpmsEccParms,
@@ -1120,30 +1214,43 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         self.crypto()
             .do_self_test(Alg::ECDSA)
             .map_err(|_| TpmRc::FAILURE)?;
-        let mut priv_buf = [0u8; 128];
-        let mut pub_buf = [0u8; 256];
-        let (pub_len, priv_len) = self
-            .crypto()
-            .generate_key(
-                Alg::ECC,
-                Some(KeyParams::Ecc(curve)),
-                &mut pub_buf,
-                &mut priv_buf,
-                gen_seed_arg,
-            )
+        let mut rng = match gen_seed_arg {
+            Some(seed) => C::from_seed(seed),
+            None => C::from_entropy(),
+        }
+        .map_err(|_| TpmRc::FAILURE)?;
+        let key = tpm2::crypto::EccPrivateKey::<C>::generate(&mut rng, curve, None)
             .map_err(|_| TpmRc::FAILURE)?;
-        actual_private_key[..priv_len].copy_from_slice(&priv_buf[..priv_len]);
-
-        let param_size = pub_len / 2;
-        let x =
-            OwnedTpm2b::from_bytes(&pub_buf[..param_size]).expect("pub_buf contains X parameter");
-        let y = OwnedTpm2b::from_bytes(&pub_buf[param_size..pub_len])
-            .expect("pub_buf contains Y parameter");
-        *point = OwnedEccPoint { x, y };
-        Ok(priv_len)
+        let scalar_len = {
+            let mut scalar = [0u8; tpm2::TpmEccCurve::MAX_ECC_KEY_BYTES];
+            let d = key
+                .scalar(&mut scalar)
+                .map_err(|_| TpmRc::FAILURE)?
+                .as_slice();
+            actual_private_key
+                .get_mut(..d.len())
+                .ok_or(TpmRc::FAILURE)?
+                .copy_from_slice(d);
+            d.len()
+        };
+        let (mut x, mut y) = (
+            [0u8; tpm2::TpmEccCurve::MAX_ECC_KEY_BYTES],
+            [0u8; tpm2::TpmEccCurve::MAX_ECC_KEY_BYTES],
+        );
+        let q = key.point(&mut x, &mut y).map_err(|_| TpmRc::FAILURE)?;
+        *point = OwnedEccPoint {
+            x: OwnedTpm2b::from_bytes(q.x.as_slice()).map_err(|_| TpmRc::FAILURE)?,
+            y: OwnedTpm2b::from_bytes(q.y.as_slice()).map_err(|_| TpmRc::FAILURE)?,
+        };
+        Ok(scalar_len)
     }
 
-    /// Generates RSA key bytes and populates the public exponent and modulus.
+    /// Generates RSA key bytes and populates the public exponent and modulus: the private value
+    /// is the prime `p` ([`rsa_private_prime`]).
+    ///
+    /// The key of a Primary Object is derived from its creation seed `gen_seed_arg` (with the
+    /// backend's deterministic generator [`Random::from_seed`](tpm2::crypto::Random::from_seed)); any other key is drawn from the
+    /// backend's entropy source.
     fn generate_rsa_key(
         &self,
         parms: &mut TpmsRsaParms,
@@ -1152,7 +1259,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         actual_private_key: &mut [u8],
     ) -> Result<usize, TpmRc> {
         // `CryptRsaGenerateKey()`: an exponent below 65537 or not prime is `TPM_RC_RANGE`.
-        // The crypto provider generates keys with the default exponent only, so any other
+        // The crypto backend generates keys with the default exponent only, so any other
         // (valid) exponent is unsupported, which is `TPM_RC_RANGE` as well. TPM 2.0 Part 1,
         // RSA: "A TPM is required only to support a public exponent (*e*) of $2^{16}+1$.
         // Support for other exponents is allowed but discouraged." (The response code is not
@@ -1162,23 +1269,18 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         if parms.exponent != 0 && parms.exponent != DEFAULT_EXPONENT {
             return Err(TpmRc::RANGE.to_rc());
         }
-        let mut priv_buf = [0u8; MAX_PRIVATE_KEY_SIZE];
-        let mut pub_buf = [0u8; 512];
-        let bits = parms.key_bits;
-        let (pub_len, priv_len) = self
-            .crypto()
-            .generate_key(
-                Alg::RSA,
-                Some(KeyParams::Rsa(bits)),
-                &mut pub_buf,
-                &mut priv_buf,
-                gen_seed_arg,
-            )
+        let mut rng = match gen_seed_arg {
+            Some(seed) => C::from_seed(seed),
+            None => C::from_entropy(),
+        }
+        .map_err(|_| TpmRc::FAILURE)?;
+        let key = RsaPrivateKey::<C>::generate(&mut rng, parms.key_bits, DEFAULT_EXPONENT)
             .map_err(|_| TpmRc::FAILURE)?;
-        actual_private_key[..priv_len].copy_from_slice(&priv_buf[..priv_len]);
-        let p = OwnedPublicKeyRsa::from_bytes(&pub_buf[..pub_len])
+        let priv_len = rsa_private_prime(&key, actual_private_key).map_err(|_| TpmRc::FAILURE)?;
+        let mut modulus = [0u8; tpm2::TpmiRsaKeyBits::MAX_PUB_KEY_BYTES];
+        let modulus = key.modulus(&mut modulus).map_err(|_| TpmRc::FAILURE)?;
+        *unique = OwnedPublicKeyRsa::from_bytes(modulus.as_slice())
             .expect("generated public key has valid length");
-        *unique = p;
         Ok(priv_len)
     }
 
@@ -1211,9 +1313,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             actual_private_key[..key_size].copy_from_slice(&generated_key[..key_size]);
             key_size
         } else if args.get_random_fallback {
-            self.crypto()
-                .get_random(&mut actual_private_key[..key_size])
-                .map_err(|_| TpmRc::FAILURE)?;
+            C::rand_bytes(&mut actual_private_key[..key_size]).map_err(|_| TpmRc::FAILURE)?;
             key_size
         } else {
             return Err(TpmRc::VALUE.to_rc());
@@ -1254,9 +1354,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             actual_private_key[..sym_key_size].copy_from_slice(&generated_key[..sym_key_size]);
             sym_key_size
         } else if args.get_random_fallback {
-            self.crypto()
-                .get_random(&mut actual_private_key[..sym_key_size])
-                .map_err(|_| TpmRc::FAILURE)?;
+            C::rand_bytes(&mut actual_private_key[..sym_key_size]).map_err(|_| TpmRc::FAILURE)?;
             sym_key_size
         } else {
             return Err(TpmRc::VALUE.to_rc());
@@ -1515,14 +1613,15 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         offset += metadata.len();
 
         let mut hmac_buf = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
-        let hmac_digest = tpm2::crypto::hmac(
-            &self.crypto(),
-            context_integrity_hash_alg(),
-            proof.as_bytes(),
-            &hmac_input[..offset],
-            &mut hmac_buf,
-        )
-        .map_err(|_| TpmRc::FAILURE)?;
+        let hmac_digest = self
+            .crypto()
+            .hmac(
+                context_integrity_hash_alg(),
+                proof.as_bytes(),
+                &[&hmac_input[..offset]],
+                &mut hmac_buf,
+            )
+            .map_err(|_| TpmRc::FAILURE)?;
 
         TicketDigest::new(hmac_digest.digest()).ok_or(TpmRc::FAILURE)
     }
@@ -1557,14 +1656,15 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         offset += digest.len();
 
         let mut hmac_buf = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
-        let hmac_digest = tpm2::crypto::hmac(
-            &self.crypto(),
-            context_integrity_hash_alg(),
-            proof.as_bytes(),
-            &hmac_input[..offset],
-            &mut hmac_buf,
-        )
-        .map_err(|_| TpmRc::FAILURE)?;
+        let hmac_digest = self
+            .crypto()
+            .hmac(
+                context_integrity_hash_alg(),
+                proof.as_bytes(),
+                &[&hmac_input[..offset]],
+                &mut hmac_buf,
+            )
+            .map_err(|_| TpmRc::FAILURE)?;
 
         TicketDigest::new(hmac_digest.digest()).ok_or(TpmRc::FAILURE)
     }
@@ -1632,6 +1732,16 @@ mod tests {
     use tpm2::commands::responses;
     use tpm2::platform::TpmPlatform;
     use tpm2::{AlgSym, Tpm2bName, TpmiAlgCipherMode};
+
+    /// A self-test state in which every algorithm is tested, so that [`fake_crypto`] runs no
+    /// self test.
+    static ALL_TESTED: crate::self_test::SelfTestState =
+        crate::self_test::SelfTestState::nothing_to_test();
+
+    /// The fake crypto backend without self tests.
+    fn fake_crypto() -> crate::self_test::Tested<'static, FakeCrypto> {
+        crate::self_test::Tested::new(&ALL_TESTED)
+    }
 
     type TestHandler<'a, 'b> = CommandHandler<'a, 'b, FakeCrypto, FakeStorage, FakeTimer, FakeRng>;
 
@@ -1803,7 +1913,7 @@ mod tests {
         let mut data = plain;
         let mut iv = iv_in;
         sym_encrypt_decrypt(
-            &FakeCrypto,
+            &fake_crypto(),
             aes128_cfb(),
             &key,
             &mut iv,
@@ -1818,7 +1928,7 @@ mod tests {
         assert_eq!(iv, iv_in);
 
         sym_encrypt_decrypt(
-            &FakeCrypto,
+            &fake_crypto(),
             aes128_cfb(),
             &key,
             &mut iv,
@@ -1841,7 +1951,7 @@ mod tests {
             // The mode is checked first: the IV and key sizes are wrong as well.
             assert_eq!(
                 sym_encrypt_decrypt(
-                    &FakeCrypto,
+                    &fake_crypto(),
                     alg,
                     &[0; 3],
                     &mut [0; 3],
@@ -1866,7 +1976,7 @@ mod tests {
             let mut iv = [0u8; 17];
             assert_eq!(
                 sym_encrypt_decrypt(
-                    &FakeCrypto,
+                    &fake_crypto(),
                     aes128_cfb(),
                     &[0; 16],
                     &mut iv[..iv_len],
@@ -1879,7 +1989,7 @@ mod tests {
         // ECB takes no IV.
         assert_eq!(
             sym_encrypt_decrypt(
-                &FakeCrypto,
+                &fake_crypto(),
                 ecb(AlgSym::Aes128),
                 &[0; 16],
                 &mut [0; 16],
@@ -1893,7 +2003,7 @@ mod tests {
             let key = [0u8; 32];
             assert_eq!(
                 sym_encrypt_decrypt(
-                    &FakeCrypto,
+                    &fake_crypto(),
                     aes128_cfb(),
                     &key[..key_len],
                     &mut [0; 16],
@@ -1907,7 +2017,7 @@ mod tests {
 
         // ECB with an empty IV, and AES-256 with a 32-byte key, are accepted.
         sym_encrypt_decrypt(
-            &FakeCrypto,
+            &fake_crypto(),
             ecb(AlgSym::Aes256),
             &[0x0F; 32],
             &mut [],

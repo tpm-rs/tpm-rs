@@ -46,7 +46,8 @@ fn create_primary_with_empty_owner_password() {
         primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     let create_rsp = execute_with_password_sessions(&mut sim, &create_cmd, 1, &[]).unwrap();
     flush_context(&mut sim, create_rsp.object_handle).unwrap();

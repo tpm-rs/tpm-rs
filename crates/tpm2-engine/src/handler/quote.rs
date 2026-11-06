@@ -8,11 +8,11 @@ use tpm2::TpmCc;
 use tpm2::TpmGenerated;
 use tpm2::commands::Quote;
 use tpm2::commands::responses;
-use tpm2::crypto::{CryptoProvider, Rng};
+use tpm2::crypto::{Crypto, Rng};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{TpmsAttest, TpmsQuoteInfo, TpmuAttest};
 
-impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
+impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     CommandHandler<'a, 'b, C, S, T, R>
 {
     /// Handles the [TpmCc::Quote] (`0x158`) command.

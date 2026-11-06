@@ -12,10 +12,10 @@ use crate::req_resp::RequestThenResponse;
 use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
 use tpm2::Tpm2bSharedSecret;
-use tpm2::crypto::{CryptoProvider, MLKEM_SHARED_SECRET_SIZE, Rng};
+use tpm2::crypto::{Crypto, Rng};
 use tpm2::errors::{Position, TpmRc};
 
-impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
+impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     CommandHandler<'a, 'b, C, S, T, R>
 {
     /// Handles [tpm2::TpmCc::Encapsulate] (`0x1A7`).
@@ -45,7 +45,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::KEY.with(Position::handle(1)));
         };
         let mut ciphertext = [0u8; tpm2::TPM2_MAX_MLKEM_CT_SIZE];
-        let mut shared_secret = [0u8; MLKEM_SHARED_SECRET_SIZE];
+        let mut shared_secret = [0u8; tpm2::TpmiMlkemParms::SHARED_SECRET_BYTES];
         let ciphertext_len =
             self.mlkem_encapsulate(param_set, public_key, &mut ciphertext, &mut shared_secret)?;
 
@@ -94,7 +94,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         if key.public_only {
             return Err(TpmRc::HANDLE.with(Position::handle(1)));
         }
-        let mut shared_secret = [0u8; MLKEM_SHARED_SECRET_SIZE];
+        let mut shared_secret = [0u8; tpm2::TpmiMlkemParms::SHARED_SECRET_BYTES];
         self.mlkem_decapsulate(&key, cmd.ciphertext.get_buffer(), &mut shared_secret)?;
 
         let rsp = tpm2::commands::responses::Decapsulate {

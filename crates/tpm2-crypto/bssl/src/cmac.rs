@@ -1,171 +1,64 @@
+//! CMAC: AES-128/192/256 with BoringSSL's `CMAC_CTX`; Camellia-128/192/256 with the RustCrypto
+//! implementation of `tpm2-crypto-rust`.
+
 use crate::BsslCryptoProvider;
-use tpm2::crypto::CryptoError;
+use tpm2::crypto::backend::{Cmac, CmacState};
+use tpm2::crypto::{Block, CryptoError};
+use tpm2_crypto_rust::RustCryptoProvider;
 
-/// AES-128-CMAC context wrapper for `BsslCryptoProvider`.
-pub struct BsslCmacAes128(crate::bssl::CmacAes128);
+/// Implements [`CmacState`] for the AES-CMAC context wrapper `$name` of the binding `$inner`
+/// with a `$key`-byte key.
+macro_rules! aes_cmac_state {
+    ($(#[$m:meta])* $name:ident, $inner:ident, $key:literal) => {
+        $(#[$m])*
+        pub struct $name(crate::bssl::$inner);
 
-impl tpm2::crypto::Update for BsslCmacAes128 {
-    fn update(&mut self, data: &[u8]) -> Result<(), CryptoError> {
-        self.0.update(data).map_err(Into::into)
-    }
+        impl CmacState<$key> for $name {
+            fn init(key: &[u8; $key]) -> Result<Self, CryptoError> {
+                crate::bssl::$inner::new(key)
+                    .map(Self)
+                    .map_err(Into::into)
+            }
+
+            fn update(&mut self, data: &[u8]) -> Result<(), CryptoError> {
+                self.0.update(data).map_err(Into::into)
+            }
+
+            fn finalize(&mut self, out: &mut Block) -> Result<(), CryptoError> {
+                self.0.finalize(out).map_err(Into::into)
+            }
+        }
+    };
 }
 
-impl tpm2::crypto::Finalize<16> for BsslCmacAes128 {
-    fn finalize(self, out: &mut [u8; 16]) -> Result<(), CryptoError> {
-        self.0.finalize(out).map_err(Into::into)
-    }
-}
+aes_cmac_state!(
+    /// AES-128-CMAC context wrapper for `BsslCryptoProvider`.
+    BsslCmacAes128,
+    CmacAes128,
+    16
+);
+aes_cmac_state!(
+    /// AES-192-CMAC context wrapper for `BsslCryptoProvider`.
+    BsslCmacAes192,
+    CmacAes192,
+    24
+);
+aes_cmac_state!(
+    /// AES-256-CMAC context wrapper for `BsslCryptoProvider`.
+    BsslCmacAes256,
+    CmacAes256,
+    32
+);
 
-/// AES-192-CMAC context wrapper for `BsslCryptoProvider`.
-pub struct BsslCmacAes192(crate::bssl::CmacAes192);
-
-impl tpm2::crypto::Update for BsslCmacAes192 {
-    fn update(&mut self, data: &[u8]) -> Result<(), CryptoError> {
-        self.0.update(data).map_err(Into::into)
-    }
-}
-
-impl tpm2::crypto::Finalize<16> for BsslCmacAes192 {
-    fn finalize(self, out: &mut [u8; 16]) -> Result<(), CryptoError> {
-        self.0.finalize(out).map_err(Into::into)
-    }
-}
-
-/// AES-256-CMAC context wrapper for `BsslCryptoProvider`.
-pub struct BsslCmacAes256(crate::bssl::CmacAes256);
-
-impl tpm2::crypto::Update for BsslCmacAes256 {
-    fn update(&mut self, data: &[u8]) -> Result<(), CryptoError> {
-        self.0.update(data).map_err(Into::into)
-    }
-}
-
-impl tpm2::crypto::Finalize<16> for BsslCmacAes256 {
-    fn finalize(self, out: &mut [u8; 16]) -> Result<(), CryptoError> {
-        self.0.finalize(out).map_err(Into::into)
-    }
-}
-
-/// Camellia-128-CMAC context wrapper for `BsslCryptoProvider`.
-///
-/// BoringSSL is built without Camellia (`OPENSSL_NO_CAMELLIA`), so this is a
-/// fallback on the RustCrypto `cmac` and `camellia` crates.
-pub struct BsslCmacCamellia128(cmac::Cmac<camellia::Camellia128>);
-
-impl tpm2::crypto::Update for BsslCmacCamellia128 {
-    fn update(&mut self, data: &[u8]) -> Result<(), CryptoError> {
-        use cmac::Mac as _;
-        self.0.update(data);
-        Ok(())
-    }
-}
-
-impl tpm2::crypto::Finalize<16> for BsslCmacCamellia128 {
-    fn finalize(self, out: &mut [u8; 16]) -> Result<(), CryptoError> {
-        use cmac::Mac as _;
-        let res = self.0.finalize().into_bytes();
-        out.copy_from_slice(&res);
-        Ok(())
-    }
-}
-
-/// Camellia-192-CMAC context wrapper for `BsslCryptoProvider`.
-///
-/// BoringSSL is built without Camellia (`OPENSSL_NO_CAMELLIA`), so this is a
-/// fallback on the RustCrypto `cmac` and `camellia` crates.
-pub struct BsslCmacCamellia192(cmac::Cmac<camellia::Camellia192>);
-
-impl tpm2::crypto::Update for BsslCmacCamellia192 {
-    fn update(&mut self, data: &[u8]) -> Result<(), CryptoError> {
-        use cmac::Mac as _;
-        self.0.update(data);
-        Ok(())
-    }
-}
-
-impl tpm2::crypto::Finalize<16> for BsslCmacCamellia192 {
-    fn finalize(self, out: &mut [u8; 16]) -> Result<(), CryptoError> {
-        use cmac::Mac as _;
-        let res = self.0.finalize().into_bytes();
-        out.copy_from_slice(&res);
-        Ok(())
-    }
-}
-
-/// Camellia-256-CMAC context wrapper for `BsslCryptoProvider`.
-///
-/// BoringSSL is built without Camellia (`OPENSSL_NO_CAMELLIA`), so this is a
-/// fallback on the RustCrypto `cmac` and `camellia` crates.
-pub struct BsslCmacCamellia256(cmac::Cmac<camellia::Camellia256>);
-
-impl tpm2::crypto::Update for BsslCmacCamellia256 {
-    fn update(&mut self, data: &[u8]) -> Result<(), CryptoError> {
-        use cmac::Mac as _;
-        self.0.update(data);
-        Ok(())
-    }
-}
-
-impl tpm2::crypto::Finalize<16> for BsslCmacCamellia256 {
-    fn finalize(self, out: &mut [u8; 16]) -> Result<(), CryptoError> {
-        use cmac::Mac as _;
-        let res = self.0.finalize().into_bytes();
-        out.copy_from_slice(&res);
-        Ok(())
-    }
-}
-
-impl tpm2::crypto::Cmac for BsslCryptoProvider {
-    type Aes128Context = BsslCmacAes128;
-    fn aes128(&self, key: &[u8; 16]) -> Result<Self::Aes128Context, CryptoError> {
-        crate::bssl::CmacAes128::new(key)
-            .map(BsslCmacAes128)
-            .map_err(Into::into)
-    }
-
-    type Aes192Context = BsslCmacAes192;
-    fn aes192(&self, key: &[u8; 24]) -> Result<Self::Aes192Context, CryptoError> {
-        crate::bssl::CmacAes192::new(key)
-            .map(BsslCmacAes192)
-            .map_err(Into::into)
-    }
-
-    type Aes256Context = BsslCmacAes256;
-    fn aes256(&self, key: &[u8; 32]) -> Result<Self::Aes256Context, CryptoError> {
-        crate::bssl::CmacAes256::new(key)
-            .map(BsslCmacAes256)
-            .map_err(Into::into)
-    }
-
-    type Sm4_128Context = !;
-
-    type Camellia128Context = BsslCmacCamellia128;
-    fn camellia128(&self, key: &[u8; 16]) -> Result<Self::Camellia128Context, CryptoError> {
-        use cmac::Mac as _;
-        // The key array always has the cipher's key length, so this cannot
-        // fail; if it did, that would be an internal error.
-        cmac::Cmac::<camellia::Camellia128>::new_from_slice(key)
-            .map(BsslCmacCamellia128)
-            .map_err(|_| CryptoError::Internal)
-    }
-
-    type Camellia192Context = BsslCmacCamellia192;
-    fn camellia192(&self, key: &[u8; 24]) -> Result<Self::Camellia192Context, CryptoError> {
-        use cmac::Mac as _;
-        // The key array always has the cipher's key length, so this cannot
-        // fail; if it did, that would be an internal error.
-        cmac::Cmac::<camellia::Camellia192>::new_from_slice(key)
-            .map(BsslCmacCamellia192)
-            .map_err(|_| CryptoError::Internal)
-    }
-
-    type Camellia256Context = BsslCmacCamellia256;
-    fn camellia256(&self, key: &[u8; 32]) -> Result<Self::Camellia256Context, CryptoError> {
-        use cmac::Mac as _;
-        // The key array always has the cipher's key length, so this cannot
-        // fail; if it did, that would be an internal error.
-        cmac::Cmac::<camellia::Camellia256>::new_from_slice(key)
-            .map(BsslCmacCamellia256)
-            .map_err(|_| CryptoError::Internal)
-    }
+/// AES-CMAC with BoringSSL. BoringSSL is built without Camellia (`OPENSSL_NO_CAMELLIA`), so
+/// Camellia-CMAC falls back to the RustCrypto `cmac` and `camellia` crates (the CMAC states
+/// of `tpm2-crypto-rust`). SM4 is not supported (`!`).
+impl Cmac for BsslCryptoProvider {
+    type Aes128 = BsslCmacAes128;
+    type Aes192 = BsslCmacAes192;
+    type Aes256 = BsslCmacAes256;
+    type Sm4_128 = !;
+    type Camellia128 = <RustCryptoProvider as Cmac>::Camellia128;
+    type Camellia192 = <RustCryptoProvider as Cmac>::Camellia192;
+    type Camellia256 = <RustCryptoProvider as Cmac>::Camellia256;
 }

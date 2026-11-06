@@ -299,7 +299,8 @@ fn decrypt_with_null_symmetric_rejected() {
         primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
 
     let err = match execute_with_hmac_sessions(&mut sim, &create_cmd, &[], &mut [session], &[&[]]) {
@@ -668,7 +669,8 @@ fn user_auth_sizes_across_cfb_blocks() {
             primary_handle: Handle::RH_OWNER,
             in_sensitive,
             in_public,
-            ..Default::default()
+            outside_info: Default::default(),
+            creation_pcr: Default::default(),
         };
 
         let create_rsp_handles =
@@ -706,7 +708,7 @@ fn verify_signature_decrypt_uses_empty_auth() {
         key_handle,
         digest,
         in_scheme: None,
-        validation: tpm2::TpmtTkHashcheck::default(),
+        validation: tpm2::TpmtTkHashcheck::new(tpm2::Handle::RH_NULL, tpm2::Tpm2bDigest::default()),
     };
     let mut resp_buffer = [0u8; 4096];
     let sign_rsp = execute_sign(&mut sim, &sign_cmd, 1, key_auth, &mut resp_buffer)
@@ -801,7 +803,8 @@ fn wrong_session_key_returns_bad_auth() {
         primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
 
     let err = match execute_with_hmac_sessions(&mut sim, &create_cmd, &[], &mut [session], &[&[]]) {

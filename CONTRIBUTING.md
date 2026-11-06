@@ -76,7 +76,7 @@ Licensed under the [CC-BY 4.0 License].
 [Security Policy]: https://github.com/tpm-rs/governance/blob/main/project-docs/SECURITY.md
 [TPM-RS Charter]: https://github.com/tpm-rs/governance/blob/main/project-docs/CHARTER.md
 [Trademark Policy]: https://github.com/tpm-rs/governance/blob/main/project-docs/TRADEMARKS.md
-[Repo's license]: ./LICENSE.md
+[Repo's license]: ./LICENSE
 [security-tpm-rs@trustedcomputinggroup.org]: mailto:security-tpm-rs@trustedcomputinggroup.org
 [Trusted Computing Group]: https://github.com/TrustedComputingGroup
 [TPM Library Specification]: https://trustedcomputinggroup.org/tpm-library-specification/

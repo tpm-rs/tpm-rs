@@ -3,6 +3,7 @@
 //! Values for the various EK Policies and Templates are specified in:
 //! TCG EK Credential Profile For TPM Family 2.0; Level 0, Version 2.7
 
+use crate::_common::ClientCrypto;
 use crate::test_utils::*;
 use testing::tpm::Tpm;
 use tpm2::commands::{Create, CreatePrimary, PolicySecret};
@@ -439,13 +440,11 @@ fn start_session(
                         ek_public.as_affine(),
                     );
                     let mut derived = [0u8; 32];
-                    tpm2::crypto::kdf::kdfe_bits(
-                        CLIENT_CRYPTO,
+                    tpm2::crypto::kdfe_bits::<ClientCrypto>(
                         TpmiAlgHash::Sha256,
                         shared.raw_secret_bytes(),
                         b"SECRET",
-                        &eph_xy[1..33],
-                        &ek_xy[1..33],
+                        (&eph_xy[1..33], &ek_xy[1..33]),
                         256,
                         &mut derived,
                     )
@@ -475,7 +474,6 @@ fn start_session(
         let bits = (hash_size_any(auth_hash) * 8) as u32;
         let mut derived = vec![0u8; bits as usize / 8];
         kdfa_by_alg(
-            CLIENT_CRYPTO,
             auth_hash,
             &salt_value,
             b"ATH",

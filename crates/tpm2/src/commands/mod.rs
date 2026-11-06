@@ -112,38 +112,6 @@
 //! includes `TPM_ALG_CMAC` with the `cmac` feature). A TPM implements either the
 //! `HMAC` or the `MAC` form; their responses have the same layout.
 //!
-//! ### Commands needing additional types
-//!
-//! Upstream `tpm-rs` plans to add the following commands once the necessary
-//! prerequisite types and `impl`s have been added. They are defined here,
-//! using these types:
-//!
-//! - `TPMT_RSA_DECRYPT+` ([`Option<TpmtRsaDecrypt>`](crate::TpmtRsaDecrypt))
-//!   - [`RSAEncrypt`]
-//!   - [`RSADecrypt`]
-//! - `TPMI_ECC_KEY_EXCHANGE` ([`TpmiEccKeyExchange`](crate::TpmiEccKeyExchange))
-//!   - [`ZGen2Phase`]
-//! - [`Marshal`]/[`Unmarshal`](crate::Unmarshal) `impl`s for [`Option<TpmtHa<'a>>`](crate::TpmtHa)
-//!   - [`FieldUpgradeData`]
-//! - NV Expanded Attributes with `TPM2B_NV_PUBLIC_2` / `TPMT_NV_PUBLIC_2`
-//!   ([`Tpm2bNvPublic2`](crate::Tpm2bNvPublic2))
-//!   - [`NVDefineSpace2`]
-//!   - [`NVReadPublic2`]
-//! - KEM commands with `TPM2B_SHARED_SECRET` and `TPM2B_KEM_CIPHERTEXT`
-//!   ([`Tpm2bSharedSecret`](crate::Tpm2bSharedSecret),
-//!   [`Tpm2bKemCiphertext`](crate::Tpm2bKemCiphertext))
-//!   - [`Encapsulate`]
-//!   - [`Decapsulate`]
-//! - Signing commands with `TPM2B_SIGNATURE_HINT` and `TPM2B_SIGNATURE_CTX`
-//!   ([`Tpm2bSignatureHint`](crate::Tpm2bSignatureHint),
-//!   [`Tpm2bSignatureCtx`](crate::Tpm2bSignatureCtx))
-//!   - [`SignDigest`]
-//!   - [`VerifyDigestSignature`]
-//!   - [`SignSequenceStart`]
-//!   - [`VerifySequenceStart`]
-//!
-//! This module comment will be updated as we add new commands.
-//!
 //! ## [`Message`] / [`UnmarshalMessage`] implementations
 //!
 //! Currently, these traits are implemented manually (and repetitively) for all

@@ -246,7 +246,8 @@ fn creation_ticket_hierarchies() {
         primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     let owner_rsp = execute_with_password_sessions(&mut sim, &create_cmd, 1, &[]).unwrap();
 
@@ -667,7 +668,7 @@ fn verified_ticket_policy_authorize() {
         key_handle: null_signer,
         digest: digest_to_sign,
         in_scheme: None,
-        validation: TpmtTkHashcheck::default(),
+        validation: TpmtTkHashcheck::new(Handle::RH_NULL, Tpm2bDigest::default()),
     };
     let mut resp_buf = [0u8; 4096];
     let sign_null_rsp = execute_sign(
@@ -757,7 +758,7 @@ fn verified_ticket_policy_authorize() {
         key_handle: owner_signer,
         digest: a_hash,
         in_scheme: None,
-        validation: TpmtTkHashcheck::default(),
+        validation: TpmtTkHashcheck::new(Handle::RH_NULL, Tpm2bDigest::default()),
     };
     let mut resp_buf_auth = [0u8; 4096];
     let sign_auth_rsp = execute_sign(

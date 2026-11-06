@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#[cfg(feature = "eddsa")]
+#[cfg(all(feature = "eddsa", feature = "hash_eddsa"))]
 #[allow(deprecated)] // TPM2_Sign and TPM2_VerifySignature are deprecated.
 use tpm2::commands::{PolicySigned, Sign, VerifySignature};
 use tpm2::errors::UnmarshalError;
@@ -255,6 +255,7 @@ fn test_tpmt_rsa_decrypt_marshal_unmarshal() {
         Err(UnmarshalError::VALUE)
     );
 
+    #[cfg(any(feature = "rsaes", feature = "rsa"))]
     let mut dst_non_opt = [0u8; TpmtRsaDecrypt::MAX_SIZE];
 
     #[cfg(feature = "rsaes")]
@@ -279,7 +280,7 @@ fn test_tpmt_rsa_decrypt_marshal_unmarshal() {
         assert!(src.is_empty());
     }
 
-    #[cfg(feature = "oaep")]
+    #[cfg(feature = "rsa")]
     {
         // Valid: Alg::OAEP with SHA256
         let oaep_val = TpmtRsaDecrypt::Oaep(TpmiAlgHash::Sha256);
@@ -325,7 +326,7 @@ fn test_tpmt_rsa_decrypt_marshal_unmarshal() {
         );
     }
 
-    #[cfg(feature = "oaep")]
+    #[cfg(feature = "rsa")]
     {
         // OAEP with invalid hash alg (e.g. Alg::NULL) returns UnmarshalError::HASH
         let mut buf = [0u8; 4];
@@ -345,7 +346,7 @@ fn test_tpmt_rsa_decrypt_marshal_unmarshal() {
 }
 
 #[test]
-#[cfg(feature = "eddsa")]
+#[cfg(all(feature = "eddsa", feature = "hash_eddsa"))]
 #[allow(deprecated)] // TPM2_Sign and TPM2_VerifySignature are deprecated.
 fn test_eddsa_schemes_and_signatures() {
     // 1. TpmtSigScheme::Eddsa and TpmtSigScheme::HashEddsa
@@ -539,10 +540,10 @@ fn test_pqc_tpmi_mldsa_mlkem_parms_and_alg_public() {
         let mut src = &dst[..];
         assert_eq!(TpmiMlkemParms::unmarshal(&mut src), Ok(expected));
         assert!(src.is_empty());
-        assert_eq!(expected.public_key_bytes(), pub_bytes);
-        assert_eq!(expected.private_key_bytes(), 64);
-        assert_eq!(expected.ciphertext_bytes(), ct_bytes);
-        assert_eq!(expected.shared_secret_bytes(), 32);
+        assert_eq!(expected.pub_key_bytes(), pub_bytes);
+        assert_eq!(TpmiMlkemParms::PRIV_KEY_BYTES, 64);
+        assert_eq!(expected.ct_bytes(), ct_bytes);
+        assert_eq!(TpmiMlkemParms::SHARED_SECRET_BYTES, 32);
     }
     for invalid in [0x0000u16, 0x0004, 0x0010, 0xFFFF] {
         let bytes = invalid.to_be_bytes();
@@ -566,9 +567,9 @@ fn test_pqc_tpmi_mldsa_mlkem_parms_and_alg_public() {
         let mut src = &dst[..];
         assert_eq!(TpmiMldsaParms::unmarshal(&mut src), Ok(expected));
         assert!(src.is_empty());
-        assert_eq!(expected.public_key_bytes(), pub_bytes);
-        assert_eq!(expected.private_key_bytes(), 32);
-        assert_eq!(expected.signature_bytes(), sig_bytes);
+        assert_eq!(expected.pub_key_bytes(), pub_bytes);
+        assert_eq!(TpmiMldsaParms::PRIV_KEY_BYTES, 32);
+        assert_eq!(expected.sig_bytes(), sig_bytes);
     }
     for invalid in [0x0000u16, 0x0004, 0x0010, 0xFFFF] {
         let bytes = invalid.to_be_bytes();
@@ -765,7 +766,7 @@ fn test_pqc_tpmt_public_parms_public_and_sensitive_roundtrip() {
     }
 }
 
-#[cfg(feature = "ecc_curve_nist_p256")]
+#[cfg(feature = "nist_p256")]
 #[test]
 fn test_tpmt_public_unmarshal_for_template_derivation_rejects_trailing_bytes_and_preserves_context()
 {
@@ -845,6 +846,7 @@ fn test_tpmt_public_unmarshal_for_template_derivation_rejects_trailing_bytes_and
 /// `TpmtSignature::hash_alg` is the hash of RSA/ECC signatures and the HMAC's hash, and `None`
 /// for EdDSA signatures, which carry no hash.
 #[test]
+#[cfg(feature = "sha512")]
 fn signature_hash_alg() {
     let rsa = TpmsSignatureRsa {
         hash: TpmiAlgHash::Sha384,

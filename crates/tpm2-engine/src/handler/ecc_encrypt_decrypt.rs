@@ -11,7 +11,7 @@ use crate::timer::TpmTimer;
 use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
 #[allow(unused_imports)]
 use tpm2::TpmCc;
-use tpm2::crypto::{CryptoProvider, Rng};
+use tpm2::crypto::{Crypto, Rng};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{TpmiAlgHash, TpmtKdfScheme};
 
@@ -46,7 +46,7 @@ fn kdf2_hash(scheme: Option<TpmtKdfScheme>) -> Result<TpmiAlgHash, TpmRc> {
     }
 }
 
-impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
+impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     CommandHandler<'a, 'b, C, S, T, R>
 {
     /// KDF2 (ISO/IEC 18033-2, the references' `CryptMGF_KDF()` with the counter starting at 1):
@@ -113,16 +113,14 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         #[cfg(not(feature = "reference-rng"))]
         let k_len = {
             self.do_self_test(tpm2::Alg::ECDH)?;
-            self.crypto()
-                .generate_key(
-                    tpm2::Alg::ECC,
-                    Some(tpm2::crypto::asymmetric::KeyParams::Ecc(curve)),
-                    &mut c1,
-                    &mut k,
-                    None,
-                )
-                .map_err(|_| TpmRc::NO_RESULT)?
-                .1
+            super::ecdh::generate_ecc_key_pair::<C>(
+                &mut self.context.crypto_rng,
+                curve,
+                &mut k,
+                &mut c1,
+            )
+            .map_err(|_| TpmRc::NO_RESULT)?
+            .1
         };
 
         // 3. P2 := (x2, y2) := [k]P_B.
@@ -225,7 +223,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             .to_struct()
             .is_ok_and(|p| pad_point(&p, size, &mut c1))
             && matches!(
-                self.crypto().validate_point(curve, &c1[..2 * size]),
+                crate::ecc_curves::validate_point::<C>(curve, &c1[..2 * size]),
                 Ok(true)
             );
         if !on_curve {

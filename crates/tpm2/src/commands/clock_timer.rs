@@ -113,7 +113,7 @@ impl<'a> UnmarshalMessage<'a> for ClockSet {
 /// [TPM2.0 1.83] 29.3 TPM2_ClockRateAdjust (Command)
 #[doc(alias = "TPM2_ClockRateAdjust")]
 #[doc(alias = "ClockRateAdjust_In")]
-#[derive(Clone, Copy, PartialEq, Debug, Default, Eq)]
+#[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct ClockRateAdjust {
     pub auth: Handle,
     pub rate_adjust: TpmClockAdjust,

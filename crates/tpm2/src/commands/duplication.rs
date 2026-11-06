@@ -174,7 +174,7 @@ impl<'a> UnmarshalMessage<'a> for RewrapRsp<'a> {
 /// [TPM2.0 1.83] 13.3 TPM2_Import (Command)
 #[doc(alias = "TPM2_Import")]
 #[doc(alias = "Import_In")]
-#[derive(Clone, Copy, PartialEq, Debug, Default, Eq)]
+#[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct Import<'a> {
     pub parent_handle: Handle,
     pub encryption_key: Tpm2bData<'a>,

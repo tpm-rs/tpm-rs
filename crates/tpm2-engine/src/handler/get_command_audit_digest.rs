@@ -9,11 +9,11 @@ use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
 use crate::{handler::CommandHandler, owned::OwnedDigest, req_resp::RequestThenResponse};
 use tpm2::commands::GetCommandAuditDigest;
-use tpm2::crypto::{CryptoProvider, Rng};
+use tpm2::crypto::{Crypto, Rng};
 use tpm2::{Alg, Handle, TpmGenerated};
 use tpm2::{TpmsAttest, TpmsCommandAuditInfo, TpmuAttest};
 
-impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
+impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     CommandHandler<'a, 'b, C, S, T, R>
 {
     /// Handles the [TpmCc::GetCommandAuditDigest] (`0x133`) command.

@@ -14,7 +14,7 @@
 #[allow(unused_imports)]
 use tpm2::TpmCc;
 use tpm2::commands::{VendorTcgTest, responses};
-use tpm2::crypto::{CryptoProvider, Rng};
+use tpm2::crypto::{Crypto, Rng};
 use tpm2::errors::TpmRc;
 
 use crate::storage::NvStorage;
@@ -56,7 +56,7 @@ pub const NTC2_INITIAL_CONFIG: Ntc2CfgStruct = Ntc2CfgStruct {
     is_locked: NTC2_CLEAR,
 };
 
-impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
+impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     CommandHandler<'a, 'b, C, S, T, R>
 {
     /// Handles the [TpmCc::VendorTcgTest] (`0x20000000`) command.

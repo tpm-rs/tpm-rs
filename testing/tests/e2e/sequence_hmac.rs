@@ -316,7 +316,7 @@ fn persistent_hmac_key_starts_sequence() {
         key_handle: persistent_handle,
         digest: Tpm2bDigest::from_bytes(&[0; 32]).unwrap(),
         in_scheme: Some(TpmtSigScheme::Ecdsa(TpmiAlgHash::Sha256)),
-        validation: TpmtTkHashcheck::default(),
+        validation: TpmtTkHashcheck::new(Handle::RH_NULL, Tpm2bDigest::default()),
     };
     let res = execute_tpm_command(&mut sim, &sign_cmd, &key_auths);
     // CryptSelectSignScheme: an ECDSA inScheme doesn't match the key's HMAC scheme ->

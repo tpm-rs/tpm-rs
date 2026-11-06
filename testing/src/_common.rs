@@ -1,7 +1,7 @@
 //! Shared helpers for the end-to-end tests in `testing/tests/`.
 //!
 //! This module collects every reusable, non-test item used by the black-box
-//! E2E tests: client-side crypto ([`CLIENT_CRYPTO`], [`client_rng`]), command
+//! E2E tests: client-side crypto ([`ClientCrypto`], [`client_rng`]), command
 //! execution with password/HMAC sessions, raw command builders, object
 //! templates, reference computations and assorted constants. It is also
 //! re-exported as `testing::test_utils` (used by the Go parity tests in `tests/go/`).
@@ -9,7 +9,7 @@
 //! Tests treat the TPM as a black box: every helper talks to it only through
 //! the command interface of [`Tpm`] (which, with the `differential` feature,
 //! mirrors every interaction to the C reference TPM). Client-side randomness
-//! comes from [`client_rng`] / [`CLIENT_CRYPTO`] (OS entropy), and sleeps must
+//! comes from [`client_rng`] / [`ClientCrypto`] (OS entropy), and sleeps must
 //! go through [`sleep`], which advances the TPMs' virtual clocks (keeping the
 //! C reference TPM, whose randomness depends on its clock, in lockstep).
 
@@ -22,8 +22,10 @@ use tpm2::commands::{
 use tpm2::{Handle, TpmCc, TpmEccCurve, TpmSe, TpmSt};
 use tpm2::{Marshal, Unmarshal};
 
-use tpm2::crypto::kdf::kdfa_bits;
-use tpm2::crypto::{CryptoError, CryptoProvider, Direction, ModeIv, Symmetric, SymmetricKey};
+use tpm2::crypto::{
+    CipherInput, CryptoError, Direction, EccPrivateKey, EccPublicKey, HashContext,
+    MAX_ECC_COORD_BYTES, Random, RsaEncryptScheme, RsaPublicKey, SymmetricKey, kdfa_bits,
+};
 
 use tpm2::Tpm2b;
 use tpm2::{
@@ -143,9 +145,6 @@ use tpm2::commands::Unseal;
 #[allow(deprecated)]
 use tpm2::commands::VerifySignature;
 use tpm2::commands::*;
-use tpm2::crypto::Asymmetric;
-use tpm2::crypto::HashStream;
-use tpm2::crypto::asymmetric::KeyParams;
 use tpm2::errors::Fmt1;
 use tpm2::errors::Position;
 use tpm2::errors::TpmRc;
@@ -206,27 +205,28 @@ pub fn make_derive_template(
     Tpm2bTemplate::from_bytes(leak_bytes(&bytes)).unwrap()
 }
 
-/// Crypto provider used by the *client* side of the tests (HMAC/KDF/nonce
+/// Crypto backend used by the *client* side of the tests (HMAC/KDF/nonce
 /// generation, parameter encryption, expected-value computation, ...).
 ///
 /// Tests treat the simulator as a black box, so they never borrow the TPM's
-/// own crypto provider; instead they use this independent instance.
-pub const CLIENT_CRYPTO: &PlatformCryptoProvider = &PlatformCryptoProvider;
+/// own crypto; instead they call this backend directly (e.g.
+/// `tpm2::crypto::hash::<ClientCrypto>(..)`).
+pub type ClientCrypto = PlatformCryptoProvider;
 
 /// Fills `dest` with client-side random bytes (nonces, salts, keys, test
 /// data).
 ///
-/// By default the bytes come from the OS through [`CLIENT_CRYPTO`]
+/// By default the bytes come from the OS through [`ClientCrypto`]
 /// (BoringSSL's `RAND_bytes`), so they differ between runs. When a test run is
 /// reproduced with [`crate::seed::SEED_ENV`] set, they instead come from a
 /// per-thread [`rand::rngs::StdRng`] seeded from that seed and the name of the
 /// test thread, so the commands a test sends (and hence, with the TPM's own
-/// randomness fixed by the same seed, the responses) repeat exactly. Client
-/// randomness drawn inside BoringSSL itself (e.g. client-side signatures)
-/// stays OS-random; tests whose TPM-visible inputs depend on it are not fully
-/// reproducible.
+/// randomness fixed by the same seed, the responses) repeat exactly (as does
+/// [`client_crypto_rng`], seeded from it). Client randomness drawn from the OS
+/// by other libraries (e.g. the `rsa` crate) stays OS-random; tests whose
+/// TPM-visible inputs depend on it are not fully reproducible.
 ///
-/// Returns the [`CryptoError`] of [`CLIENT_CRYPTO`] on failure (only possible
+/// Returns the [`CryptoError`] of [`ClientCrypto`] on failure (only possible
 /// on the OS path).
 pub fn client_random(dest: &mut [u8]) -> Result<(), CryptoError> {
     use rand::{RngCore, SeedableRng};
@@ -251,7 +251,7 @@ pub fn client_random(dest: &mut [u8]) -> Result<(), CryptoError> {
     if seeded {
         Ok(())
     } else {
-        CLIENT_CRYPTO.get_random(dest)
+        ClientCrypto::rand_bytes(dest)
     }
 }
 
@@ -269,6 +269,17 @@ pub struct ClientRng;
 /// Returns the client-side random number generator (see [`ClientRng`]).
 pub fn client_rng() -> ClientRng {
     ClientRng
+}
+
+/// Returns a random number generator of the client crypto backend ([`ClientCrypto`]), for the
+/// randomized client-side operations of `tpm2::crypto` (key generation, signing, encryption).
+///
+/// It is seeded with 32 bytes of [`client_random`], so it is reproducible like the rest of the
+/// client randomness when a run is reproduced with [`crate::seed::SEED_ENV`].
+pub fn client_crypto_rng() -> <ClientCrypto as Random>::Rng {
+    let mut seed = [0u8; 32];
+    client_random(&mut seed).expect("client RNG failure");
+    ClientCrypto::from_seed(&seed).expect("client crypto RNG")
 }
 
 impl rand::RngCore for ClientRng {
@@ -776,7 +787,7 @@ pub fn create_test_keys() -> (Tpm2bSensitiveCreate<'static>, Tpm2bTemplate<'stat
     let rsa_parms = TpmsRsaParms {
         symmetric: None,
         scheme: Some(TpmtRsaScheme::Rsassa(TpmiAlgHash::Sha256)),
-        key_bits: TpmiRsaKeyBits(2048),
+        key_bits: TpmiRsaKeyBits::Rsa2048,
         exponent: 0,
     };
     let pubkey = Tpm2bPublicKeyRsa::default();
@@ -841,9 +852,8 @@ impl ActiveSession {
     }
 }
 
-/// Runs `KDFa` with SHA-256 using the given crypto provider, writing `bits` of output to `out`.
+/// Runs `KDFa` with SHA-256 using the client crypto, writing `bits` of output to `out`.
 fn kdfa_sha256(
-    crypto: &PlatformCryptoProvider,
     key: &[u8],
     label: &[u8],
     context_u: &[u8],
@@ -851,26 +861,20 @@ fn kdfa_sha256(
     bits: u32,
     out: &mut [u8],
 ) {
-    kdfa_bits(
-        crypto,
+    kdfa_bits::<ClientCrypto>(
         TpmiAlgHash::Sha256,
         key,
         label,
-        context_u,
-        context_v,
+        (context_u, context_v),
         bits,
         out,
     )
     .unwrap();
 }
 
-/// Hashes the concatenation of `updates` with `auth_hash` using the given client-side provider.
-fn compute_client_hash(
-    crypto: &PlatformCryptoProvider,
-    auth_hash: TpmiAlgHash,
-    updates: &[&[u8]],
-) -> Vec<u8> {
-    let mut state = tpm2::crypto::HashStream::new(crypto, auth_hash).unwrap();
+/// Hashes the concatenation of `updates` with `auth_hash` using the client crypto.
+fn compute_client_hash(auth_hash: TpmiAlgHash, updates: &[&[u8]]) -> Vec<u8> {
+    let mut state = tpm2::crypto::HashContext::<ClientCrypto>::new(auth_hash).unwrap();
     for data in updates {
         state.update(data).unwrap();
     }
@@ -878,15 +882,9 @@ fn compute_client_hash(
     state.finalize(&mut out).unwrap().digest().to_vec()
 }
 
-/// HMACs the concatenation of `updates` with `auth_hash` under `key` using the given client-side
-/// provider.
-fn compute_client_hmac(
-    crypto: &PlatformCryptoProvider,
-    auth_hash: TpmiAlgHash,
-    key: &[u8],
-    updates: &[&[u8]],
-) -> Vec<u8> {
-    let mut state = tpm2::crypto::HmacStream::new(crypto, auth_hash, key).unwrap();
+/// HMACs the concatenation of `updates` with `auth_hash` under `key` using the client crypto.
+fn compute_client_hmac(auth_hash: TpmiAlgHash, key: &[u8], updates: &[&[u8]]) -> Vec<u8> {
+    let mut state = tpm2::crypto::HmacContext::<ClientCrypto>::new(auth_hash, key).unwrap();
     for data in updates {
         state.update(data).unwrap();
     }
@@ -954,7 +952,6 @@ pub fn start_auth_session(
         let mut derived = vec![0u8; (session_key_bits.div_ceil(8)) as usize];
 
         kdfa_by_alg(
-            CLIENT_CRYPTO,
             auth_hash,
             &key,
             b"ATH",
@@ -1222,7 +1219,6 @@ where
             };
             let key = session_hmac_key(session, entity_auth, include_auths[idx]);
             kdfa_by_alg(
-                CLIENT_CRYPTO,
                 session.auth_hash,
                 &key,
                 b"CFB",
@@ -1236,7 +1232,6 @@ where
             let mut iv = sym_key_bytes[key_size..key_size + 16].to_vec();
             let sym_alg = session_cfb_alg(&session.symmetric);
             sym_encrypt(
-                CLIENT_CRYPTO,
                 sym_alg,
                 &sym_key_bytes[0..key_size],
                 &mut iv,
@@ -1261,7 +1256,7 @@ where
         let param_bytes = &param_buf[..param_len];
         cp_hash_updates.push(param_bytes);
 
-        let cp_hash = compute_client_hash(CLIENT_CRYPTO, auth_hash, &cp_hash_updates);
+        let cp_hash = compute_client_hash(auth_hash, &cp_hash_updates);
 
         let nonce_caller_new = &nonce_callers_new[i];
         let entity_auth = if i < num_handles
@@ -1295,7 +1290,7 @@ where
         let attr_byte = [session.attributes.bits()];
         hmac_updates.push(&attr_byte);
 
-        let hmac_bytes = compute_client_hmac(CLIENT_CRYPTO, auth_hash, &hmac_key, &hmac_updates);
+        let hmac_bytes = compute_client_hmac(auth_hash, &hmac_key, &hmac_updates);
         let hmac_val = Tpm2bAuth::from_bytes(&hmac_bytes).unwrap();
 
         let auth_cmd = TpmsAuthCommand {
@@ -1389,7 +1384,6 @@ where
             };
             let key = session_hmac_key(session, entity_auth, include_auths[idx]);
             kdfa_by_alg(
-                CLIENT_CRYPTO,
                 session.auth_hash,
                 &key,
                 b"CFB",
@@ -1403,7 +1397,6 @@ where
             let mut iv = sym_key_bytes[key_size..key_size + 16].to_vec();
             let sym_alg = session_cfb_alg(&session.symmetric);
             sym_decrypt(
-                CLIENT_CRYPTO,
                 sym_alg,
                 &sym_key_bytes[0..key_size],
                 &mut iv,
@@ -1424,7 +1417,7 @@ where
         rp_hash_updates.push(cmd_code_bytes.as_slice());
         rp_hash_updates.push(encrypted_param_buf);
 
-        let rp_hash = compute_client_hash(CLIENT_CRYPTO, auth_hash, &rp_hash_updates);
+        let rp_hash = compute_client_hash(auth_hash, &rp_hash_updates);
 
         let nonce_tpm_new = &nonce_tpms_new[i];
         let nonce_caller_new = &nonce_callers_new[i];
@@ -1445,7 +1438,7 @@ where
         let attr_byte = [resp_attributes[i].bits()];
         hmac_updates.push(&attr_byte);
 
-        let hmac_bytes = compute_client_hmac(CLIENT_CRYPTO, auth_hash, &hmac_key, &hmac_updates);
+        let hmac_bytes = compute_client_hmac(auth_hash, &hmac_key, &hmac_updates);
         assert_eq!(
             hmac_bytes.as_slice(),
             resp_hmacs[i].get_buffer(),
@@ -1640,7 +1633,6 @@ where
                 session.session_key.clone()
             };
             kdfa_by_alg(
-                CLIENT_CRYPTO,
                 session.auth_hash,
                 &key,
                 b"CFB",
@@ -1654,7 +1646,6 @@ where
             let mut iv = sym_key_bytes[key_size..key_size + 16].to_vec();
             let sym_alg = session_cfb_alg(&session.symmetric);
             sym_encrypt(
-                CLIENT_CRYPTO,
                 sym_alg,
                 &sym_key_bytes[0..key_size],
                 &mut iv,
@@ -1679,7 +1670,7 @@ where
         let param_bytes = &param_buf[..param_len];
         cp_hash_updates.push(param_bytes);
 
-        let cp_hash = compute_client_hash(CLIENT_CRYPTO, auth_hash, &cp_hash_updates);
+        let cp_hash = compute_client_hash(auth_hash, &cp_hash_updates);
 
         let nonce_caller_new = &nonce_callers_new[i];
         let entity_auth = if i < num_handles {
@@ -1731,7 +1722,7 @@ where
         let attr_byte = [session.attributes.bits()];
         hmac_updates.push(&attr_byte);
 
-        let hmac_bytes = compute_client_hmac(CLIENT_CRYPTO, auth_hash, &hmac_key, &hmac_updates);
+        let hmac_bytes = compute_client_hmac(auth_hash, &hmac_key, &hmac_updates);
         let hmac_val = Tpm2bAuth::from_bytes(&hmac_bytes).unwrap();
 
         // Mismatch: generate another random 16-byte nonce for wire but keep nonce_caller_new for HMAC
@@ -1833,7 +1824,6 @@ where
                 session.session_key.clone()
             };
             kdfa_by_alg(
-                CLIENT_CRYPTO,
                 session.auth_hash,
                 &key,
                 b"CFB",
@@ -1847,7 +1837,6 @@ where
             let mut iv = sym_key_bytes[key_size..key_size + 16].to_vec();
             let sym_alg = session_cfb_alg(&session.symmetric);
             sym_decrypt(
-                CLIENT_CRYPTO,
                 sym_alg,
                 &sym_key_bytes[0..key_size],
                 &mut iv,
@@ -1868,7 +1857,7 @@ where
         rp_hash_updates.push(cmd_code_bytes.as_slice());
         rp_hash_updates.push(encrypted_param_buf);
 
-        let rp_hash = compute_client_hash(CLIENT_CRYPTO, auth_hash, &rp_hash_updates);
+        let rp_hash = compute_client_hash(auth_hash, &rp_hash_updates);
 
         let nonce_tpm_new = &nonce_tpms_new[i];
         let nonce_caller_new = &nonce_callers_new[i];
@@ -1907,7 +1896,7 @@ where
         let attr_byte = [resp_attributes[i].bits()];
         hmac_updates.push(&attr_byte);
 
-        let hmac_bytes = compute_client_hmac(CLIENT_CRYPTO, auth_hash, &hmac_key, &hmac_updates);
+        let hmac_bytes = compute_client_hmac(auth_hash, &hmac_key, &hmac_updates);
         assert_eq!(
             hmac_bytes.as_slice(),
             resp_hmacs[i].get_buffer(),
@@ -2058,7 +2047,6 @@ where
                 session.session_key.clone()
             };
             kdfa_by_alg(
-                CLIENT_CRYPTO,
                 session.auth_hash,
                 &key,
                 b"CFB",
@@ -2072,7 +2060,6 @@ where
             let mut iv = sym_key_bytes[key_size..key_size + 16].to_vec();
             let sym_alg = session_cfb_alg(&session.symmetric);
             sym_encrypt(
-                CLIENT_CRYPTO,
                 sym_alg,
                 &sym_key_bytes[0..key_size],
                 &mut iv,
@@ -2097,7 +2084,7 @@ where
         let param_bytes = &param_buf[..param_len];
         cp_hash_updates.push(param_bytes);
 
-        let cp_hash = compute_client_hash(CLIENT_CRYPTO, auth_hash, &cp_hash_updates);
+        let cp_hash = compute_client_hash(auth_hash, &cp_hash_updates);
 
         let nonce_caller_new = &nonce_callers_new[i];
         let entity_auth = if i < num_handles {
@@ -2149,7 +2136,7 @@ where
         let attr_byte = [session.attributes.bits()];
         hmac_updates.push(&attr_byte);
 
-        let hmac_bytes = compute_client_hmac(CLIENT_CRYPTO, auth_hash, &hmac_key, &hmac_updates);
+        let hmac_bytes = compute_client_hmac(auth_hash, &hmac_key, &hmac_updates);
         let hmac_val = Tpm2bAuth::from_bytes(&hmac_bytes).unwrap();
 
         let auth_cmd = TpmsAuthCommand {
@@ -2273,7 +2260,6 @@ where
                 session.session_key.clone()
             };
             kdfa_by_alg(
-                CLIENT_CRYPTO,
                 session.auth_hash,
                 &key,
                 b"CFB",
@@ -2287,7 +2273,6 @@ where
             let mut iv = sym_key_bytes[key_size..key_size + 16].to_vec();
             let sym_alg = session_cfb_alg(&session.symmetric);
             sym_decrypt(
-                CLIENT_CRYPTO,
                 sym_alg,
                 &sym_key_bytes[0..key_size],
                 &mut iv,
@@ -2308,7 +2293,7 @@ where
         rp_hash_updates.push(cmd_code_bytes.as_slice());
         rp_hash_updates.push(encrypted_param_buf);
 
-        let rp_hash = compute_client_hash(CLIENT_CRYPTO, auth_hash, &rp_hash_updates);
+        let rp_hash = compute_client_hash(auth_hash, &rp_hash_updates);
 
         let nonce_tpm_new = &nonce_tpms_new[i];
         let nonce_caller_new = &nonce_callers_new[i];
@@ -2361,7 +2346,7 @@ where
         let attr_byte = [resp_attributes[i].bits()];
         hmac_updates.push(&attr_byte);
 
-        let hmac_bytes = compute_client_hmac(CLIENT_CRYPTO, auth_hash, &hmac_key, &hmac_updates);
+        let hmac_bytes = compute_client_hmac(auth_hash, &hmac_key, &hmac_updates);
         assert_eq!(
             hmac_bytes.as_slice(),
             resp_hmacs[i].get_buffer(),
@@ -2408,7 +2393,6 @@ impl PolicyCalculator {
     }
 
     pub fn policy_or(&mut self, p_hash_list: &[Tpm2bDigest]) {
-        let crypto = PlatformCryptoProvider;
         let digest_size = self.policy_digest.len();
         let zero_digest = vec![0u8; digest_size];
 
@@ -2418,7 +2402,6 @@ impl PolicyCalculator {
         }
 
         let new_digest = compute_client_hash(
-            &crypto,
             self.auth_hash,
             &[
                 &zero_digest,
@@ -2430,9 +2413,7 @@ impl PolicyCalculator {
     }
 
     pub fn policy_authorize_nv(&mut self, nv_name: &Tpm2bName) {
-        let crypto = PlatformCryptoProvider;
         let new_digest = compute_client_hash(
-            &crypto,
             self.auth_hash,
             &[
                 &self.policy_digest,
@@ -2444,9 +2425,7 @@ impl PolicyCalculator {
     }
 
     pub fn policy_secret(&mut self, auth_name: &[u8], policy_ref: &[u8]) {
-        let crypto = PlatformCryptoProvider;
         let intermediate = compute_client_hash(
-            &crypto,
             self.auth_hash,
             &[
                 &self.policy_digest,
@@ -2454,15 +2433,12 @@ impl PolicyCalculator {
                 auth_name,
             ],
         );
-        let final_digest =
-            compute_client_hash(&crypto, self.auth_hash, &[&intermediate, policy_ref]);
+        let final_digest = compute_client_hash(self.auth_hash, &[&intermediate, policy_ref]);
         self.policy_digest = final_digest;
     }
 
     pub fn policy_signed(&mut self, auth_name: &[u8], policy_ref: &[u8]) {
-        let crypto = PlatformCryptoProvider;
         let intermediate = compute_client_hash(
-            &crypto,
             self.auth_hash,
             &[
                 &self.policy_digest,
@@ -2470,17 +2446,14 @@ impl PolicyCalculator {
                 auth_name,
             ],
         );
-        let final_digest =
-            compute_client_hash(&crypto, self.auth_hash, &[&intermediate, policy_ref]);
+        let final_digest = compute_client_hash(self.auth_hash, &[&intermediate, policy_ref]);
         self.policy_digest = final_digest;
     }
 
     pub fn policy_pcr(&mut self, pcrs: &tpm2::TpmlPcrSelection, pcr_digest: &[u8]) {
-        let crypto = PlatformCryptoProvider;
         let mut pcrs_buf = [0u8; 1024];
         let pcrs_len = marshal_to_slice(pcrs, &mut pcrs_buf);
         let new_digest = compute_client_hash(
-            &crypto,
             self.auth_hash,
             &[
                 &self.policy_digest,
@@ -2493,9 +2466,7 @@ impl PolicyCalculator {
     }
 
     pub fn policy_cp_hash(&mut self, cp_hash_a: &[u8]) {
-        let crypto = PlatformCryptoProvider;
         let new_digest = compute_client_hash(
-            &crypto,
             self.auth_hash,
             &[
                 &self.policy_digest,
@@ -2507,9 +2478,7 @@ impl PolicyCalculator {
     }
 
     pub fn policy_authorize(&mut self, key_sign: &[u8], policy_ref: &[u8]) {
-        let crypto = PlatformCryptoProvider;
         let intermediate = compute_client_hash(
-            &crypto,
             self.auth_hash,
             &[
                 &self.policy_digest,
@@ -2517,17 +2486,14 @@ impl PolicyCalculator {
                 key_sign,
             ],
         );
-        let final_digest =
-            compute_client_hash(&crypto, self.auth_hash, &[&intermediate, policy_ref]);
+        let final_digest = compute_client_hash(self.auth_hash, &[&intermediate, policy_ref]);
         self.policy_digest = final_digest;
     }
 
     pub fn policy_nv_written(&mut self, written_set: bool) {
-        let crypto = PlatformCryptoProvider;
         let mut written_set_buf = [0u8; 1];
         written_set.marshal(&mut written_set_buf);
         let new_digest = compute_client_hash(
-            &crypto,
             self.auth_hash,
             &[
                 &self.policy_digest,
@@ -2545,16 +2511,13 @@ impl PolicyCalculator {
         operation: tpm2::TpmEo,
         nv_name: &Tpm2bName,
     ) {
-        let crypto = PlatformCryptoProvider;
         let offset_bytes = offset.to_be_bytes();
         let operation_bytes = u16::from(operation).to_be_bytes();
         let args = compute_client_hash(
-            &crypto,
             self.auth_hash,
             &[operand_b, &offset_bytes, &operation_bytes],
         );
         let new_digest = compute_client_hash(
-            &crypto,
             self.auth_hash,
             &[
                 &self.policy_digest,
@@ -2567,9 +2530,7 @@ impl PolicyCalculator {
     }
 
     pub fn policy_auth_value(&mut self) {
-        let crypto = PlatformCryptoProvider;
         let new_digest = compute_client_hash(
-            &crypto,
             self.auth_hash,
             &[
                 &self.policy_digest,
@@ -2585,12 +2546,10 @@ impl PolicyCalculator {
         new_parent_name: &[u8],
         include_object: bool,
     ) {
-        let crypto = PlatformCryptoProvider;
         let mut include_object_buf = [0u8; 1];
         include_object.marshal(&mut include_object_buf);
         let new_digest = if include_object {
             compute_client_hash(
-                &crypto,
                 self.auth_hash,
                 &[
                     &self.policy_digest,
@@ -2602,7 +2561,6 @@ impl PolicyCalculator {
             )
         } else {
             compute_client_hash(
-                &crypto,
                 self.auth_hash,
                 &[
                     &self.policy_digest,
@@ -2620,8 +2578,7 @@ impl PolicyCalculator {
 pub fn nv_name(nv_public: &TpmsNvPublic<'_>) -> Tpm2bName<'static> {
     let mut buf = [0u8; 1024];
     let len = marshal_to_slice(nv_public, &mut buf);
-    let crypto = PlatformCryptoProvider;
-    let digest = compute_client_hash(&crypto, nv_public.name_alg, &[&buf[..len]]);
+    let digest = compute_client_hash(nv_public.name_alg, &[&buf[..len]]);
     let mut name_bytes = [0u8; 66];
     name_bytes[0..2].copy_from_slice(&tpm2::Alg::from(nv_public.name_alg).id().to_be_bytes());
     name_bytes[2..2 + digest.len()].copy_from_slice(&digest);
@@ -2651,7 +2608,7 @@ pub fn rsa_ek_template() -> TpmtPublic<'static> {
                     mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
                 }),
                 scheme: None,
-                key_bits: TpmiRsaKeyBits(2048),
+                key_bits: TpmiRsaKeyBits::Rsa2048,
                 exponent: 0,
             },
             Tpm2bPublicKeyRsa::default(),
@@ -2702,11 +2659,9 @@ pub fn strip_trailing_zeros(auth: &[u8]) -> &[u8] {
     &auth[..len]
 }
 
-/// Runs `KDFa` with hash `auth_hash` using the given provider, writing `bits` of output to `out`;
+/// Runs `KDFa` with hash `auth_hash` using the client crypto, writing `bits` of output to `out`;
 /// panics on failure.
-#[allow(clippy::too_many_arguments)]
 pub fn kdfa_by_alg(
-    crypto: &PlatformCryptoProvider,
     auth_hash: TpmiAlgHash,
     key: &[u8],
     label: &[u8],
@@ -2715,10 +2670,7 @@ pub fn kdfa_by_alg(
     bits: u32,
     out: &mut [u8],
 ) {
-    kdfa_bits(
-        crypto, auth_hash, key, label, context_u, context_v, bits, out,
-    )
-    .unwrap();
+    kdfa_bits::<ClientCrypto>(auth_hash, key, label, (context_u, context_v), bits, out).unwrap();
 }
 
 /// Encrypts or decrypts (`dir`) `data` in place with the symmetric algorithm,
@@ -2726,15 +2678,16 @@ pub fn kdfa_by_alg(
 /// place (`ivOut`, for chaining).
 ///
 /// This is exp's `tpm2::crypto::encrypt_decrypt(s, alg, key, iv, is_decrypt,
-/// data)` on top of the upstream one-shot [`tpm2::crypto::encrypt_decrypt`].
+/// data)` on top of the upstream one-shot [`SymmetricKey::crypt`], with the
+/// client crypto ([`ClientCrypto`]).
 ///
 /// # Errors
 /// * [`CryptoError::Unsupported`] - `alg` has no cipher mode (`mode` is `None`
-///   or CMAC), or `s` does not implement the algorithm/mode.
-/// * [`CryptoError::Internal`] - `key` does not have `alg`'s key size, or `iv`
-///   does not have the length the mode needs (16 bytes, 0 for ECB).
+///   or CMAC), or [`ClientCrypto`] does not implement the algorithm/mode.
+/// * [`CryptoError::Internal`] - `key` does not have `alg`'s key size, `iv`
+///   does not have the length the mode needs (16 bytes, 0 for ECB), or `data`
+///   is not a whole number of blocks in CBC or ECB mode.
 pub fn sym_encrypt_decrypt(
-    s: &impl Symmetric,
     alg: TpmtSymDefObject,
     key: &[u8],
     iv: &mut [u8],
@@ -2745,34 +2698,32 @@ pub fn sym_encrypt_decrypt(
         return Err(CryptoError::Unsupported);
     };
     let key = SymmetricKey::new(alg.alg, key).ok_or(CryptoError::Internal)?;
-    let mode = ModeIv::new(mode, iv).ok_or(CryptoError::Internal)?;
-    tpm2::crypto::encrypt_decrypt(s, key, mode, dir, data)
+    let input = CipherInput::new(mode, iv, data).ok_or(CryptoError::Internal)?;
+    key.crypt::<ClientCrypto>(dir, input)
 }
 
 /// Encrypts `data` in place with `alg` (see [`sym_encrypt_decrypt`]),
 /// updating `iv` in place. Drop-in replacement for exp's
 /// `tpm2::crypto::encrypt(s, alg, key, iv, data)`.
 pub fn sym_encrypt(
-    s: &impl Symmetric,
     alg: TpmtSymDefObject,
     key: &[u8],
     iv: &mut [u8],
     data: &mut [u8],
 ) -> Result<(), CryptoError> {
-    sym_encrypt_decrypt(s, alg, key, iv, Direction::Encrypt, data)
+    sym_encrypt_decrypt(alg, key, iv, Direction::Encrypt, data)
 }
 
 /// Decrypts `data` in place with `alg` (see [`sym_encrypt_decrypt`]),
 /// updating `iv` in place. Drop-in replacement for exp's
 /// `tpm2::crypto::decrypt(s, alg, key, iv, data)`.
 pub fn sym_decrypt(
-    s: &impl Symmetric,
     alg: TpmtSymDefObject,
     key: &[u8],
     iv: &mut [u8],
     data: &mut [u8],
 ) -> Result<(), CryptoError> {
-    sym_encrypt_decrypt(s, alg, key, iv, Direction::Decrypt, data)
+    sym_encrypt_decrypt(alg, key, iv, Direction::Decrypt, data)
 }
 
 /// Whether handle number `handle_index` of command `cc` has an authorization role (USER/ADMIN/
@@ -3710,7 +3661,7 @@ where
 
 /// Computes `HASH(old || new)` with the client-side crypto provider.
 pub fn compute_expected_extend(alg: TpmiAlgHash, old: &[u8], new: &[u8]) -> Vec<u8> {
-    let mut ctx = HashStream::new(CLIENT_CRYPTO, alg).unwrap();
+    let mut ctx = HashContext::<ClientCrypto>::new(alg).unwrap();
     ctx.update(old).unwrap();
     ctx.update(new).unwrap();
     let mut out = [0u8; TpmtHa::MAX_DIGEST_SIZE];
@@ -4261,7 +4212,7 @@ where
 pub fn expected_inner_wrapper_rc(key: &[u8], duplicate: &[u8]) -> u32 {
     let mut data = duplicate.to_vec();
     let mut iv = [0u8; 16];
-    sym_decrypt(CLIENT_CRYPTO, AES128_CFB, key, &mut iv, &mut data).unwrap();
+    sym_decrypt(AES128_CFB, key, &mut iv, &mut data).unwrap();
     let rc = if data.len() < 2 {
         TpmRc::INSUFFICIENT
     } else {
@@ -4536,7 +4487,7 @@ pub fn run_differential_case(
     concatenated.extend_from_slice(final_chunk);
 
     let mut out = [0u8; tpm2::TpmtHa::MAX_DIGEST_SIZE];
-    let expected_digest_bytes = tpm2::crypto::hash(CLIENT_CRYPTO, alg, &concatenated, &mut out)
+    let expected_digest_bytes = tpm2::crypto::hash::<ClientCrypto>(alg, &[&concatenated], &mut out)
         .unwrap()
         .digest()
         .to_vec();
@@ -5519,7 +5470,8 @@ pub fn create_ecc_key_with_auth(sim: &mut Tpm, auth: &[u8]) -> Handle {
         primary_handle: Handle::RH_ENDORSEMENT,
         in_sensitive,
         in_public,
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     let rsp =
         execute_with_password_sessions(sim, &create_cmd, 1, &[]).expect("could not generate key");
@@ -5562,7 +5514,8 @@ pub fn create_primary_key_with_auth(sim: &mut Tpm, auth: &[u8]) -> Handle {
         primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     let create_rsp = execute_with_password_sessions(sim, &create_cmd, 1, &[]).unwrap();
     create_rsp.object_handle
@@ -5577,7 +5530,8 @@ pub fn create_primary_with_auth(sim: &mut Tpm, public: TpmtPublic<'static>, auth
             data: Default::default(),
         }),
         in_public: tpm2::Tpm2b(public),
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     let rsp = execute_with_password_sessions(sim, &cmd, 1, &[])
         .unwrap_or_else(|rc| panic!("TPM2_CreatePrimary failed: {rc:#x}"));
@@ -5599,7 +5553,8 @@ pub fn create_primary_with_auth_and_data(
             data: Tpm2bSensitiveData::from_bytes(data).unwrap(),
         }),
         in_public: Tpm2b(public),
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     let rsp =
         execute_tpm_command_mapping_parse_errors(sim, &cmd, &[pw()]).expect("CreatePrimary failed");
@@ -5621,7 +5576,8 @@ pub fn create_primary_with_auth_in(
             data: Tpm2bSensitiveData::default(),
         }),
         in_public: Tpm2b(public),
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     let rsp = execute_with_password_sessions(sim, &cmd, 1, &[]).expect("CreatePrimary failed");
     rsp.object_handle
@@ -6368,7 +6324,7 @@ pub fn dup_policy_session_alg(sim: &mut Tpm, alg: TpmiAlgHash) -> ActiveSession 
 
 /// SHA-256 `TPM2_PolicyCommandCode(TPM_CC_Duplicate)` policy digest.
 pub fn dup_policy_sha256() -> &'static [u8] {
-    let mut ctx = tpm2::crypto::HashStream::new(CLIENT_CRYPTO, TpmiAlgHash::Sha256).unwrap();
+    let mut ctx = tpm2::crypto::HashContext::<ClientCrypto>::new(TpmiAlgHash::Sha256).unwrap();
     ctx.update(&[0u8; 32]).unwrap();
     ctx.update(&TpmCc::PolicyCommandCode.code().to_be_bytes())
         .unwrap();
@@ -7262,7 +7218,9 @@ pub fn create_signing_key_with_parms(
     let cmd = CreatePrimary {
         primary_handle: Handle::RH_OWNER,
         in_public: Tpm2b(public),
-        ..Default::default()
+        in_sensitive: Default::default(),
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     let rsp = execute_with_password_sessions(sim, &cmd, 1, &[]).expect("CreatePrimary failed");
     (rsp.object_handle, rsp.name)
@@ -7285,7 +7243,8 @@ pub fn create_srk_with_template(
         primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
 
     let rsp = execute_with_password_sessions(sim, &create_primary, 1, &[])
@@ -7741,14 +7700,14 @@ pub fn gen_random_parms(rng: &mut SimpleRng) -> TpmtPublicParms {
     match variant {
         0 => {
             let key_bits = if make_valid {
-                rng.choose(&[TpmiRsaKeyBits(1024), TpmiRsaKeyBits(2048)])
+                rng.choose(&[TpmiRsaKeyBits::Rsa1024, TpmiRsaKeyBits::Rsa2048])
             } else {
-                rng.choose(&[
-                    TpmiRsaKeyBits(512),
-                    TpmiRsaKeyBits(3072),
-                    TpmiRsaKeyBits(4096),
-                    TpmiRsaKeyBits(9999),
-                ])
+                // A typed `TPMI_RSA_KEY_BITS` holds only the key sizes of this build, so a size
+                // it cannot hold (512, 9999, and 3072/4096 without `rsa3072`/`rsa4096`) becomes
+                // RSA-1024 (unsupported key sizes are covered by raw-byte tests such as
+                // `testparms_rsa::rejects_rsa_key_bits`).
+                let bits = rng.choose(&[512, 3072, 4096, 9999]);
+                TpmiRsaKeyBits::new(bits).unwrap_or(TpmiRsaKeyBits::Rsa1024)
             };
             let exponent = if make_valid {
                 rng.choose(&[0, 65537])
@@ -8129,7 +8088,7 @@ pub fn get_rsa_srk_template() -> TpmtPublic<'static> {
             TpmsRsaParms {
                 symmetric: Some(TpmtSymDefObject::aes_cfb(128).unwrap()),
                 scheme: None,
-                key_bits: TpmiRsaKeyBits(2048),
+                key_bits: TpmiRsaKeyBits::Rsa2048,
                 exponent: 0,
             },
             Tpm2bPublicKeyRsa::default(),
@@ -8476,7 +8435,7 @@ pub fn make_rsa_public_area(
             TpmsRsaParms {
                 symmetric: None,
                 scheme: None,
-                key_bits: TpmiRsaKeyBits(2048),
+                key_bits: TpmiRsaKeyBits::Rsa2048,
                 exponent: 0,
             },
             Tpm2bPublicKeyRsa::from_bytes(crate::test_utils::leak_bytes(n)).unwrap(),
@@ -8521,7 +8480,7 @@ pub fn make_rsa_public_area_opt_name_alg(
             TpmsRsaParms {
                 symmetric: None,
                 scheme: None,
-                key_bits: TpmiRsaKeyBits(2048),
+                key_bits: TpmiRsaKeyBits::Rsa2048,
                 exponent: 0,
             },
             Tpm2bPublicKeyRsa::from_bytes(crate::test_utils::leak_bytes(n)).unwrap(),
@@ -8564,10 +8523,8 @@ pub fn oracle_validate_parms(parms: &TpmtPublicParms) -> Result<(), TpmRc> {
                 }
                 Some(TpmtRsaScheme::Rsaes) | None => {}
             }
-            // The key sizes of the profile (RSA-3072/4096 with the `rsa3072`/`rsa4096` features).
-            if TpmiRsaKeyBits::try_from(parms.key_bits.0).is_err() {
-                return Err(TpmRc::VALUE.with(Position::parameter(1)));
-            }
+            // `keyBits` is a key size of the profile (RSA-3072/4096 with the `rsa3072`/`rsa4096`
+            // features): a typed `TPMI_RSA_KEY_BITS` cannot hold any other value.
             // `exponent` is a plain UINT32: it always unmarshals, and TPM2_TestParms reports only
             // unmarshaling errors (Part 3, TPM2_TestParms).
         }
@@ -8732,7 +8689,7 @@ pub fn rsa_decrypt_public(bits: u16) -> TpmtPublic<'static> {
     let rsa_parms = TpmsRsaParms {
         symmetric: None,
         scheme: None,
-        key_bits: TpmiRsaKeyBits(bits),
+        key_bits: TpmiRsaKeyBits::new(bits).expect("implemented RSA key size"),
         exponent: 0,
     };
 
@@ -8775,7 +8732,7 @@ pub fn rsa_parent_template() -> TpmtPublic<'static> {
             TpmsRsaParms {
                 symmetric: Some(TpmtSymDefObject::aes_cfb(128).unwrap()),
                 scheme: None,
-                key_bits: TpmiRsaKeyBits(2048),
+                key_bits: TpmiRsaKeyBits::Rsa2048,
                 exponent: 0,
             },
             Tpm2bPublicKeyRsa::default(),
@@ -8808,7 +8765,7 @@ pub fn rsa_public(
             TpmsRsaParms {
                 symmetric,
                 scheme: None,
-                key_bits: TpmiRsaKeyBits(2048),
+                key_bits: TpmiRsaKeyBits::Rsa2048,
                 exponent: 0,
             },
             Tpm2bPublicKeyRsa::default(),
@@ -8821,7 +8778,7 @@ pub fn rsa_public_bits(bits: u16) -> TpmtPublic<'static> {
     let rsa_parms = TpmsRsaParms {
         symmetric: Some(TpmtSymDefObject::aes_cfb(128).unwrap()),
         scheme: None,
-        key_bits: TpmiRsaKeyBits(bits),
+        key_bits: TpmiRsaKeyBits::new(bits).expect("implemented RSA key size"),
         exponent: 0,
     };
 
@@ -8851,7 +8808,7 @@ pub fn rsa_public_with_symmetric(
             TpmsRsaParms {
                 symmetric,
                 scheme: None,
-                key_bits: TpmiRsaKeyBits(2048),
+                key_bits: TpmiRsaKeyBits::Rsa2048,
                 exponent: 0,
             },
             Tpm2bPublicKeyRsa::default(),
@@ -8874,7 +8831,7 @@ pub fn rsa_sign_template(scheme: Option<TpmtRsaScheme>) -> TpmtPublic<'static> {
             TpmsRsaParms {
                 symmetric: None,
                 scheme,
-                key_bits: TpmiRsaKeyBits(2048),
+                key_bits: TpmiRsaKeyBits::Rsa2048,
                 exponent: 0,
             },
             Tpm2bPublicKeyRsa::default(),
@@ -8888,7 +8845,7 @@ pub fn rsa_signing_template() -> TpmtPublic<'static> {
         TpmsRsaParms {
             symmetric: None,
             scheme: Some(TpmtRsaScheme::Rsassa(TpmiAlgHash::Sha256)),
-            key_bits: TpmiRsaKeyBits(2048),
+            key_bits: TpmiRsaKeyBits::Rsa2048,
             exponent: 0,
         },
         Tpm2bPublicKeyRsa::default(),
@@ -8905,7 +8862,7 @@ pub fn rsa_signing_template_with(extra: TpmaObject) -> TpmtPublic<'static> {
             TpmsRsaParms {
                 symmetric: None,
                 scheme: Some(TpmtRsaScheme::Rsassa(TpmiAlgHash::Sha256)),
-                key_bits: TpmiRsaKeyBits(2048),
+                key_bits: TpmiRsaKeyBits::Rsa2048,
                 exponent: 0,
             },
             Tpm2bPublicKeyRsa::default(),
@@ -8928,7 +8885,7 @@ pub fn rsa_storage_template() -> TpmtPublic<'static> {
             tpm2::TpmsRsaParms {
                 symmetric: Some(TpmtSymDefObject::aes_cfb(128).unwrap()),
                 scheme: None,
-                key_bits: tpm2::TpmiRsaKeyBits(2048),
+                key_bits: tpm2::TpmiRsaKeyBits::Rsa2048,
                 exponent: 0x00010001,
             },
             tpm2::Tpm2bPublicKeyRsa::default(),
@@ -8950,7 +8907,7 @@ pub fn rsa_storage_template_with(name_alg: TpmiAlgHash, attrs: TpmaObject) -> Tp
             TpmsRsaParms {
                 symmetric: Some(TpmtSymDefObject::aes_cfb(128).unwrap()),
                 scheme: None,
-                key_bits: TpmiRsaKeyBits(2048),
+                key_bits: TpmiRsaKeyBits::Rsa2048,
                 exponent: 0,
             },
             Tpm2bPublicKeyRsa::default(),
@@ -8968,7 +8925,7 @@ pub fn rsa_template(attributes: TpmaObject, scheme: Option<TpmtRsaScheme>) -> Tp
             TpmsRsaParms {
                 symmetric: None,
                 scheme,
-                key_bits: TpmiRsaKeyBits(2048),
+                key_bits: TpmiRsaKeyBits::Rsa2048,
                 exponent: 0,
             },
             Tpm2bPublicKeyRsa::default(),
@@ -8990,7 +8947,7 @@ pub fn rsa_template_with_symmetric(
             TpmsRsaParms {
                 symmetric,
                 scheme,
-                key_bits: TpmiRsaKeyBits(2048),
+                key_bits: TpmiRsaKeyBits::Rsa2048,
                 exponent: 0,
             },
             Tpm2bPublicKeyRsa::default(),
@@ -9298,7 +9255,8 @@ pub fn create(
         parent_handle: parent,
         in_sensitive: sensitive_create(auth, data),
         in_public: Tpm2b(template),
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     run(sim, &cmd, 1)
 }
@@ -9426,8 +9384,6 @@ pub fn create_duplicate(
     name: &[u8],
     sensitive: &[u8],
 ) -> (Vec<u8>, Vec<u8>) {
-    let crypto = PlatformCryptoProvider;
-
     // 1. Labeled Key Encapsulation (Encapsulate)
     let (secret, ciphertext) = match key {
         EncapsulationKey::Ecc { pub_x, pub_y, .. } => {
@@ -9454,13 +9410,11 @@ pub fn create_duplicate(
 
             // KDFe derivation
             let mut secret_derived = [0u8; 32];
-            tpm2::crypto::kdf::kdfe_bits(
-                &crypto,
+            tpm2::crypto::kdfe_bits::<ClientCrypto>(
                 TpmiAlgHash::Sha256,
                 z.as_slice(),
                 b"DUPLICATE",
-                &eph_x,
-                pub_x,
+                (&eph_x, pub_x),
                 256,
                 &mut secret_derived,
             )
@@ -9533,13 +9487,11 @@ pub fn create_duplicate(
 
     // 4. Derive AES CFB key using KDFa
     let mut derived_aes_key = vec![0u8; (sym_key_bits / 8) as usize];
-    kdfa_bits(
-        &crypto,
+    kdfa_bits::<ClientCrypto>(
         TpmiAlgHash::Sha256,
         &secret,
         b"STORAGE",
-        name,
-        &[],
+        (name, &[]),
         (sym_key_bits) as u32,
         &mut derived_aes_key,
     )
@@ -9564,13 +9516,11 @@ pub fn create_duplicate(
 
     // 6. Compute HMAC of (dupSensitive || name)
     let mut hmac_key = vec![0u8; 32];
-    kdfa_bits(
-        &crypto,
+    kdfa_bits::<ClientCrypto>(
         TpmiAlgHash::Sha256,
         &secret,
         b"INTEGRITY",
-        &[],
-        &[],
+        (&[], &[]),
         256,
         &mut hmac_key,
     )
@@ -9607,8 +9557,6 @@ pub fn create_duplicate_challenged(
     wrong_name: Option<&[u8]>,
     tamper_inner_hmac: bool,
 ) -> (Vec<u8>, Vec<u8>) {
-    let crypto = PlatformCryptoProvider;
-
     // 1. Labeled Key Encapsulation (Encapsulate)
     let (secret, mut ciphertext) = match key {
         EncapsulationKey::Ecc { pub_x, pub_y, .. } => {
@@ -9635,13 +9583,11 @@ pub fn create_duplicate_challenged(
 
             // KDFe
             let mut secret_derived = [0u8; 32];
-            tpm2::crypto::kdf::kdfe_bits(
-                &crypto,
+            tpm2::crypto::kdfe_bits::<ClientCrypto>(
                 TpmiAlgHash::Sha256,
                 z.as_slice(),
                 b"DUPLICATE",
-                &eph_x,
-                pub_x,
+                (&eph_x, pub_x),
                 256,
                 &mut secret_derived,
             )
@@ -9729,13 +9675,11 @@ pub fn create_duplicate_challenged(
             inner_key[..inner_key_len].copy_from_slice(k);
         } else {
             // Derive inner symmetric wrapper key from the decrypted seed
-            kdfa_bits(
-                &crypto,
+            kdfa_bits::<ClientCrypto>(
                 TpmiAlgHash::Sha256,
                 &secret,
                 b"STORAGE",
-                name,
-                &[],
+                (name, &[]),
                 (inner_key_len * 8) as u32,
                 &mut inner_key[..inner_key_len],
             )
@@ -9787,13 +9731,11 @@ pub fn create_duplicate_challenged(
 
     // Derive outer AES CFB key using KDFa
     let mut derived_outer_aes_key = vec![0u8; (outer_sym_key_bits / 8) as usize];
-    kdfa_bits(
-        &crypto,
+    kdfa_bits::<ClientCrypto>(
         TpmiAlgHash::Sha256,
         &secret,
         b"STORAGE",
-        name,
-        &[],
+        (name, &[]),
         (outer_sym_key_bits) as u32,
         &mut derived_outer_aes_key,
     )
@@ -9818,13 +9760,11 @@ pub fn create_duplicate_challenged(
     // Compute outer HMAC of (dupSensitive || name)
     let hmac_name = wrong_name.unwrap_or(name);
     let mut hmac_key = vec![0u8; 32];
-    kdfa_bits(
-        &crypto,
+    kdfa_bits::<ClientCrypto>(
         TpmiAlgHash::Sha256,
         &secret,
         b"INTEGRITY",
-        &[],
-        &[],
+        (&[], &[]),
         256,
         &mut hmac_key,
     )
@@ -9940,7 +9880,7 @@ pub fn create_parent_key(sim: &mut Tpm) -> Handle {
                     mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
                 }),
                 scheme: None,
-                key_bits: tpm2::TpmiRsaKeyBits(2048),
+                key_bits: tpm2::TpmiRsaKeyBits::Rsa2048,
                 exponent: 0,
             },
             Tpm2bPublicKeyRsa::default(),
@@ -9971,7 +9911,8 @@ pub fn create_primary(sim: &mut Tpm, public: TpmtPublic<'static>) -> (Handle, Ve
             data: Default::default(),
         }),
         in_public: tpm2::Tpm2b(public),
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     let resp = execute_with_password_sessions(sim, &cmd, 1, &[])
         .unwrap_or_else(|rc| panic!("TPM2_CreatePrimary failed: {rc:#x}"));
@@ -10007,7 +9948,8 @@ pub fn create_primary_full(
             data: Tpm2bSensitiveData::from_bytes(data).unwrap(),
         }),
         in_public: tpm2::Tpm2b(public),
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     let rsp = execute_with_password_sessions(sim, &cmd, 1, &[]).expect("CreatePrimary failed");
     let object_handle = rsp.object_handle;
@@ -10073,7 +10015,8 @@ pub fn create_primary_key(sim: &mut Tpm) -> Handle {
         primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     let create_rsp = execute_with_password_sessions(sim, &create_cmd, 1, &[]).unwrap();
     create_rsp.object_handle
@@ -10088,7 +10031,8 @@ pub fn create_primary_null(sim: &mut Tpm, public: TpmtPublic<'static>) -> Handle
             data: Tpm2bSensitiveData::default(),
         }),
         in_public: tpm2::Tpm2b(public),
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     execute_with_password_sessions(sim, &cmd, 1, &[])
         .expect("CreatePrimary failed")
@@ -10109,7 +10053,8 @@ pub fn create_primary_obj(
             data: Tpm2bSensitiveData::from_bytes(leak_bytes(data)).unwrap(),
         }),
         in_public: tpm2::Tpm2b(public),
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     let rsp = execute_with_password_sessions(sim, &cmd, 1, &[]).expect("CreatePrimary");
     rsp.object_handle.0
@@ -10145,7 +10090,9 @@ pub fn create_primary_params() -> Vec<u8> {
             data: Tpm2bSensitiveData::default(),
         }),
         in_public: tpm2::Tpm2b(pub_area),
-        ..Default::default()
+        primary_handle: Default::default(),
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     marshal_to_vec(&cmd)
 }
@@ -10201,7 +10148,8 @@ pub fn create_primary_with_data(
             data: Tpm2bSensitiveData::from_bytes(leak_bytes(data)).unwrap(),
         }),
         in_public: Tpm2b(public),
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     let rsp = execute_with_password_sessions(sim, &cmd, 1, &[]).expect("CreatePrimary");
     (rsp.object_handle, rsp.name.get_buffer().to_vec())
@@ -10240,7 +10188,7 @@ pub fn create_rsa_key(sim: &mut Tpm) -> (Handle, Tpm2bName<'static>) {
             TpmsRsaParms {
                 symmetric: None,
                 scheme: None,
-                key_bits: tpm2::TpmiRsaKeyBits(2048),
+                key_bits: tpm2::TpmiRsaKeyBits::Rsa2048,
                 exponent: 0,
             },
             Tpm2bPublicKeyRsa::default(),
@@ -10273,7 +10221,7 @@ pub fn create_rsa_primary(
                 TpmsRsaParms {
                     symmetric: None,
                     scheme,
-                    key_bits: TpmiRsaKeyBits(2048),
+                    key_bits: TpmiRsaKeyBits::Rsa2048,
                     exponent: 0,
                 },
                 Tpm2bPublicKeyRsa::default(),
@@ -10417,7 +10365,7 @@ pub fn create_test_key(sim: &mut Tpm, auth: &[u8], scheme: Option<TpmtRsaScheme>
             TpmsRsaParms {
                 symmetric: None,
                 scheme,
-                key_bits: TpmiRsaKeyBits(2048),
+                key_bits: TpmiRsaKeyBits::Rsa2048,
                 exponent: 0,
             },
             Tpm2bPublicKeyRsa::default(),
@@ -10440,7 +10388,8 @@ pub fn create_test_key(sim: &mut Tpm, auth: &[u8], scheme: Option<TpmtRsaScheme>
         primary_handle: Handle::RH_ENDORSEMENT,
         in_sensitive,
         in_public,
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
 
     let rsp_handles =
@@ -10473,7 +10422,7 @@ pub fn create_test_key_with_options(
             TpmsRsaParms {
                 symmetric: None,
                 scheme,
-                key_bits: TpmiRsaKeyBits(1024),
+                key_bits: TpmiRsaKeyBits::Rsa1024,
                 exponent: 0,
             },
             Tpm2bPublicKeyRsa::default(),
@@ -10496,7 +10445,8 @@ pub fn create_test_key_with_options(
         primary_handle: Handle::RH_ENDORSEMENT,
         in_sensitive,
         in_public,
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
 
     let rsp_handles =
@@ -10560,7 +10510,9 @@ pub fn create_transient_object(sim: &mut Tpm) -> u32 {
     let cmd = CreatePrimary {
         primary_handle: Handle::RH_OWNER,
         in_public: Tpm2b(public),
-        ..Default::default()
+        in_sensitive: Default::default(),
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     let handles = execute_with_password_sessions(sim, &cmd, 1, &[]).expect("CreatePrimary failed");
     handles.object_handle.0
@@ -10592,8 +10544,7 @@ pub fn create_unwrap(
 
 /// Reference derivation of a symmetric key and 16-byte IV with KDFa (used for parameter
 /// encryption checks).
-pub fn derive_key_and_iv_ref<H: tpm2::crypto::Hmac>(
-    crypto: &H,
+pub fn derive_key_and_iv_ref(
     auth_hash: TpmiAlgHash,
     key: &[u8],
     label: &[u8],
@@ -10603,9 +10554,7 @@ pub fn derive_key_and_iv_ref<H: tpm2::crypto::Hmac>(
 ) -> (Vec<u8>, [u8; 16]) {
     let total_bytes = key_size_bytes + 16;
     let total_bits = (total_bytes * 8) as u32;
-    let out_buffer = reference_kdfa(
-        crypto, auth_hash, key, label, context_u, context_v, total_bits,
-    );
+    let out_buffer = reference_kdfa(auth_hash, key, label, context_u, context_v, total_bits);
     let derived_key = out_buffer[..key_size_bytes].to_vec();
     let mut derived_iv = [0u8; 16];
     derived_iv.copy_from_slice(&out_buffer[key_size_bytes..]);
@@ -10933,7 +10882,8 @@ pub fn get_create_primary_cmd_and_handles() -> CreatePrimary<'static> {
         primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     }
 }
 
@@ -11161,20 +11111,9 @@ pub fn load_external(
 /// Loads a NIST P-256 key with a client-generated private scalar through
 /// `TPM2_LoadExternal` and returns `(handle, private scalar)`.
 pub fn load_external_ecc_key(sim: &mut Tpm, attrs: TpmaObject) -> (Handle, Vec<u8>) {
-    let mut pub_buf = [0u8; 512];
-    let mut priv_buf = [0u8; 1024];
-    let (pub_len, priv_len) = CLIENT_CRYPTO
-        .generate_key(
-            Alg::ECC,
-            Some(KeyParams::Ecc(TpmEccCurve::NistP256)),
-            &mut pub_buf,
-            &mut priv_buf,
-            None,
-        )
-        .unwrap();
-    let x = leak_bytes(&pub_buf[..pub_len / 2]);
-    let y = leak_bytes(&pub_buf[pub_len / 2..pub_len]);
-    let d = leak_bytes(&priv_buf[..priv_len]);
+    let (d, xy) = client_ecc_key(TpmEccCurve::NistP256);
+    let (x, y) = xy.split_at(xy.len() / 2);
+    let (x, y, d) = (leak_bytes(x), leak_bytes(y), leak_bytes(&d));
 
     let public = TpmtPublic {
         name_alg: Some(TpmiAlgHash::Sha256),
@@ -11507,7 +11446,7 @@ pub fn public_only_sym_key(sim: &mut Tpm) -> u32 {
 /// `nameAlg || SHA-256(parentQN || name)`: the qualified Name of an object with Name `name`
 /// whose parent has qualified Name `parent_qn` (a hierarchy's qualified Name is its handle).
 pub fn qualified_name(parent_qn: &[u8], name: &[u8]) -> Vec<u8> {
-    let mut ctx = tpm2::crypto::HashStream::new(CLIENT_CRYPTO, TpmiAlgHash::Sha256).unwrap();
+    let mut ctx = tpm2::crypto::HashContext::<ClientCrypto>::new(TpmiAlgHash::Sha256).unwrap();
     ctx.update(parent_qn).unwrap();
     ctx.update(name).unwrap();
     let mut out = [0u8; tpm2::TpmtHa::MAX_DIGEST_SIZE];
@@ -11563,7 +11502,7 @@ pub fn rsa_key(
             TpmsRsaParms {
                 symmetric,
                 scheme,
-                key_bits: TpmiRsaKeyBits(2048),
+                key_bits: TpmiRsaKeyBits::Rsa2048,
                 exponent: 0,
             },
             Tpm2bPublicKeyRsa::default(),
@@ -11598,7 +11537,8 @@ pub fn save_object_context(sim: &mut Tpm) -> TpmsContext<'static> {
                 tpm2::TpmsEccPoint::default(),
             ),
         }),
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     let handles =
         execute_with_password_sessions(sim, &create, 1, &[]).expect("CreatePrimary failed");
@@ -11686,7 +11626,8 @@ pub fn try_create_primary_in(
         primary_handle: hierarchy,
         in_sensitive: sensitive_create(&[], data),
         in_public: Tpm2b(template),
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     run(sim, &cmd, 1).map(|rsp| (rsp.object_handle, rsp))
 }
@@ -11721,16 +11662,16 @@ pub fn aes_cfb(key: &[u8], iv: &[u8; 16], data: &mut [u8], encrypt: bool) {
     let alg = TpmtSymDefObject::aes_cfb(128).unwrap();
     let mut iv = *iv;
     if encrypt {
-        sym_encrypt(CLIENT_CRYPTO, alg, key, &mut iv, data).unwrap();
+        sym_encrypt(alg, key, &mut iv, data).unwrap();
     } else {
-        sym_decrypt(CLIENT_CRYPTO, alg, key, &mut iv, data).unwrap();
+        sym_decrypt(alg, key, &mut iv, data).unwrap();
     }
 }
 
 /// Computes `alg(data)` on the client side.
 pub fn client_hash(alg: TpmiAlgHash, data: &[u8]) -> Vec<u8> {
     let mut buf = [0u8; TpmtHa::MAX_DIGEST_SIZE];
-    tpm2::crypto::hash(CLIENT_CRYPTO, alg, data, &mut buf)
+    tpm2::crypto::hash::<ClientCrypto>(alg, &[data], &mut buf)
         .unwrap()
         .digest()
         .to_vec()
@@ -11781,19 +11722,15 @@ pub fn compute_hash(alg: TpmiAlgHash, data: &[&[u8]]) -> Vec<u8> {
 /// Computes `HASH(data)` with the client-side crypto provider.
 pub fn compute_hash_single(alg: TpmiAlgHash, data: &[u8]) -> Vec<u8> {
     let mut out = [0u8; TpmtHa::MAX_DIGEST_SIZE];
-    tpm2::crypto::hash(CLIENT_CRYPTO, alg, data, &mut out)
+    tpm2::crypto::hash::<ClientCrypto>(alg, &[data], &mut out)
         .unwrap()
         .digest()
         .to_vec()
 }
 
-/// Hashes the concatenation of `updates` with `auth_hash` using the given crypto provider.
-pub fn compute_hash_with<H: tpm2::crypto::Hash>(
-    crypto: &H,
-    auth_hash: TpmiAlgHash,
-    updates: &[&[u8]],
-) -> Vec<u8> {
-    let mut state = tpm2::crypto::HashStream::new(crypto, auth_hash).unwrap();
+/// Hashes the concatenation of `updates` with `auth_hash` using the client crypto.
+pub fn compute_hash_with(auth_hash: TpmiAlgHash, updates: &[&[u8]]) -> Vec<u8> {
+    let mut state = tpm2::crypto::HashContext::<ClientCrypto>::new(auth_hash).unwrap();
     for data in updates {
         state.update(data).unwrap();
     }
@@ -11801,15 +11738,9 @@ pub fn compute_hash_with<H: tpm2::crypto::Hash>(
     state.finalize(&mut out).unwrap().digest().to_vec()
 }
 
-/// HMACs the concatenation of `updates` with `auth_hash` under `key` using the given crypto
-/// provider.
-pub fn compute_hmac_with<H: tpm2::crypto::Hmac>(
-    crypto: &H,
-    auth_hash: TpmiAlgHash,
-    key: &[u8],
-    updates: &[&[u8]],
-) -> Vec<u8> {
-    let mut state = tpm2::crypto::HmacStream::new(crypto, auth_hash, key).unwrap();
+/// HMACs the concatenation of `updates` with `auth_hash` under `key` using the client crypto.
+pub fn compute_hmac_with(auth_hash: TpmiAlgHash, key: &[u8], updates: &[&[u8]]) -> Vec<u8> {
+    let mut state = tpm2::crypto::HmacContext::<ClientCrypto>::new(auth_hash, key).unwrap();
     for data in updates {
         state.update(data).unwrap();
     }
@@ -11820,7 +11751,8 @@ pub fn compute_hmac_with<H: tpm2::crypto::Hmac>(
 /// SHA-256 of `data`, computed with the client-side crypto provider.
 pub fn compute_sha256(data: &[u8]) -> [u8; 32] {
     let mut out = [0u8; TpmtHa::MAX_DIGEST_SIZE];
-    let digest = tpm2::crypto::hash(CLIENT_CRYPTO, TpmiAlgHash::Sha256, data, &mut out).unwrap();
+    let digest =
+        tpm2::crypto::hash::<ClientCrypto>(TpmiAlgHash::Sha256, &[data], &mut out).unwrap();
     digest.digest().try_into().unwrap()
 }
 
@@ -11960,7 +11892,8 @@ pub fn create_ecc_signing_key(
         primary_handle: hierarchy,
         in_sensitive,
         in_public,
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
 
     let rsp = execute_with_password_sessions(sim, &create_primary, 1, &[])
@@ -12064,7 +11997,7 @@ pub fn create_non_signing_key_rsa(sim: &mut Tpm) -> (Handle, tpm2::Tpm2bName<'st
             TpmsRsaParms {
                 symmetric: None,
                 scheme: None,
-                key_bits: TpmiRsaKeyBits(2048),
+                key_bits: TpmiRsaKeyBits::Rsa2048,
                 exponent: 0,
             },
             Tpm2bPublicKeyRsa::default(),
@@ -12082,7 +12015,8 @@ pub fn create_non_signing_key_rsa(sim: &mut Tpm) -> (Handle, tpm2::Tpm2bName<'st
         primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
 
     let rsp = execute_with_password_sessions(sim, &create_cmd, 1, &[])
@@ -12106,7 +12040,7 @@ pub fn create_rsa_decrypt_key(sim: &mut Tpm) -> Handle {
     let rsa_parms = TpmsRsaParms {
         symmetric: None,
         scheme: None,
-        key_bits: TpmiRsaKeyBits(2048),
+        key_bits: TpmiRsaKeyBits::Rsa2048,
         exponent: 0,
     };
     let pub_area = TpmtPublic {
@@ -12130,7 +12064,8 @@ pub fn create_rsa_decrypt_key(sim: &mut Tpm) -> Handle {
         primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     let create_rsp_handles = execute_with_password_sessions(sim, &create_cmd, 1, &[]).unwrap();
     create_rsp_handles.object_handle
@@ -12168,7 +12103,8 @@ pub fn create_signing_key(sim: &mut Tpm) -> (Handle, Tpm2bName<'static>) {
         primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
 
     let rsp = execute_with_password_sessions(sim, &create_primary, 1, &[])
@@ -12229,7 +12165,8 @@ pub fn create_signing_key_ecc_with_unique(
         primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
 
     let rsp = execute_with_password_sessions(sim, &create_cmd, 1, &[])
@@ -12269,7 +12206,8 @@ pub fn create_signing_key_handle(sim: &mut Tpm) -> Handle {
             data: Tpm2bSensitiveData::default(),
         }),
         in_public: Tpm2b(public_area),
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     let handles = execute_with_password_sessions(sim, &cmd, 1, &[]).expect("CreatePrimary failed");
     handles.object_handle
@@ -12292,7 +12230,7 @@ pub fn create_signing_key_name_bytes(sim: &mut Tpm) -> (Handle, Vec<u8>) {
                 TpmsRsaParms {
                     symmetric: None,
                     scheme: None,
-                    key_bits: tpm2::TpmiRsaKeyBits(2048),
+                    key_bits: tpm2::TpmiRsaKeyBits::Rsa2048,
                     exponent: 0,
                 },
                 Tpm2bPublicKeyRsa::default(),
@@ -12342,7 +12280,8 @@ pub fn create_signing_key_with_unique(
         primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
 
     let rsp = execute_with_password_sessions(sim, &create_primary, 1, &[])
@@ -12359,7 +12298,7 @@ pub fn digest12() -> Vec<u8> {
 
 /// Digest of the concatenation of `parts` with `alg`.
 pub fn digest_parts(alg: TpmiAlgHash, parts: &[&[u8]]) -> Vec<u8> {
-    let mut ctx = tpm2::crypto::HashStream::new(CLIENT_CRYPTO, alg).unwrap();
+    let mut ctx = tpm2::crypto::HashContext::<ClientCrypto>::new(alg).unwrap();
     for part in parts {
         ctx.update(part).unwrap();
     }
@@ -12513,7 +12452,6 @@ where
                 session.session_key.clone()
             };
             let (derived_key, derived_iv) = derive_key_and_iv_ref(
-                CLIENT_CRYPTO,
                 session.auth_hash,
                 &key,
                 b"CFB",
@@ -12525,7 +12463,6 @@ where
             let mut iv = derived_iv;
             let sym_alg = session_cfb_alg(&session.symmetric);
             sym_encrypt(
-                CLIENT_CRYPTO,
                 sym_alg,
                 &derived_key,
                 &mut iv,
@@ -12555,7 +12492,7 @@ where
         let param_bytes = &param_buf[..param_len];
         cp_hash_updates.push(param_bytes);
 
-        let cp_hash = compute_hash_with(CLIENT_CRYPTO, auth_hash, &cp_hash_updates);
+        let cp_hash = compute_hash_with(auth_hash, &cp_hash_updates);
 
         let nonce_caller_new = &nonce_callers_new[i];
         let entity_auth = if i < num_handles {
@@ -12592,7 +12529,7 @@ where
         let attr_byte = [session.attributes.bits()];
         hmac_updates.push(&attr_byte);
 
-        let hmac_bytes = compute_hmac_with(CLIENT_CRYPTO, auth_hash, &hmac_key, &hmac_updates);
+        let hmac_bytes = compute_hmac_with(auth_hash, &hmac_key, &hmac_updates);
         let hmac_val = Tpm2bAuth::from_bytes(&hmac_bytes).unwrap();
 
         let auth_cmd = TpmsAuthCommand {
@@ -12786,7 +12723,6 @@ where
                 session.session_key.clone()
             };
             let (derived_key, derived_iv) = derive_key_and_iv_ref(
-                CLIENT_CRYPTO,
                 session.auth_hash,
                 &key,
                 b"CFB",
@@ -12798,7 +12734,6 @@ where
             let mut iv = derived_iv;
             let sym_alg = session_cfb_alg(&session.symmetric);
             sym_encrypt(
-                CLIENT_CRYPTO,
                 sym_alg,
                 &derived_key,
                 &mut iv,
@@ -12823,7 +12758,7 @@ where
         let param_bytes = &param_buf[..param_len];
         cp_hash_updates.push(param_bytes);
 
-        let cp_hash = compute_hash_with(CLIENT_CRYPTO, auth_hash, &cp_hash_updates);
+        let cp_hash = compute_hash_with(auth_hash, &cp_hash_updates);
 
         let nonce_caller_new = &nonce_callers_new[i];
         let entity_auth = if i < num_handles {
@@ -12875,7 +12810,7 @@ where
         let attr_byte = [session.attributes.bits()];
         hmac_updates.push(&attr_byte);
 
-        let hmac_bytes = compute_hmac_with(CLIENT_CRYPTO, auth_hash, &hmac_key, &hmac_updates);
+        let hmac_bytes = compute_hmac_with(auth_hash, &hmac_key, &hmac_updates);
         let hmac_val = Tpm2bAuth::from_bytes(&hmac_bytes).unwrap();
 
         let auth_cmd = TpmsAuthCommand {
@@ -12972,7 +12907,6 @@ where
                 session.session_key.clone()
             };
             let (derived_key, derived_iv) = derive_key_and_iv_ref(
-                CLIENT_CRYPTO,
                 session.auth_hash,
                 &key,
                 b"CFB",
@@ -12984,7 +12918,6 @@ where
             let mut iv = derived_iv;
             let sym_alg = session_cfb_alg(&session.symmetric);
             sym_decrypt(
-                CLIENT_CRYPTO,
                 sym_alg,
                 &derived_key,
                 &mut iv,
@@ -13023,7 +12956,7 @@ pub fn expected_command_code_digest(old: &[u8], code: TpmCc) -> Vec<u8> {
     data.extend_from_slice(&TpmCc::PolicyCommandCode.code().to_be_bytes());
     data.extend_from_slice(&code.code().to_be_bytes());
     let mut out = [0u8; tpm2::TpmtHa::MAX_DIGEST_SIZE];
-    tpm2::crypto::hash(CLIENT_CRYPTO, TpmiAlgHash::Sha256, &data, &mut out)
+    tpm2::crypto::hash::<ClientCrypto>(TpmiAlgHash::Sha256, &[&data], &mut out)
         .unwrap()
         .digest()
         .to_vec()
@@ -13048,7 +12981,7 @@ pub fn expected_extend_sha256(old: &[u8; 32], val: &[u8; 32]) -> [u8; 32] {
 /// Client-side HMAC-SHA256 of `data` under `key`.
 pub fn expected_hmac(key: &[u8], data: &[u8]) -> Vec<u8> {
     let mut out = [0u8; tpm2::TpmtHa::MAX_DIGEST_SIZE];
-    tpm2::crypto::hmac(CLIENT_CRYPTO, TpmiAlgHash::Sha256, key, data, &mut out)
+    tpm2::crypto::hmac::<ClientCrypto>(TpmiAlgHash::Sha256, key, &[data], &mut out)
         .unwrap()
         .digest()
         .to_vec()
@@ -13127,7 +13060,7 @@ pub fn get_session_audit_digest(
 /// Hashes `data` with `alg` using the client-side crypto provider.
 pub fn hash(alg: TpmiAlgHash, data: &[u8]) -> Vec<u8> {
     let mut out = [0u8; TpmtHa::MAX_DIGEST_SIZE];
-    tpm2::crypto::hash(CLIENT_CRYPTO, alg, data, &mut out)
+    tpm2::crypto::hash::<ClientCrypto>(alg, &[data], &mut out)
         .unwrap()
         .digest()
         .to_vec()
@@ -13137,7 +13070,7 @@ pub fn hash(alg: TpmiAlgHash, data: &[u8]) -> Vec<u8> {
 /// digest size differs).
 pub fn hash_array<const N: usize>(alg: TpmiAlgHash, data: &[u8]) -> [u8; N] {
     let mut out = [0u8; TpmtHa::MAX_DIGEST_SIZE];
-    let d = tpm2::crypto::hash(CLIENT_CRYPTO, alg, data, &mut out)
+    let d = tpm2::crypto::hash::<ClientCrypto>(alg, &[data], &mut out)
         .unwrap()
         .digest();
     d.try_into().unwrap()
@@ -13146,7 +13079,7 @@ pub fn hash_array<const N: usize>(alg: TpmiAlgHash, data: &[u8]) -> [u8; N] {
 /// Hashes `data` with `alg` using the client-side crypto provider.
 pub fn hash_bytes(alg: TpmiAlgHash, data: &[u8]) -> Vec<u8> {
     let mut out = [0u8; tpm2::TpmtHa::MAX_DIGEST_SIZE];
-    tpm2::crypto::hash(CLIENT_CRYPTO, alg, data, &mut out)
+    tpm2::crypto::hash::<ClientCrypto>(alg, &[data], &mut out)
         .unwrap()
         .digest()
         .to_vec()
@@ -13164,7 +13097,7 @@ pub fn hash_end(sim: &mut Tpm) {
 
 /// Hashes the concatenation of `parts` with `alg` on the client.
 pub fn hash_parts(alg: TpmiAlgHash, parts: &[&[u8]]) -> Vec<u8> {
-    let mut ctx = tpm2::crypto::HashStream::new(CLIENT_CRYPTO, alg).unwrap();
+    let mut ctx = tpm2::crypto::HashContext::<ClientCrypto>::new(alg).unwrap();
     for p in parts {
         ctx.update(p).unwrap();
     }
@@ -13215,7 +13148,7 @@ pub fn hash_ticket_digest(sim: &mut Tpm, hierarchy: Handle) -> Vec<u8> {
 
 /// HMAC of `data` under `key` with hash `hash`, computed client-side.
 pub fn hmac(hash: TpmiAlgHash, key: &[u8], data: &[u8]) -> Vec<u8> {
-    let mut state = tpm2::crypto::HmacStream::new(CLIENT_CRYPTO, hash, key).unwrap();
+    let mut state = tpm2::crypto::HmacContext::<ClientCrypto>::new(hash, key).unwrap();
     state.update(data).unwrap();
     let mut out = [0u8; TpmtHa::MAX_DIGEST_SIZE];
     state.finalize(&mut out).unwrap().digest().to_vec()
@@ -13223,7 +13156,7 @@ pub fn hmac(hash: TpmiAlgHash, key: &[u8], data: &[u8]) -> Vec<u8> {
 
 /// HMAC-SHA-256 of the concatenation of `parts`.
 pub fn hmac256(key: &[u8], parts: &[&[u8]]) -> Vec<u8> {
-    let mut ctx = tpm2::crypto::HmacStream::new(CLIENT_CRYPTO, TpmiAlgHash::Sha256, key).unwrap();
+    let mut ctx = tpm2::crypto::HmacContext::<ClientCrypto>::new(TpmiAlgHash::Sha256, key).unwrap();
     for p in parts {
         ctx.update(p).unwrap();
     }
@@ -13321,7 +13254,8 @@ pub fn hmac_session(sim: &mut Sim) -> Sess {
 
 /// HMAC-SHA-256 of the concatenation of `parts` under `key`, computed client-side.
 pub fn hmac_sha256(key: &[u8], parts: &[&[u8]]) -> Vec<u8> {
-    let mut state = tpm2::crypto::HmacStream::new(CLIENT_CRYPTO, TpmiAlgHash::Sha256, key).unwrap();
+    let mut state =
+        tpm2::crypto::HmacContext::<ClientCrypto>::new(TpmiAlgHash::Sha256, key).unwrap();
     for part in parts {
         state.update(part).unwrap();
     }
@@ -13332,7 +13266,7 @@ pub fn hmac_sha256(key: &[u8], parts: &[&[u8]]) -> Vec<u8> {
 /// HMAC-SHA256 of `data` under `key`, computed with the client-side crypto provider.
 pub fn hmac_sha256_single(key: &[u8], data: &[u8]) -> Vec<u8> {
     let mut out = [0u8; TpmtHa::MAX_DIGEST_SIZE];
-    tpm2::crypto::hmac(CLIENT_CRYPTO, TpmiAlgHash::Sha256, key, data, &mut out)
+    tpm2::crypto::hmac::<ClientCrypto>(TpmiAlgHash::Sha256, key, &[data], &mut out)
         .unwrap()
         .digest()
         .to_vec()
@@ -13347,7 +13281,6 @@ pub fn is_null_hashcheck(ticket: &TpmtTkHashcheck<'_>) -> bool {
 pub fn kdfa256(key: &[u8], label: &[u8], context: &[u8], bits: u32) -> Vec<u8> {
     let mut out = vec![0u8; bits.div_ceil(8) as usize];
     kdfa_by_alg(
-        CLIENT_CRYPTO,
         TpmiAlgHash::Sha256,
         key,
         label,
@@ -13420,8 +13353,7 @@ pub fn p256_point_with_stripped_x() -> TpmsEccPoint<'static> {
 
 /// Reference SP 800-108 counter-mode KDFa implementation (HMAC with `auth_hash`) producing `bits`
 /// bits of output.
-pub fn reference_kdfa<H: tpm2::crypto::Hmac>(
-    crypto: &H,
+pub fn reference_kdfa(
     auth_hash: TpmiAlgHash,
     key: &[u8],
     label: &[u8],
@@ -13434,7 +13366,7 @@ pub fn reference_kdfa<H: tpm2::crypto::Hmac>(
     let mut counter = 1u32;
     let mut generated = 0;
     while generated < required_bytes {
-        let mut state = tpm2::crypto::HmacStream::new(crypto, auth_hash, key).unwrap();
+        let mut state = tpm2::crypto::HmacContext::<ClientCrypto>::new(auth_hash, key).unwrap();
         state.update(&counter.to_be_bytes()).unwrap();
         state.update(label).unwrap();
         state.update(&[0x00]).unwrap();
@@ -13547,7 +13479,7 @@ pub fn session_audit_digest(sim: &mut Tpm, session: u32) -> Vec<u8> {
 
 /// Hash of the concatenation of `parts` with `hash`, computed client-side.
 pub fn sha(hash: TpmiAlgHash, parts: &[&[u8]]) -> Vec<u8> {
-    let mut state = tpm2::crypto::HashStream::new(CLIENT_CRYPTO, hash).unwrap();
+    let mut state = tpm2::crypto::HashContext::<ClientCrypto>::new(hash).unwrap();
     for part in parts {
         state.update(part).unwrap();
     }
@@ -13557,7 +13489,7 @@ pub fn sha(hash: TpmiAlgHash, parts: &[&[u8]]) -> Vec<u8> {
 
 /// SHA-256 of the concatenation of `parts`, computed client-side.
 pub fn sha256(parts: &[&[u8]]) -> Vec<u8> {
-    let mut state = tpm2::crypto::HashStream::new(CLIENT_CRYPTO, TpmiAlgHash::Sha256).unwrap();
+    let mut state = tpm2::crypto::HashContext::<ClientCrypto>::new(TpmiAlgHash::Sha256).unwrap();
     for part in parts {
         state.update(part).unwrap();
     }
@@ -13568,7 +13500,7 @@ pub fn sha256(parts: &[&[u8]]) -> Vec<u8> {
 /// Computes a SHA-256 digest client-side.
 pub fn sha256_array(data: &[u8]) -> [u8; 32] {
     let mut out = [0u8; 32];
-    let mut state = tpm2::crypto::HashStream::new(CLIENT_CRYPTO, TpmiAlgHash::Sha256).unwrap();
+    let mut state = tpm2::crypto::HashContext::<ClientCrypto>::new(TpmiAlgHash::Sha256).unwrap();
     state.update(data).unwrap();
     out.copy_from_slice(
         state
@@ -13582,7 +13514,7 @@ pub fn sha256_array(data: &[u8]) -> [u8; 32] {
 /// SHA-256 of `data` as a 32-byte array, computed client-side.
 pub fn sha256_bytes(data: &[u8]) -> [u8; 32] {
     let mut out = [0u8; tpm2::TpmtHa::MAX_DIGEST_SIZE];
-    tpm2::crypto::hash(CLIENT_CRYPTO, TpmiAlgHash::Sha256, data, &mut out)
+    tpm2::crypto::hash::<ClientCrypto>(TpmiAlgHash::Sha256, &[data], &mut out)
         .unwrap()
         .digest()
         .try_into()
@@ -13625,7 +13557,7 @@ pub fn sha256_sequence(
 /// SHA-256 of `data`, computed with the client-side crypto provider.
 pub fn sha256_single(data: &[u8]) -> Vec<u8> {
     let mut out = [0u8; TpmtHa::MAX_DIGEST_SIZE];
-    tpm2::crypto::hash(CLIENT_CRYPTO, TpmiAlgHash::Sha256, data, &mut out)
+    tpm2::crypto::hash::<ClientCrypto>(TpmiAlgHash::Sha256, &[data], &mut out)
         .unwrap()
         .digest()
         .to_vec()
@@ -13657,7 +13589,7 @@ pub fn sign_cmd_and_handles(key_handle: Handle) -> Sign<'static> {
         key_handle,
         digest: Tpm2bDigest::from_bytes(&[0u8; 32]).unwrap(),
         in_scheme: None,
-        validation: TpmtTkHashcheck::default(),
+        validation: TpmtTkHashcheck::new(Handle::RH_NULL, Tpm2bDigest::default()),
     }
 }
 
@@ -13676,7 +13608,7 @@ pub fn sign_pss(sim: &mut Tpm, key: Handle, digest: &[u8]) -> TpmtSignature<'sta
         key_handle: key,
         digest: Tpm2bDigest::from_bytes(leak_bytes(digest)).unwrap(),
         in_scheme: Some(TpmtSigScheme::Rsapss(TpmiAlgHash::Sha256)),
-        validation: TpmtTkHashcheck::default(),
+        validation: TpmtTkHashcheck::new(Handle::RH_NULL, Tpm2bDigest::default()),
     };
     let rsp = execute_with_password_sessions(sim, &cmd, 1, &[]).expect("Sign failed");
     rsp.signature
@@ -13694,7 +13626,7 @@ pub fn sign_unwrap(
         key_handle: key,
         digest: Tpm2bDigest::from_bytes(leak_bytes(digest)).unwrap(),
         in_scheme: Some(scheme),
-        validation: TpmtTkHashcheck::default(),
+        validation: TpmtTkHashcheck::new(Handle::RH_NULL, Tpm2bDigest::default()),
     };
     let rsp = execute_with_password_sessions(sim, &cmd, 1, &[]).expect("Sign failed");
     rsp.signature
@@ -15151,12 +15083,13 @@ pub struct Resp {
 /// The simulator type used by the raw-session helpers.
 pub type Sim = Tpm;
 
-/// Helper to build `TpmiRsaKeyBits` values from integers (`TpmiCode::from(2048)`).
+/// Helper to build `TpmiRsaKeyBits` values from integers (`TpmiCode::from(2048)`); panics on a key
+/// size this build does not implement.
 pub struct TpmiCode;
 
 impl TpmiCode {
     pub fn from(val: u16) -> TpmiRsaKeyBits {
-        TpmiRsaKeyBits(val)
+        TpmiRsaKeyBits::new(val).expect("implemented RSA key size")
     }
 }
 
@@ -15816,15 +15749,10 @@ pub fn get_expected_pcr_digest(sim: &mut Tpm, selection: &TpmlPcrSelection) -> V
     }
 
     let mut digest_buf = [0u8; tpm2::TpmtHa::MAX_DIGEST_SIZE];
-    tpm2::crypto::hash(
-        CLIENT_CRYPTO,
-        TpmiAlgHash::Sha256,
-        &expected_val,
-        &mut digest_buf,
-    )
-    .unwrap()
-    .digest()
-    .to_vec()
+    tpm2::crypto::hash::<ClientCrypto>(TpmiAlgHash::Sha256, &[&expected_val], &mut digest_buf)
+        .unwrap()
+        .digest()
+        .to_vec()
 }
 
 /// Sends `TPM2_SetCommandCodeAuditStatus(auth, auditAlg, setList, clearList)` with an
@@ -15985,13 +15913,11 @@ pub fn encapsulate_secret(public: &[u8], label: &str, seed: u64) -> Option<(Vec<
             let z = p256::ecdh::diffie_hellman(de.to_nonzero_scalar(), qs.as_affine());
             let bits = (name_alg.digest_size() * 8) as u32;
             let mut secret = vec![0u8; name_alg.digest_size()];
-            tpm2::crypto::kdf::kdfe_bits(
-                CLIENT_CRYPTO,
+            tpm2::crypto::kdfe_bits::<ClientCrypto>(
                 name_alg,
                 z.raw_secret_bytes().as_slice(),
                 label.as_bytes(),
-                &qe_x,
-                qs_x,
+                (&qe_x, qs_x),
                 bits,
                 &mut secret,
             )
@@ -16212,8 +16138,12 @@ pub fn null_hashcheck() -> TpmtTkHashcheck<'static> {
 // generation, encapsulation, the ML-KEM Labeled KEM (TPM 2.0 Part 1, "ML-KEM Labeled KEM"),
 // outer wrappers keyed by a known seed, and pure ML-DSA / HashML-DSA message representatives.
 
-use tpm2::crypto::{Mldsa as _, Mlkem as _};
+#[cfg(feature = "mldsa")]
+use tpm2::crypto::{MldsaPrivateKey, MldsaPublicKey};
+#[cfg(feature = "mlkem")]
+use tpm2::crypto::{MlkemPrivateKey, MlkemPublicKey};
 
+#[cfg(feature = "mlkem")]
 /// The three ML-KEM parameter sets (`TPM_MLKEM_512`, `TPM_MLKEM_768`, `TPM_MLKEM_1024`).
 pub const MLKEM_PARAMETER_SETS: [TpmiMlkemParms; 3] = [
     TpmiMlkemParms::Mlkem512,
@@ -16221,6 +16151,7 @@ pub const MLKEM_PARAMETER_SETS: [TpmiMlkemParms; 3] = [
     TpmiMlkemParms::Mlkem1024,
 ];
 
+#[cfg(feature = "mldsa")]
 /// The three ML-DSA parameter sets (`TPM_MLDSA_44`, `TPM_MLDSA_65`, `TPM_MLDSA_87`).
 pub const MLDSA_PARAMETER_SETS: [TpmiMldsaParms; 3] = [
     TpmiMldsaParms::Mldsa44,
@@ -16228,9 +16159,11 @@ pub const MLDSA_PARAMETER_SETS: [TpmiMldsaParms; 3] = [
     TpmiMldsaParms::Mldsa87,
 ];
 
+#[cfg(feature = "mlkem")]
 /// Size of the ML-KEM shared secret `K`.
 pub const MLKEM_SHARED_SECRET_BYTES: usize = 32;
 
+#[cfg(feature = "mlkem")]
 /// Public area of an ML-KEM key with `attributes`, `symmetric` and the encapsulation key
 /// `public_key` as *unique* (empty for a template), with nameAlg SHA-256.
 pub fn mlkem_public_with_key(
@@ -16253,6 +16186,7 @@ pub fn mlkem_public_with_key(
     }
 }
 
+#[cfg(feature = "mlkem")]
 /// Template of an ML-KEM key with `attributes` and `symmetric` (empty *unique*).
 pub fn mlkem_public(
     parameter_set: TpmiMlkemParms,
@@ -16262,17 +16196,20 @@ pub fn mlkem_public(
     mlkem_public_with_key(parameter_set, attributes, symmetric, &[])
 }
 
+#[cfg(feature = "mlkem")]
 /// Template of an unrestricted ML-KEM decryption key (`decrypt`, `userWithAuth`,
 /// `sensitiveDataOrigin`, `fixedTPM`, `fixedParent`, symmetric NULL).
 pub fn mlkem_decryption_public(parameter_set: TpmiMlkemParms) -> TpmtPublic<'static> {
     mlkem_public(parameter_set, base_attrs() | TpmaObject::DECRYPT, None)
 }
 
+#[cfg(feature = "mlkem")]
 /// Template of an ML-KEM storage key ([`storage_attrs`], AES-128-CFB).
 pub fn mlkem_storage_public(parameter_set: TpmiMlkemParms) -> TpmtPublic<'static> {
     mlkem_public(parameter_set, storage_attrs(), Some(AES128_CFB))
 }
 
+#[cfg(feature = "mldsa")]
 /// Public area of an ML-DSA key with `attributes`, *allowExternalMu* and the verification key
 /// `public_key` as *unique* (empty for a template), with nameAlg SHA-256.
 pub fn mldsa_public_with_key(
@@ -16295,6 +16232,7 @@ pub fn mldsa_public_with_key(
     }
 }
 
+#[cfg(feature = "mldsa")]
 /// Template of an ML-DSA key with `attributes` and *allowExternalMu* (empty *unique*).
 pub fn mldsa_public(
     parameter_set: TpmiMldsaParms,
@@ -16304,6 +16242,7 @@ pub fn mldsa_public(
     mldsa_public_with_key(parameter_set, attributes, allow_external_mu, &[])
 }
 
+#[cfg(feature = "mldsa")]
 /// Template of an unrestricted ML-DSA signing key (`sign`, `userWithAuth`,
 /// `sensitiveDataOrigin`, `fixedTPM`, `fixedParent`).
 pub fn mldsa_signing_public(parameter_set: TpmiMldsaParms) -> TpmtPublic<'static> {
@@ -16314,6 +16253,7 @@ pub fn mldsa_signing_public(parameter_set: TpmiMldsaParms) -> TpmtPublic<'static
     )
 }
 
+#[cfg(feature = "mldsa")]
 /// Template of a restricted ML-DSA signing key (an attestation key).
 pub fn mldsa_attestation_public(parameter_set: TpmiMldsaParms) -> TpmtPublic<'static> {
     mldsa_public(
@@ -16323,6 +16263,7 @@ pub fn mldsa_attestation_public(parameter_set: TpmiMldsaParms) -> TpmtPublic<'st
     )
 }
 
+#[cfg(feature = "mlkem")]
 /// The parameter set and encapsulation key (*unique*) of an ML-KEM public area.
 pub fn mlkem_public_key(public: &TpmtPublic<'_>) -> (TpmiMlkemParms, Vec<u8>) {
     match &public.parms_and_id {
@@ -16333,6 +16274,7 @@ pub fn mlkem_public_key(public: &TpmtPublic<'_>) -> (TpmiMlkemParms, Vec<u8>) {
     }
 }
 
+#[cfg(feature = "mldsa")]
 /// The parameter set and verification key (*unique*) of an ML-DSA public area.
 pub fn mldsa_public_key(public: &TpmtPublic<'_>) -> (TpmiMldsaParms, Vec<u8>) {
     match &public.parms_and_id {
@@ -16346,44 +16288,73 @@ pub fn mldsa_public_key(public: &TpmtPublic<'_>) -> (TpmiMldsaParms, Vec<u8>) {
     }
 }
 
+#[cfg(feature = "mlkem")]
 /// Generates an ML-KEM key client-side from a fresh 64-byte seed `d || z`; returns
 /// `(seed, encapsulation key)`.
 pub fn mlkem_client_key(parameter_set: TpmiMlkemParms) -> (Vec<u8>, Vec<u8>) {
-    let mut seed = [0u8; tpm2::crypto::MLKEM_SEED_SIZE];
+    let mut seed = [0u8; TpmiMlkemParms::PRIV_KEY_BYTES];
     client_random(&mut seed).unwrap();
     (seed.to_vec(), mlkem_client_public_key(parameter_set, &seed))
 }
 
+#[cfg(feature = "mlkem")]
 /// The encapsulation key of the ML-KEM key with seed `seed` (`ML-KEM.KeyGen_internal`).
 pub fn mlkem_client_public_key(parameter_set: TpmiMlkemParms, seed: &[u8]) -> Vec<u8> {
-    let seed: &[u8; tpm2::crypto::MLKEM_SEED_SIZE] = seed.try_into().unwrap();
-    let mut public_key = vec![0u8; tpm2::TPM2_MAX_MLKEM_PUB_SIZE];
-    let len = CLIENT_CRYPTO
-        .mlkem_generate_key(parameter_set, seed, &mut public_key)
-        .expect("client ML-KEM key generation failed");
-    public_key.truncate(len);
-    public_key
+    let key = mlkem_client_private_key(parameter_set, seed);
+    let mut public_key = [0u8; TpmiMlkemParms::MAX_PUB_KEY_BYTES];
+    key.public(&mut public_key)
+        .expect("client ML-KEM key generation failed")
+        .get_buffer()
+        .to_vec()
 }
 
+#[cfg(feature = "mlkem")]
+/// The client-side ML-KEM key with seed `seed` (`ML-KEM.KeyGen_internal`); panics unless `seed`
+/// has 64 bytes.
+fn mlkem_client_private_key(
+    parameter_set: TpmiMlkemParms,
+    seed: &[u8],
+) -> MlkemPrivateKey<ClientCrypto> {
+    let seed = Tpm2bPrivateKeyMlkem::from_bytes(seed).expect("ML-KEM seed too long");
+    MlkemPrivateKey::<ClientCrypto>::expand(parameter_set, seed)
+        .expect("client ML-KEM key generation failed")
+        .expect("ML-KEM seed of the wrong size")
+}
+
+#[cfg(feature = "mldsa")]
 /// Generates an ML-DSA key client-side from a fresh 32-byte seed `xi`; returns
 /// `(seed, verification key)`.
 pub fn mldsa_client_key(parameter_set: TpmiMldsaParms) -> (Vec<u8>, Vec<u8>) {
-    let mut seed = [0u8; tpm2::crypto::MLDSA_SEED_SIZE];
+    let mut seed = [0u8; TpmiMldsaParms::PRIV_KEY_BYTES];
     client_random(&mut seed).unwrap();
     (seed.to_vec(), mldsa_client_public_key(parameter_set, &seed))
 }
 
+#[cfg(feature = "mldsa")]
 /// The verification key of the ML-DSA key with seed `seed` (`ML-DSA.KeyGen_internal`).
 pub fn mldsa_client_public_key(parameter_set: TpmiMldsaParms, seed: &[u8]) -> Vec<u8> {
-    let seed: &[u8; tpm2::crypto::MLDSA_SEED_SIZE] = seed.try_into().unwrap();
-    let mut public_key = vec![0u8; tpm2::TPM2_MAX_MLDSA_PUB_SIZE];
-    let len = CLIENT_CRYPTO
-        .mldsa_generate_key(parameter_set, seed, &mut public_key)
-        .expect("client ML-DSA key generation failed");
-    public_key.truncate(len);
-    public_key
+    let key = mldsa_client_private_key(parameter_set, seed);
+    let mut public_key = [0u8; TpmiMldsaParms::MAX_PUB_KEY_BYTES];
+    key.public(&mut public_key)
+        .expect("client ML-DSA key generation failed")
+        .get_buffer()
+        .to_vec()
 }
 
+#[cfg(feature = "mldsa")]
+/// The client-side ML-DSA key with seed `seed` (`ML-DSA.KeyGen_internal`); panics unless `seed`
+/// has 32 bytes.
+fn mldsa_client_private_key(
+    parameter_set: TpmiMldsaParms,
+    seed: &[u8],
+) -> MldsaPrivateKey<ClientCrypto> {
+    let seed = Tpm2bPrivateKeyMldsa::from_bytes(seed).expect("ML-DSA seed too long");
+    MldsaPrivateKey::<ClientCrypto>::expand(parameter_set, seed)
+        .expect("client ML-DSA key generation failed")
+        .expect("ML-DSA seed of the wrong size")
+}
+
+#[cfg(feature = "mlkem")]
 /// Sensitive area of an ML-KEM key with private seed `seed` (empty authValue and seedValue).
 pub fn mlkem_sensitive(seed: &[u8]) -> TpmtSensitive<'static> {
     TpmtSensitive {
@@ -16395,6 +16366,7 @@ pub fn mlkem_sensitive(seed: &[u8]) -> TpmtSensitive<'static> {
     }
 }
 
+#[cfg(feature = "mldsa")]
 /// Sensitive area of an ML-DSA key with private seed `seed` (empty authValue and seedValue).
 pub fn mldsa_sensitive(seed: &[u8]) -> TpmtSensitive<'static> {
     TpmtSensitive {
@@ -16406,30 +16378,31 @@ pub fn mldsa_sensitive(seed: &[u8]) -> TpmtSensitive<'static> {
     }
 }
 
+#[cfg(feature = "mlkem")]
 /// ML-KEM encapsulation to `public_key` client-side with fresh randomness; returns
 /// `(shared secret, ciphertext)`. Panics if the key is not a valid encapsulation key.
 pub fn mlkem_client_encapsulate(
     parameter_set: TpmiMlkemParms,
     public_key: &[u8],
 ) -> (Vec<u8>, Vec<u8>) {
-    let mut entropy = [0u8; tpm2::crypto::MLKEM_ENTROPY_SIZE];
+    let mut entropy = [0u8; 32];
     client_random(&mut entropy).unwrap();
-    let mut ciphertext = vec![0u8; tpm2::TPM2_MAX_MLKEM_CT_SIZE];
-    let mut shared_secret = [0u8; MLKEM_SHARED_SECRET_BYTES];
-    let len = CLIENT_CRYPTO
-        .mlkem_encapsulate(
-            parameter_set,
-            public_key,
-            &entropy,
-            &mut ciphertext,
-            &mut shared_secret,
-        )
+    let public_key = Tpm2bPublicKeyMlkem::from_bytes(public_key).expect("ML-KEM key too long");
+    let public_key = MlkemPublicKey::<ClientCrypto>::load(parameter_set, public_key)
         .expect("client ML-KEM encapsulation failed")
         .expect("invalid ML-KEM encapsulation key");
-    ciphertext.truncate(len);
-    (shared_secret.to_vec(), ciphertext)
+    let mut ciphertext = [0u8; TpmiMlkemParms::MAX_CT_BYTES];
+    let mut shared_secret = [0u8; TpmiMlkemParms::SHARED_SECRET_BYTES];
+    let (ciphertext, shared_secret) = public_key
+        .encapsulate_internal(&entropy, &mut ciphertext, &mut shared_secret)
+        .expect("client ML-KEM encapsulation failed");
+    (
+        shared_secret.get_buffer().to_vec(),
+        ciphertext.get_buffer().to_vec(),
+    )
 }
 
+#[cfg(feature = "mlkem")]
 /// ML-KEM decapsulation of `ciphertext` client-side with the key of seed `seed`; returns the
 /// shared secret.
 pub fn mlkem_client_decapsulate(
@@ -16437,17 +16410,17 @@ pub fn mlkem_client_decapsulate(
     seed: &[u8],
     ciphertext: &[u8],
 ) -> Vec<u8> {
-    let seed: &[u8; tpm2::crypto::MLKEM_SEED_SIZE] = seed.try_into().unwrap();
-    let mut shared_secret = [0u8; MLKEM_SHARED_SECRET_BYTES];
-    assert!(
-        CLIENT_CRYPTO
-            .mlkem_decapsulate(parameter_set, seed, ciphertext, &mut shared_secret)
-            .expect("client ML-KEM decapsulation failed"),
-        "ciphertext of the wrong size"
-    );
-    shared_secret.to_vec()
+    let key = mlkem_client_private_key(parameter_set, seed);
+    let ciphertext = Tpm2bKemCiphertext::from_bytes(ciphertext).expect("ciphertext too long");
+    let mut shared_secret = [0u8; TpmiMlkemParms::SHARED_SECRET_BYTES];
+    key.decapsulate(ciphertext, &mut shared_secret)
+        .expect("client ML-KEM decapsulation failed")
+        .expect("ciphertext of the wrong size")
+        .get_buffer()
+        .to_vec()
 }
 
+#[cfg(feature = "mlkem")]
 /// The ML-KEM Labeled KEM (TPM 2.0 Part 1, "ML-KEM Labeled KEM") client-side: encapsulates to
 /// the ML-KEM key `public` and derives
 /// `seed = KDFa(nameAlg, K, label, ciphertext, publicKey, digestBits(nameAlg))`. Returns
@@ -16459,6 +16432,7 @@ pub fn mlkem_labeled_encapsulate(public: &TpmtPublic<'_>, label: &[u8]) -> (Vec<
     (seed, ciphertext)
 }
 
+#[cfg(feature = "mlkem")]
 /// The seed of the ML-KEM Labeled KEM for the shared secret `shared_secret` and `ciphertext`.
 pub fn mlkem_labeled_seed(
     public: &TpmtPublic<'_>,
@@ -16469,13 +16443,11 @@ pub fn mlkem_labeled_seed(
     let (_, public_key) = mlkem_public_key(public);
     let name_alg = public.name_alg.unwrap();
     let mut seed = vec![0u8; name_alg.digest_size()];
-    kdfa_bits(
-        CLIENT_CRYPTO,
+    kdfa_bits::<ClientCrypto>(
         name_alg,
         shared_secret,
         label,
-        ciphertext,
-        &public_key,
+        (ciphertext, &public_key),
         (name_alg.digest_size() * 8) as u32,
         &mut seed,
     )
@@ -16498,34 +16470,30 @@ pub fn outer_wrap_with_seed(
 ) -> Vec<u8> {
     let key_bits = u32::from(symmetric.key_bits());
     let mut sym_key = vec![0u8; key_bits as usize / 8];
-    kdfa_bits(
-        CLIENT_CRYPTO,
+    kdfa_bits::<ClientCrypto>(
         name_alg,
         seed,
         b"STORAGE",
-        name,
-        &[],
+        (name, &[]),
         key_bits,
         &mut sym_key,
     )
     .unwrap();
     let mut encrypted = inner.to_vec();
     let mut iv = [0u8; 16];
-    sym_encrypt(CLIENT_CRYPTO, symmetric, &sym_key, &mut iv, &mut encrypted).unwrap();
+    sym_encrypt(symmetric, &sym_key, &mut iv, &mut encrypted).unwrap();
     let digest_size = name_alg.digest_size();
     let mut hmac_key = vec![0u8; digest_size];
-    kdfa_bits(
-        CLIENT_CRYPTO,
+    kdfa_bits::<ClientCrypto>(
         name_alg,
         seed,
         b"INTEGRITY",
-        &[],
-        &[],
+        (&[], &[]),
         (digest_size * 8) as u32,
         &mut hmac_key,
     )
     .unwrap();
-    let integrity = compute_client_hmac(CLIENT_CRYPTO, name_alg, &hmac_key, &[&encrypted, name]);
+    let integrity = compute_client_hmac(name_alg, &hmac_key, &[&encrypted, name]);
     let mut out = (integrity.len() as u16).to_be_bytes().to_vec();
     out.extend_from_slice(&integrity);
     out.extend_from_slice(&encrypted);
@@ -16544,6 +16512,7 @@ pub fn shake256<const N: usize>(parts: &[&[u8]]) -> [u8; N] {
     out
 }
 
+#[cfg(feature = "mldsa")]
 /// The message representative `mu` of a pure ML-DSA signature (FIPS 204, Algorithm 2 with
 /// Algorithm 7 line 6): `mu = SHAKE256(SHAKE256(pk, 64) || 0x00 || len(ctx) || ctx || M, 64)`.
 pub fn mldsa_pure_mu(public_key: &[u8], context: &[u8], message: &[u8]) -> [u8; 64] {
@@ -16569,6 +16538,7 @@ pub fn hash_mldsa_oid(hash_alg: TpmiAlgHash) -> &'static [u8] {
     }
 }
 
+#[cfg(feature = "mldsa")]
 /// The message representative `mu` of a HashML-DSA signature of `digest` (computed with
 /// `hash_alg`) with an empty context (FIPS 204, Algorithm 4):
 /// `mu = SHAKE256(SHAKE256(pk, 64) || 0x01 || 0x00 || OID(hash_alg) || digest, 64)`.
@@ -16577,6 +16547,7 @@ pub fn hash_mldsa_mu(public_key: &[u8], hash_alg: TpmiAlgHash, digest: &[u8]) ->
     shake256(&[&tr, &[1, 0], hash_mldsa_oid(hash_alg), digest])
 }
 
+#[cfg(feature = "mldsa")]
 /// A pure ML-DSA signature of `message` with `context`, made client-side with the key of seed
 /// `seed` and fresh signing randomness.
 pub fn mldsa_client_sign(
@@ -16590,21 +16561,21 @@ pub fn mldsa_client_sign(
     mldsa_client_sign_mu(parameter_set, seed, &mu)
 }
 
+#[cfg(feature = "mldsa")]
 /// An ML-DSA signature of the message representative `mu`, made client-side with the key of seed
 /// `seed` and fresh signing randomness.
 pub fn mldsa_client_sign_mu(parameter_set: TpmiMldsaParms, seed: &[u8], mu: &[u8; 64]) -> Vec<u8> {
-    let seed: &[u8; tpm2::crypto::MLDSA_SEED_SIZE] = seed.try_into().unwrap();
-    let mut rnd = [0u8; tpm2::crypto::MLDSA_RND_SIZE];
+    let key = mldsa_client_private_key(parameter_set, seed);
+    let mut rnd = [0u8; 32];
     client_random(&mut rnd).unwrap();
-    let mut signature = vec![0u8; tpm2::TPM2_MAX_MLDSA_SIG_SIZE];
-    let len = CLIENT_CRYPTO
-        .mldsa_sign_mu(parameter_set, seed, mu, &rnd, &mut signature)
-        .expect("client ML-DSA signing failed")
+    let mut signature = [0u8; tpm2::crypto::MAX_SIGNATURE_BYTES];
+    let signature = key
+        .sign_mu_internal(&rnd, mu, &mut signature)
         .expect("client ML-DSA signing failed");
-    signature.truncate(len);
-    signature
+    mldsa_signature_bytes(&signature)
 }
 
+#[cfg(feature = "mldsa")]
 /// Verifies an ML-DSA `signature` of the message representative `mu` client-side.
 pub fn mldsa_client_verify_mu(
     parameter_set: TpmiMldsaParms,
@@ -16612,11 +16583,23 @@ pub fn mldsa_client_verify_mu(
     mu: &[u8; 64],
     signature: &[u8],
 ) -> bool {
-    CLIENT_CRYPTO
-        .mldsa_verify_mu(parameter_set, public_key, mu, signature)
+    let Ok(public_key) = Tpm2bPublicKeyMldsa::from_bytes(public_key) else {
+        return false;
+    };
+    let Some(public_key) = MldsaPublicKey::<ClientCrypto>::load(parameter_set, public_key)
+        .expect("client ML-DSA verification failed")
+    else {
+        return false;
+    };
+    let Ok(signature) = Tpm2bSignatureMldsa::from_bytes(signature) else {
+        return false;
+    };
+    public_key
+        .verify(&[], mu, TpmtSignature::Mldsa(signature))
         .expect("client ML-DSA verification failed")
 }
 
+#[cfg(feature = "mldsa")]
 /// Verifies a pure ML-DSA `signature` of `message` with an empty context client-side (how the
 /// TPM signs attestation blocks and how `TPM2_PolicySigned` verifies ML-DSA authorizations).
 pub fn mldsa_client_verify(
@@ -16629,6 +16612,7 @@ pub fn mldsa_client_verify(
     mldsa_client_verify_mu(parameter_set, public_key, &mu, signature)
 }
 
+#[cfg(feature = "mldsa")]
 /// The signature bytes of a `TPMT_SIGNATURE` with `sigAlg` `TPM_ALG_MLDSA`.
 pub fn mldsa_signature_bytes(signature: &TpmtSignature<'_>) -> Vec<u8> {
     match signature {
@@ -16637,6 +16621,7 @@ pub fn mldsa_signature_bytes(signature: &TpmtSignature<'_>) -> Vec<u8> {
     }
 }
 
+#[cfg(feature = "mldsa")]
 /// A `TPMT_SIGNATURE` with `sigAlg` `TPM_ALG_MLDSA` and the signature `signature`.
 pub fn mldsa_signature(signature: &[u8]) -> TpmtSignature<'static> {
     TpmtSignature::Mldsa(Tpm2bSignatureMldsa::from_bytes(leak_bytes(signature)).unwrap())
@@ -16671,7 +16656,6 @@ pub fn start_salted_session_with_salt(
     )?;
     let mut session_key = vec![0u8; 32];
     kdfa_by_alg(
-        CLIENT_CRYPTO,
         TpmiAlgHash::Sha256,
         salt,
         b"ATH",
@@ -16696,6 +16680,8 @@ pub fn start_salted_session_with_salt(
     })
 }
 
+#[cfg(feature = "mlkem")]
+#[cfg(feature = "mlkem")]
 /// Starts an HMAC session salted by the ML-KEM key `tpm_key` (public area `public`) with the
 /// ML-KEM Labeled KEM ("SECRET"): the salt is the Labeled KEM seed and the encrypted salt its
 /// ciphertext (see [`start_salted_session_with_salt`]).
@@ -16722,20 +16708,9 @@ pub fn load_external_ecc_key_on(
     attrs: TpmaObject,
     scheme: Option<TpmtEccScheme>,
 ) -> (Handle, Vec<u8>, Vec<u8>) {
-    let mut pub_buf = [0u8; 512];
-    let mut priv_buf = [0u8; 1024];
-    let (pub_len, priv_len) = CLIENT_CRYPTO
-        .generate_key(
-            Alg::ECC,
-            Some(KeyParams::Ecc(curve)),
-            &mut pub_buf,
-            &mut priv_buf,
-            None,
-        )
-        .unwrap();
-    let x = leak_bytes(&pub_buf[..pub_len / 2]);
-    let y = leak_bytes(&pub_buf[pub_len / 2..pub_len]);
-    let d = leak_bytes(&priv_buf[..priv_len]);
+    let (d, xy) = client_ecc_key(curve);
+    let (x, y) = xy.split_at(xy.len() / 2);
+    let (x, y, d) = (leak_bytes(x), leak_bytes(y), leak_bytes(&d));
     let public = TpmtPublic {
         name_alg: Some(TpmiAlgHash::Sha256),
         object_attributes: attrs,
@@ -16765,11 +16740,7 @@ pub fn load_external_ecc_key_on(
             hierarchy: Handle::RH_NULL,
         })
         .expect("LoadExternal failed");
-    (
-        handles.object_handle,
-        d.to_vec(),
-        pub_buf[..pub_len].to_vec(),
-    )
+    (handles.object_handle, d.to_vec(), xy)
 }
 
 /// The `TPM2B_ECC_POINT` of the point `x || y` (two equally long coordinates).
@@ -16808,14 +16779,9 @@ pub fn ecc_decrypt_reference(
     c2: &[u8],
     c3: &[u8],
 ) -> Option<Vec<u8>> {
-    use tpm2::crypto::Ecc as _;
-    let mut p2 = [0u8; 2 * 66];
-    let len = CLIENT_CRYPTO
-        .point_multiply(curve, d, c1, &mut p2)
-        .unwrap()
-        .unwrap();
-    let (x2, y2) = p2[..len].split_at(len / 2);
-    let mask = kdf2(hash, &p2[..len], c2.len());
+    let p2 = client_ecc_mul_point(curve, d, c1).unwrap();
+    let (x2, y2) = p2.split_at(p2.len() / 2);
+    let mask = kdf2(hash, &p2, c2.len());
     let m: Vec<u8> = c2.iter().zip(&mask).map(|(c, k)| c ^ k).collect();
     (hash_bytes(hash, &[x2, &m[..], y2].concat()) == c3).then_some(m)
 }
@@ -16829,22 +16795,118 @@ pub fn ecc_encrypt_reference(
     k: &[u8],
     m: &[u8],
 ) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
-    use tpm2::crypto::Ecc as _;
-    let mut c1 = [0u8; 2 * 66];
-    let len = CLIENT_CRYPTO
-        .point_multiply_generator(curve, k, &mut c1)
-        .unwrap()
-        .unwrap();
-    let mut p2 = [0u8; 2 * 66];
-    CLIENT_CRYPTO
-        .point_multiply(curve, k, pb, &mut p2)
-        .unwrap()
-        .unwrap();
-    let (x2, y2) = p2[..len].split_at(len / 2);
-    let mask = kdf2(hash, &p2[..len], m.len());
+    let c1 = client_ecc_mul_generator(curve, k).unwrap();
+    let p2 = client_ecc_mul_point(curve, k, pb).unwrap();
+    let (x2, y2) = p2.split_at(p2.len() / 2);
+    let mask = kdf2(hash, &p2, m.len());
     let c2: Vec<u8> = m.iter().zip(&mask).map(|(a, b)| a ^ b).collect();
     let c3 = hash_bytes(hash, &[x2, m, y2].concat());
-    (c1[..len].to_vec(), c2, c3)
+    (c1, c2, c3)
+}
+
+/// Generates an ECC key on the Weierstrass curve `curve` client-side (with [`client_crypto_rng`]);
+/// returns `(private scalar d, public point x || y)`, each coordinate `curve.key_bytes()` long.
+pub fn client_ecc_key(curve: TpmEccCurve) -> (Vec<u8>, Vec<u8>) {
+    let key = EccPrivateKey::<ClientCrypto>::generate(&mut client_crypto_rng(), curve, None)
+        .expect("client ECC key generation failed");
+    let mut d = [0u8; MAX_ECC_COORD_BYTES];
+    let d = key.scalar(&mut d).unwrap().get_buffer().to_vec();
+    let (mut x, mut y) = ([0u8; MAX_ECC_COORD_BYTES], [0u8; MAX_ECC_COORD_BYTES]);
+    (d, ecc_point_bytes(&key.point(&mut x, &mut y).unwrap()))
+}
+
+/// The point `x || y` (two equally long coordinates) on `curve` as a client-side public key, or
+/// `None` if it is not a point of the curve (client-side point validation).
+pub fn client_ecc_public(curve: TpmEccCurve, xy: &[u8]) -> Option<EccPublicKey<ClientCrypto>> {
+    let (x, y) = xy.split_at(xy.len() / 2);
+    let point = TpmsEccPoint {
+        x: Tpm2bEccParameter::from_bytes(x).ok()?,
+        y: Tpm2bEccParameter::from_bytes(y).ok()?,
+    };
+    EccPublicKey::<ClientCrypto>::load(curve, None, point).expect("client ECC point validation")
+}
+
+/// `[k]P` on `curve` for the point `P = x || y`, computed client-side; `None` if `P` is not a
+/// point of the curve, `k` is not in `[1, n - 1]` or the result is the point at infinity.
+pub fn client_ecc_mul_point(curve: TpmEccCurve, k: &[u8], xy: &[u8]) -> Option<Vec<u8>> {
+    let public = client_ecc_public(curve, xy)?;
+    let (mut x, mut y) = ([0u8; MAX_ECC_COORD_BYTES], [0u8; MAX_ECC_COORD_BYTES]);
+    let product = public
+        .mul_point(k, &mut x, &mut y)
+        .expect("client ECC point multiplication")?;
+    Some(ecc_point_bytes(&product))
+}
+
+/// Verifies the RSASSA or RSAPSS (`scheme`) signature `signature` of `digest` (made with the
+/// digest's hash algorithm) with the RSA public key of modulus `modulus` and public exponent
+/// `exponent` (0 for 65537) client-side; `false` if the key or the signature is invalid.
+pub fn client_rsa_verify(
+    modulus: &[u8],
+    exponent: u32,
+    scheme: Alg,
+    digest: TpmtHa<'_>,
+    signature: &[u8],
+) -> bool {
+    let Some(bits) = u16::try_from(modulus.len() * 8)
+        .ok()
+        .and_then(TpmiRsaKeyBits::new)
+    else {
+        return false;
+    };
+    let (Ok(modulus), Ok(sig)) = (
+        Tpm2bPublicKeyRsa::from_bytes(modulus),
+        Tpm2bPublicKeyRsa::from_bytes(signature),
+    ) else {
+        return false;
+    };
+    let Some(public) = RsaPublicKey::<ClientCrypto>::load(bits, exponent, modulus)
+        .expect("client RSA key validation")
+    else {
+        return false;
+    };
+    let sig = TpmsSignatureRsa {
+        hash: digest.hash_alg(),
+        sig,
+    };
+    let signature = match scheme {
+        Alg::RSASSA => TpmtSignature::Rsassa(sig),
+        Alg::RSAPSS => TpmtSignature::Rsapss(sig),
+        other => panic!("not an RSA signature scheme: {other:?}"),
+    };
+    public
+        .verify(digest.digest(), signature)
+        .expect("client RSA signature verification")
+}
+
+/// Encrypts `data` with `scheme` under the RSA public key of modulus `modulus` and public exponent
+/// `exponent` (0 for 65537) client-side (with [`client_crypto_rng`]); `None` if the key is invalid
+/// or `data` is too long for it.
+pub fn client_rsa_encrypt(
+    modulus: &[u8],
+    exponent: u32,
+    scheme: RsaEncryptScheme<'_>,
+    data: &[u8],
+) -> Option<Vec<u8>> {
+    let bits = TpmiRsaKeyBits::new(u16::try_from(modulus.len() * 8).ok()?)?;
+    let public = RsaPublicKey::<ClientCrypto>::load(
+        bits,
+        exponent,
+        Tpm2bPublicKeyRsa::from_bytes(modulus).ok()?,
+    )
+    .expect("client RSA key validation")?;
+    let mut out = [0u8; TpmiRsaKeyBits::MAX_PUB_KEY_BYTES];
+    let ciphertext = public
+        .encrypt(&mut client_crypto_rng(), scheme, data, &mut out)
+        .expect("client RSA encryption")?;
+    Some(ciphertext.get_buffer().to_vec())
+}
+
+/// `[k]G` on `curve` as `x || y`, computed client-side; `None` if `k` is not in `[1, n - 1]`.
+pub fn client_ecc_mul_generator(curve: TpmEccCurve, k: &[u8]) -> Option<Vec<u8>> {
+    let (mut x, mut y) = ([0u8; MAX_ECC_COORD_BYTES], [0u8; MAX_ECC_COORD_BYTES]);
+    let product = tpm2::crypto::ecc_mul_generator::<ClientCrypto>(curve, k, &mut x, &mut y)
+        .expect("client ECC point multiplication")?;
+    Some(ecc_point_bytes(&product))
 }
 
 /// A NIST P-256 point `x || y` as a `p256` projective point.
@@ -16920,14 +16982,14 @@ pub fn p256_sm2_key_exchange_reference(
 /// An affine point of a [`ClientCurve`]; `None` is the point at infinity.
 pub type ClientPoint = Option<(rsa::BigUint, rsa::BigUint)>;
 
-/// The optional ECC curves of this build (the `ecc_curve_*` features of `testing`, forwarded to
-/// `tpm2-engine`), in ascending order of `TPM_ECC_CURVE`.
+/// The optional ECC curves of this build (the curve features `nist_p192`, `bn_p638` and `sm2_p256`
+/// of `testing`, forwarded to `tpm2-engine`), in ascending order of `TPM_ECC_CURVE`.
 pub const OPTIONAL_ECC_CURVES: &[TpmEccCurve] = &[
-    #[cfg(feature = "ecc_curve_nist_p192")]
+    #[cfg(feature = "nist_p192")]
     TpmEccCurve::NistP192,
-    #[cfg(feature = "ecc_curve_bn_p638")]
+    #[cfg(feature = "bn_p638")]
     TpmEccCurve::BNP638,
-    #[cfg(feature = "ecc_curve_sm2_p256")]
+    #[cfg(feature = "sm2_p256")]
     TpmEccCurve::SM2P256,
 ];
 

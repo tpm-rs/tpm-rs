@@ -5,7 +5,7 @@ use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
 use tpm2::TpmCc;
 use tpm2::commands::responses;
 use tpm2::commands::{ECCParameters, GetCapability, TestParms};
-use tpm2::crypto::{CryptoProvider, Rng};
+use tpm2::crypto::{Crypto, Rng};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Alg, TpmCap, TpmEccCurve, TpmPt};
 use tpm2::{
@@ -32,19 +32,19 @@ const LIMITED_HIERARCHY_HANDLES: [u32; 8] = [
 ];
 
 /// ECC curves implemented by this TPM in ascending `TPM_ECC_CURVE` order (`TPM_CAP_ECC_CURVES`;
-/// the `ecc_curve_*` features of `tpm2`, the optional ones forwarded by the features of the same
-/// name of this crate).
+/// the curve features of `tpm2` (`nist_p256`, `bn_p256`, ...), the optional ones forwarded by
+/// the features of the same name of this crate).
 pub(crate) const IMPLEMENTED_CURVES: &[TpmEccCurve] = &[
-    #[cfg(feature = "ecc_curve_nist_p192")]
+    #[cfg(feature = "nist_p192")]
     TpmEccCurve::NistP192,
     TpmEccCurve::NistP224,
     TpmEccCurve::NistP256,
     TpmEccCurve::NistP384,
     TpmEccCurve::NistP521,
     TpmEccCurve::BNP256,
-    #[cfg(feature = "ecc_curve_bn_p638")]
+    #[cfg(feature = "bn_p638")]
     TpmEccCurve::BNP638,
-    #[cfg(feature = "ecc_curve_sm2_p256")]
+    #[cfg(feature = "sm2_p256")]
     TpmEccCurve::SM2P256,
 ];
 
@@ -101,7 +101,7 @@ pub(crate) fn sha512() -> Option<tpm2::TpmiAlgHash> {
 /// The largest RSA key of this TPM's profile, in bits: 2048 (`RSA_1024` and `RSA_2048`), 3072 with
 /// the `rsa3072` feature or 4096 with the `rsa4096` feature (the `rsa*` features of `tpm2`, which
 /// size `TPM2B_PUBLIC_KEY_RSA`).
-const MAX_RSA_KEY_BITS: usize = tpm2::TpmiRsaKeyBits::MAX_PUB_KEY_BITS;
+const MAX_RSA_KEY_BITS: usize = tpm2::TpmiRsaKeyBits::MAX_PUB_KEY_BITS as usize;
 /// `MAX_RSA_KEY_BYTES`: the bytes of the largest RSA modulus.
 const MAX_RSA_KEY_BYTES: usize = MAX_RSA_KEY_BITS / 8;
 /// `RSA_PRIVATE_SIZE`. TPM 2.0 Part 2, TPM2B_PRIVATE_KEY_RSA: "`RSA_PRIVATE_SIZE` is a vendor
@@ -118,7 +118,7 @@ const fn sizeof_tpm2b_digest(sha512: bool) -> usize {
     2 + max_digest_size(sha512)
 }
 /// `MAX_ECC_KEY_BYTES`: the bytes of the largest implemented curve (NIST P-521, or BN P-638 with
-/// `ecc_curve_bn_p638`).
+/// `bn_p638`).
 const MAX_ECC_KEY_BYTES: usize = tpm2::TpmEccCurve::MAX_ECC_KEY_BYTES;
 /// `MAX_SYM_DATA`: the largest `TPM2B_SENSITIVE_DATA` (Part 2: "For interoperability,
 /// `MAX_SYM_DATA` should be 128.").
@@ -434,7 +434,7 @@ pub(crate) fn is_unmarshalable_capability(capability: u32) -> bool {
     capability <= LAST_CAP as u32 || capability == CAP_VENDOR_PROPERTY
 }
 
-impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
+impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     CommandHandler<'a, 'b, C, S, T, R>
 {
     /// Handles the [TpmCc::GetCapability] (`0x17A`) command.
@@ -1529,12 +1529,12 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 fn recommended_kdf(curve: tpm2::TpmEccCurve) -> Option<tpm2::TpmtKdfScheme> {
     use tpm2::TpmEccCurve as C;
     let hash = match curve {
-        #[cfg(feature = "ecc_curve_nist_p192")]
+        #[cfg(feature = "nist_p192")]
         C::NistP192 => tpm2::TpmiAlgHash::Sha256,
         C::NistP224 | C::NistP256 => tpm2::TpmiAlgHash::Sha256,
         C::NistP384 => tpm2::TpmiAlgHash::Sha384,
         C::NistP521 => sha512()?,
-        #[cfg(feature = "ecc_curve_sm2_p256")]
+        #[cfg(feature = "sm2_p256")]
         C::SM2P256 => tpm2::TpmiAlgHash::try_from(Alg::SM3_256).ok()?,
         _ => return None,
     };

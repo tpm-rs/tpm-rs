@@ -1,19 +1,25 @@
 //! AES-128/192/256 and Camellia-128/192/256 in the CTR, OFB, CBC and ECB block cipher modes
-//! through the crypto provider (`Symmetric::aes*`/`Symmetric::camellia*`): the ciphertexts, the
-//! output chaining values (`ivOut`) of the TCG reference implementation (CTR: the next counter,
-//! also after a trailing partial block; OFB: the last keystream block; CBC: the last ciphertext
-//! block), chaining across calls, the CTR counter wrap and the block-multiple precondition of
-//! CBC and ECB. (CFB is covered by `cfb_round_trip.rs`, `camellia.rs` and the backend tests.)
+//! through the crypto backend under test: the ciphertexts, the output chaining values (`ivOut`)
+//! of the TCG reference implementation (CTR: the next counter, also after a trailing partial
+//! block; OFB: the last keystream block; CBC: the last ciphertext block), chaining across calls,
+//! the CTR counter wrap and the block-multiple precondition of CBC and ECB (now enforced by
+//! [`CipherInput::new`]). (CFB is covered by `cfb_round_trip.rs`, `camellia.rs` and the backend
+//! tests.)
 //!
-//! The trait methods are called directly rather than through `SymmetricKey`, whose Camellia
-//! variants only exist with the `tpm2` Camellia features, which these tests must not enable.
+//! AES-128 and AES-256 (algorithms of the TPM profile) go through the dispatch API
+//! (`SymmetricKey::crypt`). AES-192 and Camellia go through the backend trait
+//! (`<TestProvider as Symmetric>::*` and `SymmetricState::crypt_once`), since the `SymmetricKey`
+//! variants of these ciphers only exist with the `tpm2` features of these algorithms, which these
+//! tests must not enable.
 //!
 //! The AES vectors are those of NIST SP 800-38A, Appendix F (F.1 ECB, F.2 CBC, F.4 OFB, F.5 CTR);
 //! the Camellia vectors were computed with OpenSSL (`openssl enc -camellia-<n>-<mode> -nopad`)
 //! for the RFC 3713 keys and the same IVs, counter and plaintext.
 
 use hex_literal::hex;
-use tpm2::crypto::{CryptoError, Direction, ModeIv, Symmetric};
+use tpm2::crypto::backend::{Symmetric, SymmetricState};
+use tpm2::crypto::{CipherInput, CryptoError, Direction, SymmetricKey};
+use tpm2::{AlgSym, TpmiAlgCipherMode};
 use tpm2_crypto_tests::TestProvider;
 
 /// NIST SP 800-38A, Appendix F: the plaintext of every example.
@@ -28,8 +34,23 @@ const IV: [u8; 16] = hex!("000102030405060708090a0b0c0d0e0f");
 /// NIST SP 800-38A, Appendix F.5: the initial counter block of the CTR examples.
 const COUNTER: [u8; 16] = hex!("f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff");
 
-/// A one-shot `Symmetric` operation with a fixed cipher and key.
-type Op = Box<dyn Fn(ModeIv<'_>, Direction, &mut [u8]) -> Result<(), CryptoError>>;
+/// A one-shot symmetric operation with a fixed cipher and key.
+type Op = Box<dyn Fn(Direction, CipherInput<'_>) -> Result<(), CryptoError>>;
+
+/// The one-shot operation of the backend's cipher `S` with `key` (for the ciphers outside the
+/// TPM profile).
+fn backend_op<S: SymmetricState<N> + 'static, const N: usize>(key: [u8; N]) -> Op {
+    Box::new(move |dir, input| S::crypt_once(&key, dir, input))
+}
+
+/// The one-shot operation of the dispatch API for `alg` with `key` (for the profile ciphers).
+fn dispatch_op(alg: AlgSym, key: &'static [u8]) -> Op {
+    Box::new(move |dir, input| {
+        SymmetricKey::new(alg, key)
+            .unwrap()
+            .crypt::<TestProvider>(dir, input)
+    })
+}
 
 /// A block cipher with a key, and its ciphertexts of [`PLAINTEXT`] in each mode.
 struct Case {
@@ -50,11 +71,11 @@ enum IvMode {
 }
 
 impl IvMode {
-    fn mode_iv(self, iv: &mut [u8; 16]) -> ModeIv<'_> {
+    fn mode(self) -> TpmiAlgCipherMode {
         match self {
-            Self::Ctr => ModeIv::Ctr(iv),
-            Self::Ofb => ModeIv::Ofb(iv),
-            Self::Cbc => ModeIv::Cbc(iv),
+            Self::Ctr => TpmiAlgCipherMode::Ctr,
+            Self::Ofb => TpmiAlgCipherMode::Ofb,
+            Self::Cbc => TpmiAlgCipherMode::Cbc,
         }
     }
 
@@ -101,11 +122,17 @@ impl Case {
     fn run(&self, mode: IvMode, dir: Direction, iv: [u8; 16], data: &[u8]) -> (Vec<u8>, [u8; 16]) {
         let mut iv = iv;
         let mut data = data.to_vec();
-        (self.op)(mode.mode_iv(&mut iv), dir, &mut data)
-            .unwrap_or_else(|e| panic!("{} {mode:?} {dir:?}: {e:?}", self.name));
+        let input = CipherInput::new(mode.mode(), &mut iv, &mut data)
+            .unwrap_or_else(|| panic!("{} {mode:?}: invalid input", self.name));
+        (self.op)(dir, input).unwrap_or_else(|e| panic!("{} {mode:?} {dir:?}: {e:?}", self.name));
         (data, iv)
     }
 
+    /// ECB over `data` (whole blocks).
+    fn ecb(&self, dir: Direction, data: &mut [u8]) {
+        let input = CipherInput::new(TpmiAlgCipherMode::Ecb, &mut [], data).unwrap();
+        (self.op)(dir, input).unwrap_or_else(|e| panic!("{} ECB {dir:?}: {e:?}", self.name));
+    }
     /// Whole-message encryption and decryption match the vectors, with the expected `ivOut`.
     fn check_vectors(&self) {
         for mode in [IvMode::Ctr, IvMode::Ofb, IvMode::Cbc] {
@@ -132,7 +159,7 @@ impl Case {
             (Direction::Decrypt, &self.ecb, &PLAINTEXT),
         ] {
             let mut data = *input;
-            (self.op)(ModeIv::Ecb, dir, &mut data).unwrap();
+            self.ecb(dir, &mut data);
             assert_eq!(&data, output, "{} ECB {dir:?}", self.name);
         }
     }
@@ -188,7 +215,7 @@ impl Case {
         let mut counters = [0u8; 32];
         counters[..16].copy_from_slice(&start);
         counters[16..].copy_from_slice(&add_to_counter(start, 1));
-        (self.op)(ModeIv::Ecb, Direction::Encrypt, &mut counters).unwrap();
+        self.ecb(Direction::Encrypt, &mut counters);
         assert_eq!(keystream, counters, "{} CTR keystream", self.name);
         // A carry through several bytes.
         let start = hex!("000000000000000000000000ffffffff");
@@ -196,35 +223,24 @@ impl Case {
         assert_eq!(iv, hex!("00000000000000000000000100000001"));
     }
 
-    /// CBC and ECB need whole blocks: other lengths fail (`CryptoError::Internal`, a
-    /// precondition violation) without touching the data or the IV; empty data is accepted.
-    fn check_block_multiple(&self) {
-        for len in [1usize, 15, 17, 63] {
+    /// Empty data is accepted in every mode and leaves the IV unchanged. (Inputs of other
+    /// lengths than whole blocks cannot reach the cipher in CBC and ECB any more: see
+    /// [`cipher_input_rejects_invalid_lengths`].)
+    fn check_empty(&self) {
+        for mode in [IvMode::Ctr, IvMode::Ofb, IvMode::Cbc] {
             for dir in [Direction::Encrypt, Direction::Decrypt] {
-                let mut data = PLAINTEXT[..len].to_vec();
-                let mut iv = IV;
+                let (out, iv) = self.run(mode, dir, mode.initial_iv(), &[]);
+                assert!(out.is_empty());
                 assert_eq!(
-                    (self.op)(ModeIv::Cbc(&mut iv), dir, &mut data),
-                    Err(CryptoError::Internal),
-                    "{} CBC {dir:?} {len}",
+                    iv,
+                    mode.initial_iv(),
+                    "{} {mode:?} {dir:?} empty",
                     self.name
                 );
-                assert_eq!((&data[..], iv), (&PLAINTEXT[..len], IV));
-                assert_eq!(
-                    (self.op)(ModeIv::Ecb, dir, &mut data),
-                    Err(CryptoError::Internal),
-                    "{} ECB {dir:?} {len}",
-                    self.name
-                );
-                assert_eq!(data, PLAINTEXT[..len]);
             }
         }
-        for mode in [IvMode::Ctr, IvMode::Ofb, IvMode::Cbc] {
-            let (out, iv) = self.run(mode, Direction::Encrypt, mode.initial_iv(), &[]);
-            assert!(out.is_empty());
-            assert_eq!(iv, mode.initial_iv(), "{} {mode:?} empty", self.name);
-        }
-        (self.op)(ModeIv::Ecb, Direction::Encrypt, &mut []).unwrap();
+        self.ecb(Direction::Encrypt, &mut []);
+        self.ecb(Direction::Decrypt, &mut []);
     }
 
     fn check_all(&self) {
@@ -232,17 +248,62 @@ impl Case {
         self.check_chaining();
         self.check_partial_blocks();
         self.check_counter_wrap();
-        self.check_block_multiple();
+        self.check_empty();
     }
+}
+
+/// CBC and ECB need whole blocks: [`CipherInput::new`] (the only way to build a CBC or ECB input
+/// from bytes; the backend's `cbc`/`ecb` take `&mut [Block]`) refuses other lengths, which thus
+/// never reach the cipher, and leaves the data and IV untouched. It also refuses IVs of the wrong
+/// size (16 bytes for CTR, OFB, CBC and CFB; none for ECB). Empty data is accepted.
+#[test]
+fn cipher_input_rejects_invalid_lengths() {
+    for len in [1usize, 15, 17, 63] {
+        let mut data = PLAINTEXT[..len].to_vec();
+        let mut iv = IV;
+        assert!(CipherInput::new(TpmiAlgCipherMode::Cbc, &mut iv, &mut data).is_none());
+        assert!(CipherInput::new(TpmiAlgCipherMode::Ecb, &mut [], &mut data).is_none());
+        assert_eq!((&data[..], iv), (&PLAINTEXT[..len], IV));
+        // The stream modes accept any length.
+        for mode in [
+            TpmiAlgCipherMode::Ctr,
+            TpmiAlgCipherMode::Ofb,
+            TpmiAlgCipherMode::Cfb,
+        ] {
+            assert!(CipherInput::new(mode, &mut iv, &mut data).is_some());
+        }
+    }
+    let mut data = PLAINTEXT;
+    for mode in [
+        TpmiAlgCipherMode::Ctr,
+        TpmiAlgCipherMode::Ofb,
+        TpmiAlgCipherMode::Cbc,
+        TpmiAlgCipherMode::Cfb,
+    ] {
+        for iv_len in [0usize, 15, 17] {
+            let mut iv = vec![0u8; iv_len];
+            assert!(
+                CipherInput::new(mode, &mut iv, &mut data).is_none(),
+                "{mode:?} {iv_len}"
+            );
+        }
+        assert!(
+            CipherInput::new(mode, &mut [], &mut []).is_none(),
+            "{mode:?}"
+        );
+    }
+    assert!(CipherInput::new(TpmiAlgCipherMode::Ecb, &mut [0u8; 16], &mut data).is_none());
+    assert!(CipherInput::new(TpmiAlgCipherMode::Ecb, &mut [], &mut []).is_some());
+    assert!(CipherInput::new(TpmiAlgCipherMode::Cbc, &mut [0u8; 16], &mut []).is_some());
 }
 
 /// AES-128 in CTR, OFB, CBC and ECB matches NIST SP 800-38A (F.5.1, F.4.1, F.2.1, F.1.1).
 #[test]
 fn aes128_modes() {
-    let key = hex!("2b7e151628aed2a6abf7158809cf4f3c");
+    const KEY: &[u8] = &hex!("2b7e151628aed2a6abf7158809cf4f3c");
     Case {
         name: "AES-128",
-        op: Box::new(move |m, d, data| TestProvider.aes128(&key, m, d, data)),
+        op: dispatch_op(AlgSym::Aes128, KEY),
         ecb: hex!(
             "3ad77bb40d7a3660a89ecaf32466ef97f5d3d58503b9699de785895a96fdbaaf"
             "43b1cd7f598ece23881b00e3ed0306887b0c785e27e8ad3f8223207104725dd4"
@@ -269,7 +330,7 @@ fn aes192_modes() {
     let key = hex!("8e73b0f7da0e6452c810f32b809079e562f8ead2522c6b7b");
     Case {
         name: "AES-192",
-        op: Box::new(move |m, d, data| TestProvider.aes192(&key, m, d, data)),
+        op: backend_op::<<TestProvider as Symmetric>::Aes192, _>(key),
         ecb: hex!(
             "bd334f1d6e45f25ff712a214571fa5cc974104846d0ad3ad7734ecb3ecee4eef"
             "ef7afd2270e2e60adce0ba2face6444e9a4b41ba738d6c72fb16691603c18e0e"
@@ -293,10 +354,10 @@ fn aes192_modes() {
 /// AES-256 in CTR, OFB, CBC and ECB matches NIST SP 800-38A (F.5.5, F.4.5, F.2.5, F.1.5).
 #[test]
 fn aes256_modes() {
-    let key = hex!("603deb1015ca71be2b73aef0857d77811f352c073b6108d72d9810a30914dff4");
+    const KEY: &[u8] = &hex!("603deb1015ca71be2b73aef0857d77811f352c073b6108d72d9810a30914dff4");
     Case {
         name: "AES-256",
-        op: Box::new(move |m, d, data| TestProvider.aes256(&key, m, d, data)),
+        op: dispatch_op(AlgSym::Aes256, KEY),
         ecb: hex!(
             "f3eed1bdb5d2a03c064b5a7e3db181f8591ccb10d410ed26dc5ba74a31362870"
             "b6ed21b99ca6f4f9f153e7b1beafed1d23304b7a39f9f3ff067d8d8f9e24ecc7"
@@ -323,7 +384,7 @@ fn camellia128_modes() {
     let key = hex!("0123456789abcdeffedcba9876543210");
     Case {
         name: "Camellia-128",
-        op: Box::new(move |m, d, data| TestProvider.camellia128(&key, m, d, data)),
+        op: backend_op::<<TestProvider as Symmetric>::Camellia128, _>(key),
         ecb: hex!(
             "8933635eae66d08781d649d23d089162c864e83d681758a3dd32f5167cb4f644"
             "6d9361e6b51d3c77bd2bf6951efc486ce0102162179d4bf4486500e42f119293"
@@ -350,7 +411,7 @@ fn camellia192_modes() {
     let key = hex!("0123456789abcdeffedcba98765432100011223344556677");
     Case {
         name: "Camellia-192",
-        op: Box::new(move |m, d, data| TestProvider.camellia192(&key, m, d, data)),
+        op: backend_op::<<TestProvider as Symmetric>::Camellia192, _>(key),
         ecb: hex!(
             "bf084800ce49edc2edf6c36ca60876df82e9315b26c16d1bfcc05795877891f0"
             "99b7f5301914b39e2215d41961b6f310b8a63ffa8b3db42120797f9954f38e8e"
@@ -377,7 +438,7 @@ fn camellia256_modes() {
     let key = hex!("0123456789abcdeffedcba987654321000112233445566778899aabbccddeeff");
     Case {
         name: "Camellia-256",
-        op: Box::new(move |m, d, data| TestProvider.camellia256(&key, m, d, data)),
+        op: backend_op::<<TestProvider as Symmetric>::Camellia256, _>(key),
         ecb: hex!(
             "0dea81432c8c6b7f8763633167fc68903602ff29a8f91f6b6e44e0d40401230b"
             "4b14a6f8ed7cb3058549e171d5792a90878773a0dcacde3ed9a9d2b472450cb0"

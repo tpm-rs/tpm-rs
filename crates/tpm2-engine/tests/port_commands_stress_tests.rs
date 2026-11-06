@@ -7,12 +7,15 @@ use common::TestCryptoProvider;
 use common::{FakeRng, FakeStorage, FakeTimer};
 use hex_literal::hex;
 use tpm2::commands::{Command, Message, UnmarshalMessage};
-use tpm2::crypto::Asymmetric;
+use tpm2::crypto::{
+    EccCoordBuffer, EccPrivateKey, MAX_ECC_COORD_BYTES, Random, RsaModulusBuffer, RsaPrimeBuffer,
+    RsaPrivateKey,
+};
 use tpm2::errors::TpmRc;
 use tpm2::{
     AlgSym, PublicParmsAndId, Tpm2bAuth, Tpm2bData, Tpm2bDigest, Tpm2bEncryptedSecret, Tpm2bName,
-    Tpm2bNonce, Tpm2bPublicKeyRsa, TpmaObject, TpmaSession, TpmiAlgCipherMode, TpmiAlgHash,
-    TpmiAlgSymMode, TpmsAuthCommand, TpmsRsaParms, TpmtPublic, TpmtSymDefObject,
+    Tpm2bNonce, TpmaObject, TpmaSession, TpmiAlgCipherMode, TpmiAlgHash, TpmiAlgSymMode,
+    TpmsAuthCommand, TpmsRsaParms, TpmtPublic, TpmtSymDefObject,
 };
 use tpm2::{Handle, TpmCc, TpmSe};
 use tpm2_engine::TpmEngine;
@@ -213,45 +216,32 @@ where
     Ok(resp)
 }
 
-fn compute_key_name(
-    crypto: &TestCryptoProvider,
-    public: &TpmtPublic,
-) -> tpm2_engine::owned::OwnedName {
+fn compute_key_name(public: &TpmtPublic) -> tpm2_engine::owned::OwnedName {
     let mut buf = [0u8; 1024];
     let len = marshal_to_slice(public, &mut buf);
     let alg = public.name_alg.unwrap_or(TpmiAlgHash::Sha256);
     let mut name_bytes = [0u8; 66];
     name_bytes[0..2].copy_from_slice(&tpm2::Alg::from(alg).id().to_be_bytes());
     let mut out = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
-    let digest = tpm2::crypto::hash(crypto, alg, &buf[..len], &mut out)
+    let digest = tpm2::crypto::hash::<TestCryptoProvider>(alg, &[&buf[..len]], &mut out)
         .unwrap()
         .digest();
     name_bytes[2..2 + digest.len()].copy_from_slice(digest);
     tpm2_engine::owned::OwnedTpm2b::new(&name_bytes[..2 + digest.len()]).unwrap()
 }
 
-fn create_transient_key(
-    crypto: &TestCryptoProvider,
-    handle: u32,
-    attrs: TpmaObject,
-) -> TransientObject {
-    let mut pub_buf = [0u8; 512];
-    let mut priv_buf = [0u8; 2048];
-    use tpm2::Alg;
-    use tpm2::crypto::asymmetric::KeyParams;
-    use tpm2::crypto::asymmetric::TpmiRsaKeyBits;
-
-    let (pub_len, priv_len) = crypto
-        .generate_key(
-            Alg::RSA,
-            Some(KeyParams::Rsa(TpmiRsaKeyBits(2048))),
-            &mut pub_buf,
-            &mut priv_buf,
-            None,
-        )
-        .unwrap();
-
-    let unique = Tpm2bPublicKeyRsa::from_bytes(&pub_buf[..pub_len]).unwrap();
+fn create_transient_key(handle: u32, attrs: TpmaObject) -> TransientObject {
+    let mut rng = TestCryptoProvider::from_entropy().unwrap();
+    let key =
+        RsaPrivateKey::<TestCryptoProvider>::generate(&mut rng, tpm2::TpmiRsaKeyBits::Rsa2048, 0)
+            .unwrap();
+    let mut modulus: RsaModulusBuffer = [0; tpm2::TpmiRsaKeyBits::MAX_PUB_KEY_BYTES];
+    let unique = key.modulus(&mut modulus).unwrap();
+    // The private key of an RSA object is its prime p.
+    let mut prime: RsaPrimeBuffer = [0; tpm2::TpmiRsaKeyBits::MAX_PRIV_KEY_BYTES];
+    let prime = key.prime_p(&mut prime).unwrap();
+    let priv_bytes = prime.as_slice();
+    let priv_len = priv_bytes.len();
 
     let public = TpmtPublic {
         name_alg: Some(TpmiAlgHash::Sha256),
@@ -261,15 +251,15 @@ fn create_transient_key(
             TpmsRsaParms {
                 symmetric: None,
                 scheme: None,
-                key_bits: tpm2::TpmiRsaKeyBits(2048),
+                key_bits: tpm2::TpmiRsaKeyBits::Rsa2048,
                 exponent: 0,
             },
             unique,
         ),
     };
-    let name = compute_key_name(crypto, &public);
+    let name = compute_key_name(&public);
     let mut private = [0u8; tpm2_engine::handler::MAX_PRIVATE_KEY_SIZE];
-    private[..priv_len].copy_from_slice(&priv_buf[..priv_len]);
+    private[..priv_len].copy_from_slice(priv_bytes);
     TransientObject {
         handle,
         seed: [0u8; 64],
@@ -288,16 +278,11 @@ fn create_transient_key(
 }
 
 fn create_transient_ecc_key(
-    crypto: &TestCryptoProvider,
     handle: u32,
     attrs: TpmaObject,
     curve: tpm2::TpmEccCurve,
 ) -> TransientObject {
-    let mut pub_buf = [0u8; 512];
-    let mut priv_buf = [0u8; 2048];
-    use tpm2::Alg;
     use tpm2::TpmEccCurve;
-    use tpm2::crypto::asymmetric::KeyParams;
 
     let ecc_curve = if (curve as u16) == u16::from(tpm2::TpmEccCurve::NistP256) {
         TpmEccCurve::NistP256
@@ -307,20 +292,15 @@ fn create_transient_ecc_key(
         panic!("unsupported curve: {:?}", curve);
     };
 
-    let (pub_len, priv_len) = crypto
-        .generate_key(
-            Alg::ECC,
-            Some(KeyParams::Ecc(ecc_curve)),
-            &mut pub_buf,
-            &mut priv_buf,
-            None,
-        )
-        .unwrap();
-
-    let unique = tpm2::TpmsEccPoint {
-        x: tpm2::Tpm2bEccParameter::from_bytes(&pub_buf[..pub_len / 2]).unwrap(),
-        y: tpm2::Tpm2bEccParameter::from_bytes(&pub_buf[pub_len / 2..pub_len]).unwrap(),
-    };
+    let mut rng = TestCryptoProvider::from_entropy().unwrap();
+    let key = EccPrivateKey::<TestCryptoProvider>::generate(&mut rng, ecc_curve, None).unwrap();
+    let (mut x, mut y): (EccCoordBuffer, EccCoordBuffer) =
+        ([0; MAX_ECC_COORD_BYTES], [0; MAX_ECC_COORD_BYTES]);
+    let unique = key.point(&mut x, &mut y).unwrap();
+    let mut d: EccCoordBuffer = [0; MAX_ECC_COORD_BYTES];
+    let scalar = key.scalar(&mut d).unwrap();
+    let priv_bytes = scalar.as_slice();
+    let priv_len = priv_bytes.len();
 
     let public = TpmtPublic {
         name_alg: Some(TpmiAlgHash::Sha256),
@@ -336,9 +316,9 @@ fn create_transient_ecc_key(
             unique,
         ),
     };
-    let name = compute_key_name(crypto, &public);
+    let name = compute_key_name(&public);
     let mut private = [0u8; tpm2_engine::handler::MAX_PRIVATE_KEY_SIZE];
-    private[..priv_len].copy_from_slice(&priv_buf[..priv_len]);
+    private[..priv_len].copy_from_slice(priv_bytes);
     TransientObject {
         handle,
         seed: [0u8; 64],
@@ -366,7 +346,6 @@ fn test_duplicate_unsupported_curve() {
 
     // 1. Create parent key with an unsupported curve (e.g. 999)
     let mut parent = create_transient_ecc_key(
-        tpm.platform.crypto,
         0x80000001,
         TpmaObject::DECRYPT | TpmaObject::RESTRICTED | TpmaObject::USER_WITH_AUTH,
         tpm2::TpmEccCurve::NistP256,
@@ -377,13 +356,12 @@ fn test_duplicate_unsupported_curve() {
         parms.curve_id = tpm2::TpmEccCurve::NistP224;
     }
     // Update name
-    parent.name = compute_key_name(tpm.platform.crypto, &parent.public.as_tpmt());
+    parent.name = compute_key_name(&parent.public.as_tpmt());
     parent.qualified_name = parent.name;
     tpm.state.transient_objects[0] = Some(parent);
 
     // 2. Create target signing key
     let target = create_transient_key(
-        tpm.platform.crypto,
         0x80000002,
         TpmaObject::SIGN_ENCRYPT | TpmaObject::USER_WITH_AUTH,
     );
@@ -413,7 +391,6 @@ fn test_make_credential_panic_vulnerability_oversized_ecc_point() {
 
     // 1. Create a protector ECC key at 0x80000001
     let mut protector = create_transient_ecc_key(
-        tpm.platform.crypto,
         0x80000001,
         TpmaObject::DECRYPT | TpmaObject::RESTRICTED | TpmaObject::USER_WITH_AUTH,
         tpm2::TpmEccCurve::NistP256,
@@ -460,7 +437,6 @@ fn test_cpc_2_14_01_01_create_sym_under_null_parent() {
 
     // 1. Create parent RSA key with symmetric: Null
     let mut parent = create_transient_key(
-        tpm.platform.crypto,
         0x80000001,
         TpmaObject::DECRYPT | TpmaObject::RESTRICTED | TpmaObject::USER_WITH_AUTH,
     );
@@ -469,7 +445,7 @@ fn test_cpc_2_14_01_01_create_sym_under_null_parent() {
     {
         parms.symmetric = None;
     }
-    parent.name = compute_key_name(tpm.platform.crypto, &parent.public.as_tpmt());
+    parent.name = compute_key_name(&parent.public.as_tpmt());
     parent.qualified_name = parent.name;
     tpm.state.transient_objects[0] = Some(parent);
 

@@ -23,7 +23,8 @@ fn credential_larger_than_digest_rejected() {
         primary_handle: Handle::RH_ENDORSEMENT,
         in_sensitive,
         in_public: in_public_ek,
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     let ek_resp_handles = execute_with_password_sessions(&mut sim, &create_primary_ek, 1, &[])
         .expect("could not generate EK");
@@ -35,7 +36,8 @@ fn credential_larger_than_digest_rejected() {
         primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public: in_public_srk,
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     let srk_resp = execute_with_password_sessions(&mut sim, &create_primary_srk, 1, &[])
         .expect("could not generate SRK");
@@ -93,7 +95,8 @@ fn missing_protector_handle_rejected() {
         primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public: in_public_srk,
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     let srk_resp = execute_with_password_sessions(&mut sim, &create_primary_srk, 1, &[])
         .expect("could not generate SRK");
@@ -126,7 +129,8 @@ fn sign_only_protector_rejected() {
         primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public: in_public_p,
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     let p_resp_handles = execute_with_password_sessions(&mut sim, &create_primary_p, 1, &[])
         .expect("could not generate protector key");
@@ -138,7 +142,8 @@ fn sign_only_protector_rejected() {
         primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public: in_public_srk,
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     let srk_resp = execute_with_password_sessions(&mut sim, &create_primary_srk, 1, &[])
         .expect("could not generate SRK");
@@ -174,7 +179,8 @@ fn unrestricted_protector_rejected() {
         primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public: in_public_p,
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     let p_resp_handles = execute_with_password_sessions(&mut sim, &create_primary_p, 1, &[])
         .expect("could not generate protector key");
@@ -186,7 +192,8 @@ fn unrestricted_protector_rejected() {
         primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public: in_public_srk,
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     let srk_resp = execute_with_password_sessions(&mut sim, &create_primary_srk, 1, &[])
         .expect("could not generate SRK");

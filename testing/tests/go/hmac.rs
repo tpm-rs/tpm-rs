@@ -34,7 +34,7 @@ fn get_rsa_srk_template() -> TpmtPublic<'static> {
                     mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
                 }),
                 scheme: None,
-                key_bits: TpmiRsaKeyBits(2048),
+                key_bits: TpmiRsaKeyBits::Rsa2048,
                 exponent: 0,
             },
             Tpm2bPublicKeyRsa::from_bytes(&[0u8; 256]).unwrap(),
@@ -52,7 +52,8 @@ fn create_primary_cmd(pub_area: TpmtPublic<'static>) -> CreatePrimary<'static> {
             data: Tpm2bSensitiveData::default(),
         }),
         in_public: tpm2::Tpm2b(pub_area),
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     }
 }
 

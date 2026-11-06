@@ -30,24 +30,26 @@ pub use secure_channel::{SecureChannel, SimulatedSecureChannel, SpdmSession};
 pub use storage::{NvStorage, StorageError};
 pub use timer::TpmTimer;
 
-use crate::crypto::{CryptoProvider, Rng};
+use crate::crypto::{Crypto, Rng};
 
 /// Context defining the resources the TPM engine has access to.
 pub struct TpmPlatform<'a, C, S, T, R>
 where
-    C: CryptoProvider,
+    C: Crypto,
     S: NvStorage,
     T: TpmTimer,
     R: Rng,
 {
-    /// Cryptography provider.
+    /// Cryptography backend ([`Crypto`]). The backend's interfaces are static (its
+    /// algorithms are associated types); the reference only selects and borrows it.
     pub crypto: &'a mut C,
     /// NV storage provider.
     pub storage: &'a mut S,
     /// Monotonic timer.
     pub timer: &'a mut T,
-    /// Platform random number generator ([`Rng::fill_bytes`] draws random bytes and
-    /// [`Rng::reseed`] mixes additional entropy into its state).
+    /// Platform random number generator ([`Rng::fill_bytes`] draws random bytes,
+    /// [`Rng::stir_bytes`] mixes additional entropy into its state and [`Rng::init`]
+    /// reinitializes its entropy source at `_TPM_Init`).
     pub rng: &'a mut R,
     /// Firmware identity ([`TpmFirmware`]: the Firmware Secret, the Firmware SVN Secrets and
     /// the current and maximum firmware SVN). `None` (the default of [`TpmPlatform::new`]) is a
@@ -67,7 +69,7 @@ where
 
 impl<'a, C, S, T, R> TpmPlatform<'a, C, S, T, R>
 where
-    C: CryptoProvider,
+    C: Crypto,
     S: NvStorage,
     T: TpmTimer,
     R: Rng,

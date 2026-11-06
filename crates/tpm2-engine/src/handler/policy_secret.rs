@@ -7,11 +7,11 @@ use crate::timer::TpmTimer;
 use tpm2::TpmCc;
 use tpm2::commands::PolicySecret;
 use tpm2::commands::responses;
-use tpm2::crypto::{CryptoProvider, Rng};
+use tpm2::crypto::{Crypto, Rng};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Handle, Tpm2bDigest, Tpm2bTimeout, TpmHt, TpmNt, TpmSe, TpmaNv, TpmtTkAuth};
 
-impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
+impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     CommandHandler<'a, 'b, C, S, T, R>
 {
     /// Handles the [TpmCc::PolicySecret] (`0x151`) command.
@@ -198,14 +198,15 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 }
             }
 
-            let hmac_digest = tpm2::crypto::hmac(
-                &self.crypto(),
-                crate::handler::context_integrity_hash_alg(),
-                proof.as_bytes(),
-                &hmac_input[..offset],
-                &mut hmac_digest_bytes,
-            )
-            .map_err(|_| TpmRc::FAILURE)?;
+            let hmac_digest = self
+                .crypto()
+                .hmac(
+                    crate::handler::context_integrity_hash_alg(),
+                    proof.as_bytes(),
+                    &[&hmac_input[..offset]],
+                    &mut hmac_digest_bytes,
+                )
+                .map_err(|_| TpmRc::FAILURE)?;
 
             let ticket_digest = Tpm2bDigest::from_bytes(hmac_digest.digest()).unwrap();
             let ticket = TpmtTkAuth::Secret(tpm2::Handle(ticket_hierarchy), ticket_digest);

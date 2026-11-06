@@ -22,11 +22,11 @@ use crate::handler::SecChannelPolicy;
 use crate::owned::OwnedName;
 use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
-use tpm2::crypto::{CryptoProvider, HashStream, Rng};
+use tpm2::crypto::{Crypto, Rng};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Marshal, TpmiAlgHash, TpmtPublic};
 
-impl<C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<'_, C, S, T, R> {
+impl<C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<'_, C, S, T, R> {
     /// The public area of the TPM SPDM authentication key `TPM_PUB_KEY_TPM_SPDM_00 + index`
     /// (TPM 2.0 Part 2, `TPM_PUB_KEY`), or `None` if the platform has no such key.
     pub(crate) fn tpm_spdm_public_key(&self, index: u8) -> Option<TpmtPublic<'_>> {
@@ -81,7 +81,7 @@ impl<C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<'_, 
         data: &[&[u8]],
         out: &'o mut [u8; TpmiAlgHash::MAX_DIGEST_BYTES],
     ) -> Result<&'o [u8], TpmRc> {
-        let mut hash = HashStream::new(&self.crypto(), alg).map_err(|_| TpmRc::FAILURE)?;
+        let mut hash = self.crypto().hash_stream(alg).map_err(|_| TpmRc::FAILURE)?;
         for part in data {
             hash.update(part).map_err(|_| TpmRc::FAILURE)?;
         }

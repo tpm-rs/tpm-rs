@@ -16,8 +16,7 @@ use common::{
 use num_bigint::BigUint;
 #[allow(deprecated)] // `TPM2_Sign` is deprecated upstream.
 use tpm2::commands::{Create, CreatePrimary, FlushContext, Load, Sign};
-use tpm2::crypto::kdf::kdfa_bits;
-use tpm2::crypto::{HmacStream, ModeIv, SymmetricKey};
+use tpm2::crypto::{CipherInput, Direction, HmacContext, SymmetricKey, kdfa_bits};
 use tpm2::errors::TpmRc;
 use tpm2::{
     AlgSym, Handle, PublicParmsAndId, Tpm2b, Tpm2bAuth, Tpm2bDigest, Tpm2bPrivate,
@@ -60,7 +59,9 @@ fn storage_primary(tpm: &mut RealCryptoEngine<'_>) -> Handle {
                 tpm2::TpmsEccPoint::default(),
             ),
         }),
-        ..Default::default()
+        in_sensitive: Default::default(),
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     execute_command(tpm, &create, &[password_auth(b"")])
         .expect("CreatePrimary")
@@ -101,13 +102,14 @@ fn create_rsa_key(
                 TpmsRsaParms {
                     symmetric: None,
                     scheme: Some(TpmtRsaScheme::Rsassa(TpmiAlgHash::Sha256)),
-                    key_bits: TpmiRsaKeyBits(1024),
+                    key_bits: TpmiRsaKeyBits::Rsa1024,
                     exponent: 0,
                 },
                 Tpm2bPublicKeyRsa::default(),
             ),
         }),
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     let rsp = execute_command(tpm, &cmd, &[password_auth(b"")]).expect("Create");
     (rsp.out_private, rsp.out_public)
@@ -118,13 +120,9 @@ fn name_and_modulus(public: &Tpm2bPublic<'_>) -> (Vec<u8>, Vec<u8>) {
     let mut buf = [0u8; 1024];
     let len = marshal_to_slice(&public.0, &mut buf);
     let mut digest = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
-    let digest = tpm2::crypto::hash(
-        &TestCryptoProvider,
-        TpmiAlgHash::Sha256,
-        &buf[..len],
-        &mut digest,
-    )
-    .unwrap();
+    let digest =
+        tpm2::crypto::hash::<TestCryptoProvider>(TpmiAlgHash::Sha256, &[&buf[..len]], &mut digest)
+            .unwrap();
     let mut name = vec![0x00, 0x0b];
     name.extend_from_slice(digest.digest());
     let PublicParmsAndId::Rsa(_, modulus) = &public.0.parms_and_id else {
@@ -136,13 +134,11 @@ fn name_and_modulus(public: &Tpm2bPublic<'_>) -> (Vec<u8>, Vec<u8>) {
 /// The AES-128 key that protects the children of a SHA-256 parent with `seed` (`KDFa(STORAGE)`).
 fn storage_key(seed: &[u8], name: &[u8]) -> [u8; 16] {
     let mut key = [0u8; 16];
-    kdfa_bits(
-        &TestCryptoProvider,
+    kdfa_bits::<TestCryptoProvider>(
         TpmiAlgHash::Sha256,
         seed,
         b"STORAGE",
-        name,
-        &[],
+        (name, &[]),
         128,
         &mut key,
     )
@@ -153,18 +149,16 @@ fn storage_key(seed: &[u8], name: &[u8]) -> [u8; 16] {
 /// The outer HMAC (`KDFa(INTEGRITY)`) over `iv_and_enc || name`.
 fn integrity(seed: &[u8], iv_and_enc: &[u8], name: &[u8]) -> Vec<u8> {
     let mut key = [0u8; 32];
-    kdfa_bits(
-        &TestCryptoProvider,
+    kdfa_bits::<TestCryptoProvider>(
         TpmiAlgHash::Sha256,
         seed,
         b"INTEGRITY",
-        &[],
-        &[],
+        (&[], &[]),
         256,
         &mut key,
     )
     .unwrap();
-    let mut hmac = HmacStream::new(&TestCryptoProvider, TpmiAlgHash::Sha256, &key).unwrap();
+    let mut hmac = HmacContext::<TestCryptoProvider>::new(TpmiAlgHash::Sha256, &key).unwrap();
     hmac.update(iv_and_enc).unwrap();
     hmac.update(name).unwrap();
     let mut out = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
@@ -181,13 +175,13 @@ fn unwrap_private(seed: &[u8], name: &[u8], private: &[u8]) -> Vec<u8> {
     let mut iv: [u8; 16] = iv_and_enc[2..18].try_into().unwrap();
     let mut plain = iv_and_enc[18..].to_vec();
     let key = storage_key(seed, name);
-    tpm2::crypto::decrypt(
-        &TestCryptoProvider,
-        SymmetricKey::new(AlgSym::Aes128, &key).unwrap(),
-        ModeIv::Cfb(&mut iv),
-        &mut plain,
-    )
-    .unwrap();
+    SymmetricKey::new(AlgSym::Aes128, &key)
+        .unwrap()
+        .crypt::<TestCryptoProvider>(
+            Direction::Decrypt,
+            CipherInput::new(tpm2::TpmiAlgCipherMode::Cfb, &mut iv, &mut plain).unwrap(),
+        )
+        .unwrap();
     let size = usize::from(u16::from_be_bytes([plain[0], plain[1]]));
     assert_eq!(size + 2, plain.len());
     plain[2..].to_vec()
@@ -200,13 +194,13 @@ fn wrap_private(seed: &[u8], name: &[u8], sensitive: &[u8]) -> Tpm2bPrivate<'sta
     plain.extend_from_slice(sensitive);
     let mut iv = [0x42u8; 16];
     let key = storage_key(seed, name);
-    tpm2::crypto::encrypt(
-        &TestCryptoProvider,
-        SymmetricKey::new(AlgSym::Aes128, &key).unwrap(),
-        ModeIv::Cfb(&mut iv),
-        &mut plain,
-    )
-    .unwrap();
+    SymmetricKey::new(AlgSym::Aes128, &key)
+        .unwrap()
+        .crypt::<TestCryptoProvider>(
+            Direction::Encrypt,
+            CipherInput::new(tpm2::TpmiAlgCipherMode::Cfb, &mut iv, &mut plain).unwrap(),
+        )
+        .unwrap();
     let mut iv_and_enc = vec![0, 16];
     iv_and_enc.extend_from_slice(&[0x42u8; 16]);
     iv_and_enc.extend_from_slice(&plain);

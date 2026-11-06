@@ -25,7 +25,7 @@ use common::{
     password_auth, setup_real_crypto_tpm,
 };
 use tpm2::commands::{ContextLoad, ContextSave, CreatePrimary, FlushContext};
-use tpm2::crypto::{HmacStream, ModeIv, SymmetricKey};
+use tpm2::crypto::{CipherInput, Direction, HmacContext, SymmetricKey};
 use tpm2::errors::TpmRc;
 use tpm2::{
     AlgSym, Handle, PublicParmsAndId, Tpm2bAuth, Tpm2bContextData, Tpm2bDigest, Tpm2bSensitiveData,
@@ -71,7 +71,8 @@ fn save_object_context(tpm: &mut RealCryptoEngine<'_>) -> TpmsContext<'static> {
                 tpm2::TpmsEccPoint::default(),
             ),
         }),
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     let created =
         execute_command(tpm, &create, &[password_auth(b"")]).expect("CreatePrimary failed");
@@ -126,9 +127,10 @@ fn forge_integrity(
     context: &TpmsContext<'_>,
     enc_context: &[u8],
 ) -> Vec<u8> {
-    let crypto = TestCryptoProvider;
     let proof = &gs.sh_proof[..gs.sh_proof_size as usize];
-    let mut hmac = HmacStream::new(&crypto, common::context_integrity_hash_alg(), proof).unwrap();
+    let mut hmac =
+        HmacContext::<TestCryptoProvider>::new(common::context_integrity_hash_alg(), proof)
+            .unwrap();
     hmac.update(&gs.total_reset_count.to_be_bytes()).unwrap();
     hmac.update(&context.sequence.to_be_bytes()).unwrap();
     hmac.update(&context.saved_handle.0.to_be_bytes()).unwrap();
@@ -159,16 +161,16 @@ fn context_cfb(
     data: &mut [u8],
     encrypt: bool,
 ) {
-    let crypto = TestCryptoProvider;
     let proof = &gs.sh_proof[..gs.sh_proof_size as usize];
     let mut key_iv = [0u8; 32];
-    tpm2::crypto::kdf::kdfa_bits(
-        &crypto,
+    tpm2::crypto::kdfa_bits::<TestCryptoProvider>(
         common::context_integrity_hash_alg(),
         proof,
         b"CONTEXT",
-        &context.sequence.to_be_bytes(),
-        &context.saved_handle.0.to_be_bytes(),
+        (
+            &context.sequence.to_be_bytes(),
+            &context.saved_handle.0.to_be_bytes(),
+        ),
         256,
         &mut key_iv,
     )
@@ -176,11 +178,13 @@ fn context_cfb(
     let mut iv = [0u8; 16];
     iv.copy_from_slice(&key_iv[16..]);
     let key = SymmetricKey::new(AlgSym::Aes128, &key_iv[..16]).unwrap();
-    if encrypt {
-        tpm2::crypto::encrypt(&crypto, key, ModeIv::Cfb(&mut iv), data).unwrap();
+    let dir = if encrypt {
+        Direction::Encrypt
     } else {
-        tpm2::crypto::decrypt(&crypto, key, ModeIv::Cfb(&mut iv), data).unwrap();
-    }
+        Direction::Decrypt
+    };
+    let input = CipherInput::new(tpm2::TpmiAlgCipherMode::Cfb, &mut iv, data).unwrap();
+    key.crypt::<TestCryptoProvider>(dir, input).unwrap();
 }
 
 /// The integrity value is genuine (white-box forged with the hierarchy proof)

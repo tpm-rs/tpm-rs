@@ -5,11 +5,11 @@ use crate::{handler::CommandHandler, owned::OwnedDigest, req_resp::RequestThenRe
 #[allow(unused_imports)]
 use tpm2::TpmCc;
 use tpm2::commands::SetCommandCodeAuditStatus;
-use tpm2::crypto::{CryptoProvider, Rng};
+use tpm2::crypto::{Crypto, Rng};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Alg, TpmiAlgHash};
 
-impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
+impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     CommandHandler<'a, 'b, C, S, T, R>
 {
     /// Handles the [TpmCc::SetCommandCodeAuditStatus] (`0x140`) command.

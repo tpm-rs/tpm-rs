@@ -16,7 +16,7 @@
 #![allow(deprecated)] // TPM2_EncryptDecrypt is deprecated upstream but still implemented.
 
 use crate::_common::{
-    CLIENT_CRYPTO, create_srk, create_unwrap, dup_import_load, execute_with_hmac_sessions,
+    create_srk, create_unwrap, dup_import_load, execute_with_hmac_sessions,
     execute_with_password_sessions, flush_context, get_bound_unique, leak_bytes, load_with_name,
     load_with_private, no_session_command, rc_of, read_public, rsa_dup_target, rsa_public, run_raw,
     start_auth_session, storage_attrs, sym_decrypt, sym_encrypt, try_create_owner_primary,
@@ -217,14 +217,7 @@ fn encrypt_decrypt_camellia_cfb_matches_client() {
         for len in [1usize, 15, 16, 17, 37, 64] {
             let mut expected = plaintext[..len].to_vec();
             let mut client_iv = iv;
-            sym_encrypt(
-                CLIENT_CRYPTO,
-                sym,
-                &key_bytes,
-                &mut client_iv,
-                &mut expected,
-            )
-            .unwrap();
+            sym_encrypt(sym, &key_bytes, &mut client_iv, &mut expected).unwrap();
             // ivOut is the last ciphertext block; after a partial last block, its ciphertext
             // padded with zeros (as `CryptSymmetricEncrypt`/`CryptSymmetricDecrypt` of the TCG
             // reference implementation pad the IV for the next round).
@@ -253,14 +246,7 @@ fn encrypt_decrypt_camellia_cfb_matches_client() {
             }
             // The client decrypts what the TPM encrypted.
             let mut client_iv = iv;
-            sym_decrypt(
-                CLIENT_CRYPTO,
-                sym,
-                &key_bytes,
-                &mut client_iv,
-                &mut expected,
-            )
-            .unwrap();
+            sym_decrypt(sym, &key_bytes, &mut client_iv, &mut expected).unwrap();
             assert_eq!(expected, &plaintext[..len]);
         }
         flush_context(&mut sim, key).unwrap();
@@ -312,7 +298,8 @@ fn seal_load_unseal(sim: &mut Tpm, parent: Handle, data: &'static [u8]) -> Vec<u
                 data: Tpm2bSensitiveData::from_bytes(data).unwrap(),
             }),
             in_public: Tpm2b(sealed_data_template()),
-            ..Default::default()
+            outside_info: Default::default(),
+            creation_pcr: Default::default(),
         },
         1,
         &[],
@@ -486,7 +473,8 @@ fn session_with_camellia_encrypts_parameters() {
                     data: Tpm2bSensitiveData::from_bytes(b"sealed under camellia").unwrap(),
                 }),
                 in_public: Tpm2b(sealed_data_template()),
-                ..Default::default()
+                outside_info: Default::default(),
+                creation_pcr: Default::default(),
             },
             &[],
             core::slice::from_mut(&mut session),

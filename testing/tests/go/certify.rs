@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+use crate::_common::{ClientCrypto, client_rsa_verify};
 use crate::test_utils::*;
 use testing::tpm::Tpm;
 use tpm2::commands::{
@@ -14,7 +15,6 @@ use tpm2::{
     TpmsPcrSelection, TpmsRsaParms, TpmsSensitiveCreate, TpmtPublic, TpmtRsaScheme, TpmtSigScheme,
     TpmtSignature, TpmuAttest,
 };
-use tpm2_platform_linux::PlatformCryptoProvider;
 
 /// Executes `cmd` with one password session per entry of `auth_values`, in
 /// handle order, mirroring go-tpm's per-handle `PasswordAuth(...)`.
@@ -102,7 +102,7 @@ fn test_certify() {
     let rsa_parms = TpmsRsaParms {
         symmetric: None,
         scheme: Some(TpmtRsaScheme::Rsassa(TpmiAlgHash::Sha256)),
-        key_bits: TpmiRsaKeyBits(2048),
+        key_bits: TpmiRsaKeyBits::Rsa2048,
         exponent: 0,
     };
     let pub_area = TpmtPublic {
@@ -135,7 +135,7 @@ fn test_certify() {
         in_sensitive,
         in_public,
         creation_pcr: pcr_selection,
-        ..Default::default()
+        outside_info: Default::default(),
     };
     let signer_rsp = execute_with_password_sessions(&mut sim, &create_signer_cmd, 1, &[]).unwrap();
     let signer_handle = signer_rsp.object_handle;
@@ -155,7 +155,7 @@ fn test_certify() {
         in_sensitive,
         in_public: subject_in_public,
         creation_pcr: pcr_selection,
-        ..Default::default()
+        outside_info: Default::default(),
     };
     let subject_rsp =
         execute_with_password_sessions(&mut sim, &create_subject_cmd, 1, &[]).unwrap();
@@ -182,13 +182,10 @@ fn test_certify() {
     let attest_bytes = &attest_buf[..attest_len];
 
     // Compute SHA256 hash of attestation data
-    let provider = PlatformCryptoProvider;
-    use tpm2::crypto::Asymmetric;
     let mut digest_buf = [0u8; tpm2::TpmtHa::MAX_DIGEST_SIZE];
-    let digest = tpm2::crypto::hash(
-        &provider,
+    let digest = tpm2::crypto::hash::<ClientCrypto>(
         tpm2::TpmiAlgHash::Sha256,
-        attest_bytes,
+        &[attest_bytes],
         &mut digest_buf,
     )
     .unwrap();
@@ -201,13 +198,8 @@ fn test_certify() {
             _ => panic!("Expected RSASSA signature"),
         };
 
-        let verify_res =
-            provider.verify_inner(sig_alg, rsa_unique.get_buffer(), 0, digest, sig_bytes);
-        assert!(
-            matches!(verify_res, Ok(true)),
-            "Signature verification failed: {:?}",
-            verify_res
-        );
+        let verify_res = client_rsa_verify(rsa_unique.get_buffer(), 0, sig_alg, digest, sig_bytes);
+        assert!(verify_res, "Signature verification failed");
     } else {
         panic!("Expected RSA public parameters");
     }
@@ -231,7 +223,7 @@ fn test_create_and_certify_creation() {
     let rsa_parms = TpmsRsaParms {
         symmetric: None,
         scheme: Some(TpmtRsaScheme::Rsassa(TpmiAlgHash::Sha256)),
-        key_bits: TpmiRsaKeyBits(2048),
+        key_bits: TpmiRsaKeyBits::Rsa2048,
         exponent: 0,
     };
     let pub_area = TpmtPublic {
@@ -265,7 +257,7 @@ fn test_create_and_certify_creation() {
         in_sensitive,
         in_public,
         creation_pcr: pcr_selection,
-        ..Default::default()
+        outside_info: Default::default(),
     };
     let create_rsp = execute_with_password_sessions(&mut sim, &create_cmd, 1, &[]).unwrap();
     let object_handle = create_rsp.object_handle;
@@ -301,13 +293,10 @@ fn test_create_and_certify_creation() {
     let attest_bytes = &attest_buf[..attest_len];
 
     // Compute SHA256 hash
-    let provider = PlatformCryptoProvider;
-    use tpm2::crypto::Asymmetric;
     let mut digest_buf = [0u8; tpm2::TpmtHa::MAX_DIGEST_SIZE];
-    let digest = tpm2::crypto::hash(
-        &provider,
+    let digest = tpm2::crypto::hash::<ClientCrypto>(
         tpm2::TpmiAlgHash::Sha256,
-        attest_bytes,
+        &[attest_bytes],
         &mut digest_buf,
     )
     .unwrap();
@@ -320,13 +309,8 @@ fn test_create_and_certify_creation() {
             _ => panic!("Expected RSASSA signature"),
         };
 
-        let verify_res =
-            provider.verify_inner(sig_alg, rsa_unique.get_buffer(), 0, digest, sig_bytes);
-        assert!(
-            matches!(verify_res, Ok(true)),
-            "Signature verification failed: {:?}",
-            verify_res
-        );
+        let verify_res = client_rsa_verify(rsa_unique.get_buffer(), 0, sig_alg, digest, sig_bytes);
+        assert!(verify_res, "Signature verification failed");
     } else {
         panic!("Expected RSA public parameters");
     }
@@ -346,7 +330,7 @@ fn test_nv_certify() {
     let rsa_parms = TpmsRsaParms {
         symmetric: None,
         scheme: Some(TpmtRsaScheme::Rsassa(TpmiAlgHash::Sha256)),
-        key_bits: TpmiRsaKeyBits(2048),
+        key_bits: TpmiRsaKeyBits::Rsa2048,
         exponent: 0,
     };
     let pub_area = TpmtPublic {
@@ -372,7 +356,8 @@ fn test_nv_certify() {
         primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     let signer_rsp = execute_with_password_sessions(&mut sim, &create_signer_cmd, 1, &[]).unwrap();
     let signer_handle = signer_rsp.object_handle;
@@ -448,13 +433,10 @@ fn test_nv_certify() {
     let attest_bytes = &attest_buf[..attest_len];
 
     // Compute SHA256 hash
-    let provider = PlatformCryptoProvider;
-    use tpm2::crypto::Asymmetric;
     let mut digest_buf = [0u8; tpm2::TpmtHa::MAX_DIGEST_SIZE];
-    let digest = tpm2::crypto::hash(
-        &provider,
+    let digest = tpm2::crypto::hash::<ClientCrypto>(
         tpm2::TpmiAlgHash::Sha256,
-        attest_bytes,
+        &[attest_bytes],
         &mut digest_buf,
     )
     .unwrap();
@@ -467,13 +449,8 @@ fn test_nv_certify() {
             _ => panic!("Expected RSASSA signature"),
         };
 
-        let verify_res =
-            provider.verify_inner(sig_alg, rsa_unique.get_buffer(), 0, digest, sig_bytes);
-        assert!(
-            matches!(verify_res, Ok(true)),
-            "Signature verification failed: {:?}",
-            verify_res
-        );
+        let verify_res = client_rsa_verify(rsa_unique.get_buffer(), 0, sig_alg, digest, sig_bytes);
+        assert!(verify_res, "Signature verification failed");
     } else {
         panic!("Expected RSA public parameters");
     }

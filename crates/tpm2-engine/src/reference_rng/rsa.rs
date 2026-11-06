@@ -2,7 +2,7 @@
 //! `CryptPrimeSieve.c` of the TCG reference implementation), linked from the original C code:
 //! key generation (prime search with the reference's sieve and Miller-Rabin bases, and the
 //! pairwise consistency test of signing keys) and the randomized encodings whose output is then
-//! raised to the public (encryption) or private (PSS signature) exponent by the crypto provider.
+//! raised to the public (encryption) or private (PSS signature) exponent by the crypto backend.
 //!
 //! Compared to generic implementations, the reference code draws its randomness in a specific way
 //! (e.g. RSAES-PKCS1-v1_5 replaces zero padding bytes with `0x55` instead of drawing new ones, and
@@ -96,14 +96,14 @@ mod tests {
     use super::super::drbg::{self, tests::FixedEntropy};
     use super::*;
     use num_bigint::BigUint;
-    use tpm2::crypto::HashStream;
+    use tpm2::crypto::HashContext;
     use tpm2_crypto_bssl::BsslCryptoProvider as Crypto;
 
     extern crate std;
 
     /// SHA-256 of the concatenation of `parts`.
     fn sha256(parts: &[&[u8]]) -> [u8; 32] {
-        let mut state = HashStream::new(&Crypto, TpmiAlgHash::Sha256).unwrap();
+        let mut state = HashContext::<Crypto>::new(TpmiAlgHash::Sha256).unwrap();
         for p in parts {
             state.update(p).unwrap();
         }
@@ -231,13 +231,14 @@ mod tests {
     }
 
     /// The CRT form that tpm-rs stores under fixedTPM parents (`handler::rsa_sensitive`: the
-    /// provider's CRT values rearranged around the prime-only form) is byte for byte the packed
+    /// backend's CRT values rearranged around the prime-only form) is byte for byte the packed
     /// sensitive area of the C reference's `CryptRsaGenerateKey()`, both when the reference's
     /// first prime is the larger and when it is the smaller one.
     #[test]
     fn crt_form_matches_the_reference_packed_sensitive_area() {
         use crate::handler::rsa_sensitive::order_crt_for_prime;
-        use tpm2::crypto::Asymmetric as _;
+        use tpm2::crypto::{RsaCrtBuffer, RsaPrivateKey, RsaPublicKey};
+        use tpm2::{Tpm2bPrivateKeyRsa, Tpm2bPublicKeyRsa, TpmiRsaKeyBits};
         let (mut larger_first, mut smaller_first) = (0, 0);
         for (i, key_bits) in (0u8..12).zip([1024u16, 2048].into_iter().cycle()) {
             let mut seeded = drbg::instantiate_seeded(b"crt", &[i], b"", b"").unwrap();
@@ -260,16 +261,18 @@ mod tests {
             } else {
                 smaller_first += 1;
             }
-            let mut key = [0u8; 1536];
-            let key_len = Crypto
-                .rsa_import_private_key(n, p, RSA_DEFAULT_PUBLIC_EXPONENT, &mut key)
+            let bits = TpmiRsaKeyBits::new(key_bits).unwrap();
+            let modulus = Tpm2bPublicKeyRsa::new(n).unwrap();
+            let public = RsaPublicKey::<Crypto>::load(bits, RSA_DEFAULT_PUBLIC_EXPONENT, modulus)
                 .unwrap()
                 .unwrap();
-            let mut crt = [0u8; 640];
-            let crt_len = Crypto
-                .rsa_private_key_to_crt(&key[..key_len], &mut crt)
+            let key = RsaPrivateKey::load(public, Tpm2bPrivateKeyRsa::new(p).unwrap())
                 .unwrap()
                 .unwrap();
+            let mut buf: RsaCrtBuffer = [0u8; core::mem::size_of::<RsaCrtBuffer>()];
+            let crt_len = key.crt(&mut buf).unwrap().as_slice().len();
+            let mut crt = [0u8; core::mem::size_of::<RsaCrtBuffer>()];
+            crt[..crt_len].copy_from_slice(&buf[..crt_len]);
             assert!(order_crt_for_prime(p, &mut crt[..crt_len]));
             assert_eq!(&crt[..crt_len], c_crt, "key {i} ({key_bits} bits)");
         }

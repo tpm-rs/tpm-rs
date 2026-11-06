@@ -1,234 +1,103 @@
+//! Hash functions and HMAC: SHA-1, SHA-256, SHA-384 and SHA-512 (`sha1`, `sha2`, `hmac`).
+
 use crate::RustCryptoProvider;
 use tpm2::crypto::CryptoError;
+use tpm2::crypto::backend::{Hash, HashState, Hmac, HmacState};
 
-/// SHA-1 context wrapper for `RustCryptoProvider`.
-pub struct RustCryptoSha1(sha1::Sha1);
+/// The streaming state of the RustCrypto hash function `D` (such as `sha2::Sha256`), for
+/// `RustCryptoProvider`.
+#[derive(Clone)]
+pub struct RustCryptoHash<D>(D);
 
-impl tpm2::crypto::Update for RustCryptoSha1 {
+impl<D, const N: usize> HashState<N> for RustCryptoHash<D>
+where
+    D: sha2::Digest + sha2::digest::FixedOutputReset,
+{
+    fn init() -> Result<Self, CryptoError> {
+        if <D as sha2::Digest>::output_size() != N {
+            return Err(CryptoError::Internal);
+        }
+        Ok(Self(D::new()))
+    }
+
     fn update(&mut self, data: &[u8]) -> Result<(), CryptoError> {
-        use sha1::Digest as _;
-        self.0.update(data);
+        sha2::Digest::update(&mut self.0, data);
+        Ok(())
+    }
+
+    fn finalize(&mut self, out: &mut [u8; N]) -> Result<(), CryptoError> {
+        out.copy_from_slice(&sha2::Digest::finalize_reset(&mut self.0));
         Ok(())
     }
 }
 
-impl tpm2::crypto::Finalize<20> for RustCryptoSha1 {
-    fn finalize(self, out: &mut [u8; 20]) -> Result<(), CryptoError> {
-        use sha1::Digest as _;
-        let res = self.0.finalize();
-        out.copy_from_slice(&res);
-        Ok(())
-    }
+/// SHA-1 context for `RustCryptoProvider`.
+pub type RustCryptoSha1 = RustCryptoHash<sha1::Sha1>;
+/// SHA-256 context for `RustCryptoProvider`.
+pub type RustCryptoSha256 = RustCryptoHash<sha2::Sha256>;
+/// SHA-384 context for `RustCryptoProvider`.
+pub type RustCryptoSha384 = RustCryptoHash<sha2::Sha384>;
+/// SHA-512 context for `RustCryptoProvider`.
+pub type RustCryptoSha512 = RustCryptoHash<sha2::Sha512>;
+
+impl Hash for RustCryptoProvider {
+    type Sha1 = RustCryptoSha1;
+    type Sha256 = RustCryptoSha256;
+    type Sha384 = RustCryptoSha384;
+    type Sha512 = RustCryptoSha512;
+    type Sm3_256 = !;
+    type Sha3_256 = !;
+    type Sha3_384 = !;
+    type Sha3_512 = !;
 }
 
-/// SHA-256 context wrapper for `RustCryptoProvider`.
-pub struct RustCryptoSha256(sha2::Sha256);
+/// The streaming state of the RustCrypto MAC `M` (such as `hmac::Hmac<sha2::Sha256>`), for
+/// `RustCryptoProvider`.
+#[derive(Clone)]
+pub struct RustCryptoHmac<M>(M);
 
-impl tpm2::crypto::Update for RustCryptoSha256 {
-    fn update(&mut self, data: &[u8]) -> Result<(), CryptoError> {
-        use sha2::Digest as _;
-        self.0.update(data);
-        Ok(())
-    }
-}
-
-impl tpm2::crypto::Finalize<32> for RustCryptoSha256 {
-    fn finalize(self, out: &mut [u8; 32]) -> Result<(), CryptoError> {
-        use sha2::Digest as _;
-        let res = self.0.finalize();
-        out.copy_from_slice(&res);
-        Ok(())
-    }
-}
-
-/// SHA-384 context wrapper for `RustCryptoProvider`.
-pub struct RustCryptoSha384(sha2::Sha384);
-
-impl tpm2::crypto::Update for RustCryptoSha384 {
-    fn update(&mut self, data: &[u8]) -> Result<(), CryptoError> {
-        use sha2::Digest as _;
-        self.0.update(data);
-        Ok(())
-    }
-}
-
-impl tpm2::crypto::Finalize<48> for RustCryptoSha384 {
-    fn finalize(self, out: &mut [u8; 48]) -> Result<(), CryptoError> {
-        use sha2::Digest as _;
-        let res = self.0.finalize();
-        out.copy_from_slice(&res);
-        Ok(())
-    }
-}
-
-/// SHA-512 context wrapper for `RustCryptoProvider`.
-pub struct RustCryptoSha512(sha2::Sha512);
-
-impl tpm2::crypto::Update for RustCryptoSha512 {
-    fn update(&mut self, data: &[u8]) -> Result<(), CryptoError> {
-        use sha2::Digest as _;
-        self.0.update(data);
-        Ok(())
-    }
-}
-
-impl tpm2::crypto::Finalize<64> for RustCryptoSha512 {
-    fn finalize(self, out: &mut [u8; 64]) -> Result<(), CryptoError> {
-        use sha2::Digest as _;
-        let res = self.0.finalize();
-        out.copy_from_slice(&res);
-        Ok(())
-    }
-}
-
-impl tpm2::crypto::Hash for RustCryptoProvider {
-    type Sha1Context = RustCryptoSha1;
-    fn sha1(&self) -> Result<Self::Sha1Context, CryptoError> {
-        use sha1::Digest as _;
-        Ok(RustCryptoSha1(sha1::Sha1::new()))
-    }
-
-    type Sha256Context = RustCryptoSha256;
-    fn sha256(&self) -> Result<Self::Sha256Context, CryptoError> {
-        use sha2::Digest as _;
-        Ok(RustCryptoSha256(sha2::Sha256::new()))
-    }
-
-    type Sha384Context = RustCryptoSha384;
-    fn sha384(&self) -> Result<Self::Sha384Context, CryptoError> {
-        use sha2::Digest as _;
-        Ok(RustCryptoSha384(sha2::Sha384::new()))
-    }
-
-    type Sha512Context = RustCryptoSha512;
-    fn sha512(&self) -> Result<Self::Sha512Context, CryptoError> {
-        use sha2::Digest as _;
-        Ok(RustCryptoSha512(sha2::Sha512::new()))
-    }
-
-    type Sm3_256Context = !;
-    type Sha3_256Context = !;
-    type Sha3_384Context = !;
-    type Sha3_512Context = !;
-}
-
-/// HMAC-SHA-1 context wrapper for `RustCryptoProvider`.
-pub struct RustCryptoHmacSha1(hmac::Hmac<sha1::Sha1>);
-
-impl tpm2::crypto::Update for RustCryptoHmacSha1 {
-    fn update(&mut self, data: &[u8]) -> Result<(), CryptoError> {
-        use hmac::Mac as _;
-        self.0.update(data);
-        Ok(())
-    }
-}
-
-impl tpm2::crypto::Finalize<20> for RustCryptoHmacSha1 {
-    fn finalize(self, out: &mut [u8; 20]) -> Result<(), CryptoError> {
-        use hmac::Mac as _;
-        let res = self.0.finalize().into_bytes();
-        out.copy_from_slice(&res);
-        Ok(())
-    }
-}
-
-/// HMAC-SHA-256 context wrapper for `RustCryptoProvider`.
-pub struct RustCryptoHmacSha256(hmac::Hmac<sha2::Sha256>);
-
-impl tpm2::crypto::Update for RustCryptoHmacSha256 {
-    fn update(&mut self, data: &[u8]) -> Result<(), CryptoError> {
-        use hmac::Mac as _;
-        self.0.update(data);
-        Ok(())
-    }
-}
-
-impl tpm2::crypto::Finalize<32> for RustCryptoHmacSha256 {
-    fn finalize(self, out: &mut [u8; 32]) -> Result<(), CryptoError> {
-        use hmac::Mac as _;
-        let res = self.0.finalize().into_bytes();
-        out.copy_from_slice(&res);
-        Ok(())
-    }
-}
-
-/// HMAC-SHA-384 context wrapper for `RustCryptoProvider`.
-pub struct RustCryptoHmacSha384(hmac::Hmac<sha2::Sha384>);
-
-impl tpm2::crypto::Update for RustCryptoHmacSha384 {
-    fn update(&mut self, data: &[u8]) -> Result<(), CryptoError> {
-        use hmac::Mac as _;
-        self.0.update(data);
-        Ok(())
-    }
-}
-
-impl tpm2::crypto::Finalize<48> for RustCryptoHmacSha384 {
-    fn finalize(self, out: &mut [u8; 48]) -> Result<(), CryptoError> {
-        use hmac::Mac as _;
-        let res = self.0.finalize().into_bytes();
-        out.copy_from_slice(&res);
-        Ok(())
-    }
-}
-
-/// HMAC-SHA-512 context wrapper for `RustCryptoProvider`.
-pub struct RustCryptoHmacSha512(hmac::Hmac<sha2::Sha512>);
-
-impl tpm2::crypto::Update for RustCryptoHmacSha512 {
-    fn update(&mut self, data: &[u8]) -> Result<(), CryptoError> {
-        use hmac::Mac as _;
-        self.0.update(data);
-        Ok(())
-    }
-}
-
-impl tpm2::crypto::Finalize<64> for RustCryptoHmacSha512 {
-    fn finalize(self, out: &mut [u8; 64]) -> Result<(), CryptoError> {
-        use hmac::Mac as _;
-        let res = self.0.finalize().into_bytes();
-        out.copy_from_slice(&res);
-        Ok(())
-    }
-}
-
-// HMAC accepts keys of any length, so `new_from_slice` cannot fail; if it did, that would be an
-// internal error (`CryptoError::Internal`).
-impl tpm2::crypto::Hmac for RustCryptoProvider {
-    type Sha1Context = RustCryptoHmacSha1;
-    fn sha1(&self, key: &[u8]) -> Result<Self::Sha1Context, CryptoError> {
-        use hmac::Mac as _;
-        hmac::Hmac::<sha1::Sha1>::new_from_slice(key)
-            .map(RustCryptoHmacSha1)
+impl<M, const N: usize> HmacState<N> for RustCryptoHmac<M>
+where
+    M: hmac::Mac + hmac::digest::KeyInit + hmac::digest::FixedOutputReset,
+{
+    /// HMAC accepts keys of any length, so `new_from_slice` cannot fail; if it did, that would
+    /// be an internal error (`CryptoError::Internal`).
+    fn init(key: &[u8]) -> Result<Self, CryptoError> {
+        if <M as hmac::digest::OutputSizeUser>::output_size() != N {
+            return Err(CryptoError::Internal);
+        }
+        <M as hmac::Mac>::new_from_slice(key)
+            .map(Self)
             .map_err(|_| CryptoError::Internal)
     }
 
-    type Sha256Context = RustCryptoHmacSha256;
-    fn sha256(&self, key: &[u8]) -> Result<Self::Sha256Context, CryptoError> {
-        use hmac::Mac as _;
-        hmac::Hmac::<sha2::Sha256>::new_from_slice(key)
-            .map(RustCryptoHmacSha256)
-            .map_err(|_| CryptoError::Internal)
+    fn update(&mut self, data: &[u8]) -> Result<(), CryptoError> {
+        hmac::Mac::update(&mut self.0, data);
+        Ok(())
     }
 
-    type Sha384Context = RustCryptoHmacSha384;
-    fn sha384(&self, key: &[u8]) -> Result<Self::Sha384Context, CryptoError> {
-        use hmac::Mac as _;
-        hmac::Hmac::<sha2::Sha384>::new_from_slice(key)
-            .map(RustCryptoHmacSha384)
-            .map_err(|_| CryptoError::Internal)
+    fn finalize(&mut self, out: &mut [u8; N]) -> Result<(), CryptoError> {
+        out.copy_from_slice(&hmac::Mac::finalize_reset(&mut self.0).into_bytes());
+        Ok(())
     }
+}
 
-    type Sha512Context = RustCryptoHmacSha512;
-    fn sha512(&self, key: &[u8]) -> Result<Self::Sha512Context, CryptoError> {
-        use hmac::Mac as _;
-        hmac::Hmac::<sha2::Sha512>::new_from_slice(key)
-            .map(RustCryptoHmacSha512)
-            .map_err(|_| CryptoError::Internal)
-    }
+/// HMAC-SHA-1 context for `RustCryptoProvider`.
+pub type RustCryptoHmacSha1 = RustCryptoHmac<hmac::Hmac<sha1::Sha1>>;
+/// HMAC-SHA-256 context for `RustCryptoProvider`.
+pub type RustCryptoHmacSha256 = RustCryptoHmac<hmac::Hmac<sha2::Sha256>>;
+/// HMAC-SHA-384 context for `RustCryptoProvider`.
+pub type RustCryptoHmacSha384 = RustCryptoHmac<hmac::Hmac<sha2::Sha384>>;
+/// HMAC-SHA-512 context for `RustCryptoProvider`.
+pub type RustCryptoHmacSha512 = RustCryptoHmac<hmac::Hmac<sha2::Sha512>>;
 
-    type Sm3_256Context = !;
-    type Sha3_256Context = !;
-    type Sha3_384Context = !;
-    type Sha3_512Context = !;
+impl Hmac for RustCryptoProvider {
+    type Sha1 = RustCryptoHmacSha1;
+    type Sha256 = RustCryptoHmacSha256;
+    type Sha384 = RustCryptoHmacSha384;
+    type Sha512 = RustCryptoHmacSha512;
+    type Sm3_256 = !;
+    type Sha3_256 = !;
+    type Sha3_384 = !;
+    type Sha3_512 = !;
 }

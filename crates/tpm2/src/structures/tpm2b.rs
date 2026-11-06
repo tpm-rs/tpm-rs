@@ -294,6 +294,10 @@ macro_rules! impl_marshal {
 ///
 /// A sized buffer that holds digest values, HMAC keys, auth values, nonces, or seed values.
 /// The size cannot exceed the largest digest produced by any hash algorithm implemented on the TPM.
+///
+/// [`commands::SignDigest`] and [`commands::VerifyDigestSignature`] also use this type to carry the
+/// 64-byte ML-DSA external µ ([`TpmiMldsaParms::MU_BYTES`]), which only fits if the `sha512` or
+/// `sha3_512` feature is enabled.
 #[doc(alias = "TPM2B_DIGEST")]
 pub type Tpm2bDigest<'a> = Tpm2bSized<'a, limits::Digest>;
 impl_marshal!(Tpm2bDigest<'_>);
@@ -467,8 +471,9 @@ impl_marshal!(Tpm2bPublicKeyRsa<'_>);
 // ---------------------------------------------------------------------------
 /// `TPM2B_PRIVATE_KEY_RSA` structure defined in TPM 2.0 Part 2: Structures, Section 11.2.4.6 (Table 185).
 ///
-/// A sized buffer holding an RSA private prime factor (P or Q) or CRT components, up to
-/// [`TpmiRsaKeyBits::MAX_PRIV_KEY_BYTES`] bytes.
+/// A sized buffer holding an RSA private prime factor (P or Q), or the five CRT components
+/// of a key with a *fixedTPM* parent, up to [`limits::RSA_PRIVATE_SIZE`] bytes (five times
+/// [`TpmiRsaKeyBits::MAX_PRIV_KEY_BYTES`]).
 #[doc(alias = "TPM2B_PRIVATE_KEY_RSA")]
 pub type Tpm2bPrivateKeyRsa<'a> = Tpm2bSized<'a, limits::PrivateKeyRsa>;
 impl_marshal!(Tpm2bPrivateKeyRsa<'_>);
@@ -498,10 +503,66 @@ impl_marshal!(Tpm2bEccPoint<'_>);
 // ---------------------------------------------------------------------------
 /// `TPM2B_SIGNATURE_EDDSA` structure defined in TPM 2.0 Part 2: Structures, Section 11.3.2 (Table 198).
 ///
-/// A sized buffer holding an EdDSA signature (up to `2 * MAX_ECC_KEY_BYTES`, 256 bytes).
+/// A sized buffer holding an EdDSA or HashEdDSA signature (`R || S`), up to
+/// `2 * TpmEccCurve::MAX_ECC_KEY_BYTES` bytes (`0` without the `eddsa` Cargo feature).
 #[doc(alias = "TPM2B_SIGNATURE_EDDSA")]
 pub type Tpm2bSignatureEddsa<'a> = Tpm2bSized<'a, limits::SignatureEddsa>;
 impl_marshal!(Tpm2bSignatureEddsa<'_>);
+
+// ---------------------------------------------------------------------------
+// Tpm2bPublicKeyMlkem
+// ---------------------------------------------------------------------------
+/// `TPM2B_PUBLIC_KEY_MLKEM` structure defined in TPM 2.0 Part 2: Structures, Section 11.2.5.2.
+///
+/// A sized buffer holding an ML-KEM encapsulation (public) key (up to
+/// [`TpmiMlkemParms::MAX_PUB_KEY_BYTES`] bytes, `0` without the `mlkem` Cargo feature).
+#[doc(alias = "TPM2B_PUBLIC_KEY_MLKEM")]
+pub type Tpm2bPublicKeyMlkem<'a> = Tpm2bSized<'a, limits::PublicKeyMlkem>;
+impl_marshal!(Tpm2bPublicKeyMlkem<'_>);
+
+// ---------------------------------------------------------------------------
+// Tpm2bPrivateKeyMlkem
+// ---------------------------------------------------------------------------
+/// `TPM2B_PRIVATE_KEY_MLKEM` structure defined in TPM 2.0 Part 2: Structures, Section 11.2.5.3.
+///
+/// A sized buffer holding an ML-KEM decapsulation seed (`d || z`, up to 64 bytes, `0` without the
+/// `mlkem` Cargo feature). A valid seed has exactly 64 bytes.
+#[doc(alias = "TPM2B_PRIVATE_KEY_MLKEM")]
+pub type Tpm2bPrivateKeyMlkem<'a> = Tpm2bSized<'a, limits::PrivateKeyMlkem>;
+impl_marshal!(Tpm2bPrivateKeyMlkem<'_>);
+
+// ---------------------------------------------------------------------------
+// Tpm2bPublicKeyMldsa
+// ---------------------------------------------------------------------------
+/// `TPM2B_PUBLIC_KEY_MLDSA` structure defined in TPM 2.0 Part 2: Structures, Section 11.2.6.3.
+///
+/// A sized buffer holding an ML-DSA verification (public) key (up to
+/// [`TpmiMldsaParms::MAX_PUB_KEY_BYTES`] bytes, `0` without the `mldsa` Cargo feature).
+#[doc(alias = "TPM2B_PUBLIC_KEY_MLDSA")]
+pub type Tpm2bPublicKeyMldsa<'a> = Tpm2bSized<'a, limits::PublicKeyMldsa>;
+impl_marshal!(Tpm2bPublicKeyMldsa<'_>);
+
+// ---------------------------------------------------------------------------
+// Tpm2bPrivateKeyMldsa
+// ---------------------------------------------------------------------------
+/// `TPM2B_PRIVATE_KEY_MLDSA` structure defined in TPM 2.0 Part 2: Structures, Section 11.2.6.4.
+///
+/// A sized buffer holding an ML-DSA signing seed (`xi`, up to 32 bytes, `0` without the `mldsa`
+/// Cargo feature). A valid seed has exactly 32 bytes.
+#[doc(alias = "TPM2B_PRIVATE_KEY_MLDSA")]
+pub type Tpm2bPrivateKeyMldsa<'a> = Tpm2bSized<'a, limits::PrivateKeyMldsa>;
+impl_marshal!(Tpm2bPrivateKeyMldsa<'_>);
+
+// ---------------------------------------------------------------------------
+// Tpm2bSignatureMldsa
+// ---------------------------------------------------------------------------
+/// `TPM2B_SIGNATURE_MLDSA` structure defined in TPM 2.0 Part 2: Structures, Section 11.2.6.5.
+///
+/// A sized buffer holding an ML-DSA signature (up to
+/// [`TpmiMldsaParms::MAX_SIG_BYTES`] bytes, `0` without the `mldsa` Cargo feature).
+#[doc(alias = "TPM2B_SIGNATURE_MLDSA")]
+pub type Tpm2bSignatureMldsa<'a> = Tpm2bSized<'a, limits::SignatureMldsa>;
+impl_marshal!(Tpm2bSignatureMldsa<'_>);
 
 // ---------------------------------------------------------------------------
 // Tpm2bEncryptedSecret
@@ -513,6 +574,50 @@ impl_marshal!(Tpm2bSignatureEddsa<'_>);
 #[doc(alias = "TPM2B_ENCRYPTED_SECRET")]
 pub type Tpm2bEncryptedSecret<'a> = Tpm2bSized<'a, limits::EncryptedSecret>;
 impl_marshal!(Tpm2bEncryptedSecret<'_>);
+
+// ---------------------------------------------------------------------------
+// Tpm2bSharedSecret
+// ---------------------------------------------------------------------------
+/// `TPM2B_SHARED_SECRET` structure defined in TPM 2.0 Part 2: Structures
+///
+/// A sized buffer holding a KEM shared secret returned by `TPM2_Encapsulate` or `TPM2_Decapsulate`.
+#[doc(alias = "TPM2B_SHARED_SECRET")]
+pub type Tpm2bSharedSecret<'a> = Tpm2bSized<'a, limits::SharedSecret>;
+impl_marshal!(Tpm2bSharedSecret<'_>);
+
+// ---------------------------------------------------------------------------
+// Tpm2bKemCiphertext
+// ---------------------------------------------------------------------------
+/// `TPM2B_KEM_CIPHERTEXT` structure defined in TPM 2.0 Part 2: Structures, Section 10.4.11.
+///
+/// A sized buffer holding the ciphertext from a Key Encapsulation Mechanism, returned by
+/// `TPM2_Encapsulate` or passed to `TPM2_Decapsulate` (`sizeof(TPMU_KEM_CIPHERTEXT)`).
+#[doc(alias = "TPM2B_KEM_CIPHERTEXT")]
+pub type Tpm2bKemCiphertext<'a> = Tpm2bSized<'a, limits::KemCiphertext>;
+impl_marshal!(Tpm2bKemCiphertext<'_>);
+
+// ---------------------------------------------------------------------------
+// Tpm2bSignatureCtx
+// ---------------------------------------------------------------------------
+/// `TPM2B_SIGNATURE_CTX` structure defined in TPM 2.0 Part 2: Structures, Section 11.3.6.
+///
+/// A sized buffer holding an algorithm-specific context string for signing and verification
+/// commands (`sizeof(TPMU_SIGNATURE_CTX)`).
+#[doc(alias = "TPM2B_SIGNATURE_CTX")]
+pub type Tpm2bSignatureCtx<'a> = Tpm2bSized<'a, limits::SignatureCtx>;
+impl_marshal!(Tpm2bSignatureCtx<'_>);
+
+// ---------------------------------------------------------------------------
+// Tpm2bSignatureHint
+// ---------------------------------------------------------------------------
+/// `TPM2B_SIGNATURE_HINT` structure defined in TPM 2.0 Part 2: Structures
+///
+/// A sized buffer holding an algorithm-specific verification hint for `TPM2_VerifySequenceStart`.
+/// For EdDSA, this is the encoded R value from the signature (32 bytes for Ed25519, 57 bytes for
+/// Ed448); it is zero-length for other algorithms.
+#[doc(alias = "TPM2B_SIGNATURE_HINT")]
+pub type Tpm2bSignatureHint<'a> = Tpm2bSized<'a, limits::SignatureHint>;
+impl_marshal!(Tpm2bSignatureHint<'_>);
 
 // ---------------------------------------------------------------------------
 // Tpm2bPublic
@@ -752,6 +857,17 @@ pub type Tpm2bContextSensitive<'a> = Tpm2bSized<'a, limits::ContextSensitive>;
 impl_marshal!(Tpm2bContextSensitive<'_>);
 
 // ---------------------------------------------------------------------------
+// Tpm2bNvPublic2
+// ---------------------------------------------------------------------------
+/// `TPM2B_NV_PUBLIC_2` structure defined in TPM 2.0 Part 2: Structures, Section 13.7 (Table 232).
+///
+/// A sized buffer wrapping [`TpmtNvPublic2`], defining the public parameters of an NV Index
+/// (including expanded NV attributes) in `TPM2_NV_DefineSpace2` and `TPM2_NV_ReadPublic2`.
+#[doc(alias = "TPM2B_NV_PUBLIC_2")]
+pub type Tpm2bNvPublic2<'a> = Tpm2b<TpmtNvPublic2<'a>>;
+impl_marshal!(Tpm2bNvPublic2<'_>);
+
+// ---------------------------------------------------------------------------
 // Tpm2bContextData
 // ---------------------------------------------------------------------------
 /// `TPM2B_CONTEXT_DATA` structure defined in TPM 2.0 Part 2: Structures, Section 14.3 (Table 235).
@@ -791,73 +907,6 @@ impl_marshal!(Tpm2bCreationData<'_>);
 #[doc(alias = "TPM2B_VENDOR_PROPERTY")]
 pub type Tpm2bVendorProperty<'a> = Tpm2bSized<'a, limits::VendorProperty>;
 impl_marshal!(Tpm2bVendorProperty<'_>);
-
-/// `TPM2B_SHARED_SECRET` structure.
-#[doc(alias = "TPM2B_SHARED_SECRET")]
-pub type Tpm2bSharedSecret<'a> = Tpm2bSized<'a, limits::SharedSecret>;
-impl_marshal!(Tpm2bSharedSecret<'_>);
-
-/// `TPM2B_KEM_CIPHERTEXT` structure defined in TPM 2.0 Part 2: Structures, Section 10.4.11.
-///
-/// A sized buffer holding the ciphertext from a Key Encapsulation Mechanism
-/// (`sizeof(TPMU_KEM_CIPHERTEXT)` = `max(sizeof(TPMS_ECC_POINT), MAX_MLKEM_CT_SIZE)` = 1568 bytes).
-#[doc(alias = "TPM2B_KEM_CIPHERTEXT")]
-pub type Tpm2bKemCiphertext<'a> = Tpm2bSized<'a, limits::KemCiphertext>;
-impl_marshal!(Tpm2bKemCiphertext<'_>);
-
-/// `TPM2B_SIGNATURE_CTX` structure defined in TPM 2.0 Part 2: Structures, Section 11.3.6.
-///
-/// A sized buffer containing additional signature context (`sizeof(TPMU_SIGNATURE_CTX)` = 255 bytes).
-#[doc(alias = "TPM2B_SIGNATURE_CTX")]
-pub type Tpm2bSignatureCtx<'a> = Tpm2bSized<'a, limits::SignatureCtx>;
-impl_marshal!(Tpm2bSignatureCtx<'_>);
-
-/// `TPM2B_SIGNATURE_HINT` structure.
-#[doc(alias = "TPM2B_SIGNATURE_HINT")]
-pub type Tpm2bSignatureHint<'a> = Tpm2bSized<'a, limits::SignatureHint>;
-impl_marshal!(Tpm2bSignatureHint<'_>);
-
-/// `TPM2B_NV_PUBLIC_2` structure defined in TPM 2.0 Part 2: Structures, Section 13.7 (Table 232).
-///
-/// A sized buffer wrapping [`TpmtNvPublic2`], defining the generalized public area of an NV Index.
-#[doc(alias = "TPM2B_NV_PUBLIC_2")]
-pub type Tpm2bNvPublic2<'a> = Tpm2b<TpmtNvPublic2<'a>>;
-impl_marshal!(Tpm2bNvPublic2<'_>);
-
-/// `TPM2B_PUBLIC_KEY_MLKEM` structure defined in TPM 2.0 Part 2: Structures, Section 11.2.5.2.
-///
-/// A sized buffer holding an ML-KEM encapsulation (public) key (`MAX_MLKEM_PUB_SIZE` = 1568 bytes).
-#[doc(alias = "TPM2B_PUBLIC_KEY_MLKEM")]
-pub type Tpm2bPublicKeyMlkem<'a> = Tpm2bSized<'a, limits::PublicKeyMlkem>;
-impl_marshal!(Tpm2bPublicKeyMlkem<'_>);
-
-/// `TPM2B_PRIVATE_KEY_MLKEM` structure defined in TPM 2.0 Part 2: Structures, Section 11.2.5.3.
-///
-/// A sized buffer holding an ML-KEM decapsulation seed (`d || z`, `MAX_MLKEM_PRIV_SIZE` = 64 bytes).
-#[doc(alias = "TPM2B_PRIVATE_KEY_MLKEM")]
-pub type Tpm2bPrivateKeyMlkem<'a> = Tpm2bSized<'a, limits::PrivateKeyMlkem>;
-impl_marshal!(Tpm2bPrivateKeyMlkem<'_>);
-
-/// `TPM2B_PUBLIC_KEY_MLDSA` structure defined in TPM 2.0 Part 2: Structures, Section 11.2.6.3.
-///
-/// A sized buffer holding an ML-DSA verification (public) key (`MAX_MLDSA_PUB_SIZE` = 2592 bytes).
-#[doc(alias = "TPM2B_PUBLIC_KEY_MLDSA")]
-pub type Tpm2bPublicKeyMldsa<'a> = Tpm2bSized<'a, limits::PublicKeyMldsa>;
-impl_marshal!(Tpm2bPublicKeyMldsa<'_>);
-
-/// `TPM2B_PRIVATE_KEY_MLDSA` structure defined in TPM 2.0 Part 2: Structures, Section 11.2.6.4.
-///
-/// A sized buffer holding an ML-DSA signing seed (`xi`, `MAX_MLDSA_PRIV_SIZE` = 32 bytes).
-#[doc(alias = "TPM2B_PRIVATE_KEY_MLDSA")]
-pub type Tpm2bPrivateKeyMldsa<'a> = Tpm2bSized<'a, limits::PrivateKeyMldsa>;
-impl_marshal!(Tpm2bPrivateKeyMldsa<'_>);
-
-/// `TPM2B_SIGNATURE_MLDSA` structure defined in TPM 2.0 Part 2: Structures, Section 11.2.6.5.
-///
-/// A sized buffer holding an ML-DSA signature (`MAX_MLDSA_SIG_SIZE` = 4627 bytes).
-#[doc(alias = "TPM2B_SIGNATURE_MLDSA")]
-pub type Tpm2bSignatureMldsa<'a> = Tpm2bSized<'a, limits::SignatureMldsa>;
-impl_marshal!(Tpm2bSignatureMldsa<'_>);
 
 /// Re-exports of [`crate::limits`] tag types for backwards compatibility.
 pub mod tags {

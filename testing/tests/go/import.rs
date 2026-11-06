@@ -2,6 +2,7 @@
 use crate::test_utils::marshal_to_slice;
 use tpm2::Alg;
 
+use crate::_common::ClientCrypto;
 use crate::test_utils::*;
 use hmac::{Hmac, Mac};
 use p256::elliptic_curve::sec1::FromEncodedPoint as _;
@@ -10,10 +11,9 @@ use sha1::Sha1;
 use sha2::{Digest as _, Sha256};
 use testing::tpm::Tpm;
 use tpm2::commands::{CreatePrimary, Import, Load, Unseal};
-use tpm2::crypto::kdf::{kdfa_bits, kdfe_bits};
+use tpm2::crypto::{kdfa_bits, kdfe_bits};
 use tpm2::*;
 use tpm2::{Handle, TpmEccCurve};
-use tpm2_platform_linux::PlatformCryptoProvider;
 
 /// go-tpm's `ECCSRKTemplate`: NIST P-256 restricted decryption storage key
 /// with AES-128-CFB, NoDA, and 32-byte zero-filled unique X/Y coordinates.
@@ -68,7 +68,7 @@ fn get_rsa_srk_template() -> TpmtPublic<'static> {
                     mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
                 }),
                 scheme: None,
-                key_bits: TpmiRsaKeyBits(2048),
+                key_bits: TpmiRsaKeyBits::Rsa2048,
                 exponent: 0,
             },
             Tpm2bPublicKeyRsa::from_bytes(&ZEROS).unwrap(),
@@ -228,8 +228,6 @@ fn create_duplicate(
     name: &[u8],
     sensitive: &[u8],
 ) -> (Vec<u8>, Vec<u8>) {
-    let crypto = PlatformCryptoProvider;
-
     // 1. Labeled Key Encapsulation (Encapsulate)
     let (secret, ciphertext) = match key {
         EncapsulationKey::Ecc { pub_x, pub_y, .. } => {
@@ -256,13 +254,11 @@ fn create_duplicate(
 
             // KDFe derivation
             let mut secret_derived = [0u8; 32];
-            kdfe_bits(
-                &crypto,
+            kdfe_bits::<ClientCrypto>(
                 TpmiAlgHash::Sha256,
                 z.as_slice(),
                 b"DUPLICATE",
-                &eph_x,
-                pub_x,
+                (&eph_x, pub_x),
                 256,
                 &mut secret_derived,
             )
@@ -335,13 +331,11 @@ fn create_duplicate(
 
     // 4. Derive AES CFB key using KDFa
     let mut derived_aes_key = vec![0u8; (sym_key_bits / 8) as usize];
-    kdfa_bits(
-        &crypto,
+    kdfa_bits::<ClientCrypto>(
         TpmiAlgHash::Sha256,
         &secret,
         b"STORAGE",
-        name,
-        &[],
+        (name, &[]),
         (sym_key_bits) as u32,
         &mut derived_aes_key,
     )
@@ -366,13 +360,11 @@ fn create_duplicate(
 
     // 6. Compute HMAC of (dupSensitive || name)
     let mut hmac_key = vec![0u8; 32];
-    kdfa_bits(
-        &crypto,
+    kdfa_bits::<ClientCrypto>(
         TpmiAlgHash::Sha256,
         &secret,
         b"INTEGRITY",
-        &[],
-        &[],
+        (&[], &[]),
         256,
         &mut hmac_key,
     )

@@ -1,11 +1,11 @@
 //! TPM2_NV_DefineSpace: attribute, size, authPolicy and authValue validation.
 
+use crate::_common::ClientCrypto;
 use crate::_common::*;
 use testing::tpm::Tpm;
 use tpm2::commands::{NVDefineSpace, NVReadPublic};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::*;
-use tpm2_platform_linux::PlatformCryptoProvider;
 
 /// NV_DefineSpace attribute/size errors (WRITTEN, oversize, PLATFORMCREATE by owner, WRITEALL > 1024, CLEAR_STCLEAR+WRITEDEFINE) carry correct positions
 #[test]
@@ -242,12 +242,10 @@ fn define_then_read_public_and_name() {
     assert_eq!(read_rsp.nv_public, public_info);
 
     // Verify calculated name (SHA256 of the nv public structure)
-    let provider = PlatformCryptoProvider;
     let mut out = [0u8; tpm2::TpmtHa::MAX_DIGEST_SIZE];
-    let digest = tpm2::crypto::hash(
-        &provider,
+    let digest = tpm2::crypto::hash::<ClientCrypto>(
         TpmiAlgHash::Sha256,
-        &crate::test_utils::marshal_to_vec(&public_info.0),
+        &[&crate::test_utils::marshal_to_vec(&public_info.0)],
         &mut out,
     )
     .unwrap()

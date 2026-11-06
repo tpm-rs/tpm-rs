@@ -248,7 +248,8 @@ fn multi_session_decrypt_encrypt_constraints() {
         primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
 
     let err_pos3 = TpmRc::ATTRIBUTES.with(Position::session(3)).get();

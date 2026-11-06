@@ -1,5 +1,6 @@
 //! TPM2_NV_ReadPublic and NV index Names.
 
+use crate::_common::ClientCrypto;
 use crate::_common::*;
 use testing::tpm::Tpm;
 use tpm2::commands::{CreatePrimary, NVDefineSpace, NVReadPublic};
@@ -87,10 +88,9 @@ fn name_alg_nv_index_names_and_unsupported_primary() {
         let pub_len = marshal_to_slice(&public_info_struct, &mut pub_buf);
 
         let mut digest_buf = [0u8; tpm2::TpmtHa::MAX_DIGEST_SIZE];
-        let digest = tpm2::crypto::hash(
-            CLIENT_CRYPTO,
+        let digest = tpm2::crypto::hash::<ClientCrypto>(
             TpmiAlgHash::Sha384,
-            &pub_buf[..pub_len],
+            &[&pub_buf[..pub_len]],
             &mut digest_buf,
         )
         .unwrap()
@@ -145,10 +145,9 @@ fn name_alg_nv_index_names_and_unsupported_primary() {
             let pub_len = marshal_to_slice(&public_info_struct, &mut pub_buf);
 
             let mut digest_buf = [0u8; tpm2::TpmtHa::MAX_DIGEST_SIZE];
-            let digest = tpm2::crypto::hash(
-                CLIENT_CRYPTO,
+            let digest = tpm2::crypto::hash::<ClientCrypto>(
                 TpmiAlgHash::Sha512,
-                &pub_buf[..pub_len],
+                &[&pub_buf[..pub_len]],
                 &mut digest_buf,
             )
             .unwrap()
@@ -264,7 +263,8 @@ fn name_alg_nv_index_names_and_unsupported_primary() {
             primary_handle: Handle::RH_ENDORSEMENT,
             in_sensitive,
             in_public,
-            ..Default::default()
+            outside_info: Default::default(),
+            creation_pcr: Default::default(),
         };
 
         // One password session: with none, C returns AUTH_MISSING before the

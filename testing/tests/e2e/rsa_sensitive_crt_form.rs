@@ -39,7 +39,7 @@ fn rsa_sign_template(key_bits: u16, attrs: TpmaObject) -> TpmtPublic<'static> {
             TpmsRsaParms {
                 symmetric: None,
                 scheme: Some(TpmtRsaScheme::Rsassa(TpmiAlgHash::Sha256)),
-                key_bits: TpmiRsaKeyBits(key_bits),
+                key_bits: TpmiRsaKeyBits::new(key_bits).expect("implemented RSA key size"),
                 exponent: 0,
             },
             Tpm2bPublicKeyRsa::default(),

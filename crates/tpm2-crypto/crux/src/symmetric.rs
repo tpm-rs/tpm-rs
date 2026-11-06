@@ -1,81 +1,37 @@
+//! [`Symmetric`] for [`CruxCryptoProvider`].
+//!
+//! AES-128, AES-192, AES-256 and Camellia-128, Camellia-192, Camellia-256 in the CTR, OFB, CBC,
+//! CFB and ECB modes, with the mode code shared with the Rust backend
+//! ([`tpm2_crypto_rust::RustCryptoCipher`], see [`tpm2_crypto_rust::symmetric`] for the IV
+//! chaining).
+//!
+//! The other block cipher (SM4) is not supported (`!`).
+//!
+//! libcrux has no AES-CBC/CTR/OFB/ECB or Camellia, so the block ciphers are the RustCrypto
+//! `aes` and `camellia` crates.
+
 use crate::CruxCryptoProvider;
-use tpm2::crypto::{CryptoError, Direction, ModeIv, Symmetric};
-// The mode loops (and their IV chaining) are shared with the Rust backend.
-use tpm2_crypto_rust::rust_crypto_mode;
+use tpm2::crypto::backend::Symmetric;
+use tpm2_crypto_rust::RustCryptoCipher;
 
-/// AES-128, AES-192, AES-256 and Camellia-128, Camellia-192, Camellia-256 in the CTR, OFB, CBC,
-/// CFB and ECB modes (see [`tpm2_crypto_rust::run_mode`] for the IV chaining).
-///
-/// The other block cipher (SM4) is not supported and returns `Err(CryptoError::Unsupported)`.
-///
-/// libcrux has no AES-CBC/CTR/OFB/ECB or Camellia, so the block ciphers are the RustCrypto
-/// `aes` and `camellia` crates.
 impl Symmetric for CruxCryptoProvider {
-    fn aes128(
-        &self,
-        key: &[u8; 16],
-        mode: ModeIv<'_>,
-        dir: Direction,
-        data: &mut [u8],
-    ) -> Result<(), CryptoError> {
-        rust_crypto_mode::<aes::Aes128>(key, mode, dir, data)
-    }
-
-    fn aes192(
-        &self,
-        key: &[u8; 24],
-        mode: ModeIv<'_>,
-        dir: Direction,
-        data: &mut [u8],
-    ) -> Result<(), CryptoError> {
-        rust_crypto_mode::<aes::Aes192>(key, mode, dir, data)
-    }
-
-    fn aes256(
-        &self,
-        key: &[u8; 32],
-        mode: ModeIv<'_>,
-        dir: Direction,
-        data: &mut [u8],
-    ) -> Result<(), CryptoError> {
-        rust_crypto_mode::<aes::Aes256>(key, mode, dir, data)
-    }
-
-    fn camellia128(
-        &self,
-        key: &[u8; 16],
-        mode: ModeIv<'_>,
-        dir: Direction,
-        data: &mut [u8],
-    ) -> Result<(), CryptoError> {
-        rust_crypto_mode::<camellia::Camellia128>(key, mode, dir, data)
-    }
-
-    fn camellia192(
-        &self,
-        key: &[u8; 24],
-        mode: ModeIv<'_>,
-        dir: Direction,
-        data: &mut [u8],
-    ) -> Result<(), CryptoError> {
-        rust_crypto_mode::<camellia::Camellia192>(key, mode, dir, data)
-    }
-
-    fn camellia256(
-        &self,
-        key: &[u8; 32],
-        mode: ModeIv<'_>,
-        dir: Direction,
-        data: &mut [u8],
-    ) -> Result<(), CryptoError> {
-        rust_crypto_mode::<camellia::Camellia256>(key, mode, dir, data)
-    }
+    type Aes128 = RustCryptoCipher<aes::Aes128>;
+    type Aes192 = RustCryptoCipher<aes::Aes192>;
+    type Aes256 = RustCryptoCipher<aes::Aes256>;
+    type Sm4_128 = !;
+    type Camellia128 = RustCryptoCipher<camellia::Camellia128>;
+    type Camellia192 = RustCryptoCipher<camellia::Camellia192>;
+    type Camellia256 = RustCryptoCipher<camellia::Camellia256>;
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use hex_literal::hex;
+    use tpm2::AlgSym;
+    use tpm2::TpmiAlgCipherMode;
+    use tpm2::crypto::backend::SymmetricState;
+    use tpm2::crypto::{CipherInput, CryptoError, Direction, SymmetricKey};
 
     /// NIST SP 800-38A, F.3.13 (CFB128-AES128.Encrypt): key.
     const KEY_128: [u8; 16] = hex!("2b7e151628aed2a6abf7158809cf4f3c");
@@ -112,46 +68,46 @@ mod tests {
         "75a385741ab9cef82031623d55b1e471"
     );
 
-    /// Encrypts and decrypts with `op` and checks the NIST vectors, including
-    /// the final chaining value (the last ciphertext block).
-    fn check_known_answer(
-        op: impl Fn(ModeIv<'_>, Direction, &mut [u8]) -> Result<(), CryptoError>,
+    /// Encrypts and decrypts with the CFB mode of `S` under `key` and checks the
+    /// NIST vectors, including the final chaining value (the last ciphertext
+    /// block).
+    fn check_known_answer<S: SymmetricState<K>, const K: usize>(
+        key: &[u8; K],
         ciphertext: &[u8; 64],
     ) {
+        let state = S::init(key).unwrap();
         let mut iv = IV;
         let mut data = PLAINTEXT;
-        op(ModeIv::Cfb(&mut iv), Direction::Encrypt, &mut data).unwrap();
+        state.cfb(Direction::Encrypt, &mut iv, &mut data).unwrap();
         assert_eq!(data, *ciphertext);
         assert_eq!(iv, ciphertext[48..]);
 
         let mut iv = IV;
-        op(ModeIv::Cfb(&mut iv), Direction::Decrypt, &mut data).unwrap();
+        state.cfb(Direction::Decrypt, &mut iv, &mut data).unwrap();
         assert_eq!(data, PLAINTEXT);
         assert_eq!(iv, ciphertext[48..]);
     }
 
     #[test]
-    fn aes128_cfb_known_answer() {
-        let c = CruxCryptoProvider;
-        check_known_answer(|m, d, data| c.aes128(&KEY_128, m, d, data), &CIPHERTEXT_128);
-    }
-
-    #[test]
-    fn aes192_cfb_known_answer() {
-        let c = CruxCryptoProvider;
-        check_known_answer(|m, d, data| c.aes192(&KEY_192, m, d, data), &CIPHERTEXT_192);
-    }
-
-    #[test]
-    fn aes256_cfb_known_answer() {
-        let c = CruxCryptoProvider;
-        check_known_answer(|m, d, data| c.aes256(&KEY_256, m, d, data), &CIPHERTEXT_256);
+    fn aes_cfb_known_answers() {
+        check_known_answer::<<CruxCryptoProvider as Symmetric>::Aes128, 16>(
+            &KEY_128,
+            &CIPHERTEXT_128,
+        );
+        check_known_answer::<<CruxCryptoProvider as Symmetric>::Aes192, 24>(
+            &KEY_192,
+            &CIPHERTEXT_192,
+        );
+        check_known_answer::<<CruxCryptoProvider as Symmetric>::Aes256, 32>(
+            &KEY_256,
+            &CIPHERTEXT_256,
+        );
     }
 
     #[test]
     fn cfb_matches_cfb_mode_crate_for_every_length() {
         use aes::cipher::{AsyncStreamCipher as _, KeyIvInit as _};
-        let c = CruxCryptoProvider;
+        let key = SymmetricKey::new(AlgSym::Aes256, &KEY_256).unwrap();
         for len in 0..=PLAINTEXT.len() {
             let mut expected = PLAINTEXT;
             cfb_mode::Encryptor::<aes::Aes256>::new(&KEY_256.into(), &IV.into())
@@ -159,70 +115,33 @@ mod tests {
 
             let mut iv = IV;
             let mut data = PLAINTEXT;
-            c.aes256(
-                &KEY_256,
-                ModeIv::Cfb(&mut iv),
-                Direction::Encrypt,
-                &mut data[..len],
-            )
-            .unwrap();
+            let input = CipherInput::new(TpmiAlgCipherMode::Cfb, &mut iv, &mut data[..len]);
+            key.crypt::<CruxCryptoProvider>(Direction::Encrypt, input.unwrap())
+                .unwrap();
             assert_eq!(data[..len], expected[..len], "len {len}");
             assert_eq!(data[len..], PLAINTEXT[len..], "len {len}");
 
             let mut iv = IV;
-            c.aes256(
-                &KEY_256,
-                ModeIv::Cfb(&mut iv),
-                Direction::Decrypt,
-                &mut data[..len],
-            )
-            .unwrap();
+            let input = CipherInput::new(TpmiAlgCipherMode::Cfb, &mut iv, &mut data[..len]);
+            key.crypt::<CruxCryptoProvider>(Direction::Decrypt, input.unwrap())
+                .unwrap();
             assert_eq!(data, PLAINTEXT, "len {len}");
         }
     }
 
+    /// After a partial final CFB block, the TPM's chaining value is the partial
+    /// ciphertext padded with zeros.
     #[test]
-    fn cfb_iv_chains_across_whole_block_calls() {
-        let c = CruxCryptoProvider;
+    fn cfb_partial_block_iv_is_zero_padded() {
+        let key = SymmetricKey::new(AlgSym::Aes128, &KEY_128).unwrap();
         let mut iv = IV;
         let mut data = PLAINTEXT;
-        let (first, second) = data.split_at_mut(32);
-        c.aes128(&KEY_128, ModeIv::Cfb(&mut iv), Direction::Encrypt, first)
+        let input = CipherInput::new(TpmiAlgCipherMode::Cfb, &mut iv, &mut data[..21]);
+        key.crypt::<CruxCryptoProvider>(Direction::Encrypt, input.unwrap())
             .unwrap();
-        assert_eq!(iv, CIPHERTEXT_128[16..32]);
-        c.aes128(&KEY_128, ModeIv::Cfb(&mut iv), Direction::Encrypt, second)
-            .unwrap();
-        assert_eq!(data, CIPHERTEXT_128);
-        assert_eq!(iv, CIPHERTEXT_128[48..]);
-    }
-
-    #[test]
-    fn cfb_partial_block_iv_keeps_previous_chaining_bytes() {
-        let c = CruxCryptoProvider;
-        for dir in [Direction::Encrypt, Direction::Decrypt] {
-            let mut iv = IV;
-            let mut data = match dir {
-                Direction::Encrypt => PLAINTEXT,
-                Direction::Decrypt => CIPHERTEXT_128,
-            };
-            c.aes128(&KEY_128, ModeIv::Cfb(&mut iv), dir, &mut data[..21])
-                .unwrap();
-            // After one whole block and 5 bytes of the second one: the 5 new
-            // ciphertext bytes, then bytes 5.. of the first ciphertext block.
-            let mut expected_iv = [0u8; 16];
-            expected_iv[..5].copy_from_slice(&CIPHERTEXT_128[16..21]);
-            expected_iv[5..].copy_from_slice(&CIPHERTEXT_128[5..16]);
-            assert_eq!(iv, expected_iv);
-        }
-    }
-
-    #[test]
-    fn cfb_empty_data_leaves_iv_unchanged() {
-        let c = CruxCryptoProvider;
-        let mut iv = IV;
-        c.aes192(&KEY_192, ModeIv::Cfb(&mut iv), Direction::Encrypt, &mut [])
-            .unwrap();
-        assert_eq!(iv, IV);
+        let mut expected_iv = [0u8; 16];
+        expected_iv[..5].copy_from_slice(&CIPHERTEXT_128[16..21]);
+        assert_eq!(iv, expected_iv);
     }
 
     /// The AES-128 modes other than CFB match the first block of NIST SP 800-38A F.1.1 (ECB),
@@ -230,77 +149,52 @@ mod tests {
     /// unsupported.
     #[test]
     fn other_modes_match_sp800_38a() {
-        let c = CruxCryptoProvider;
+        check_other_modes::<<CruxCryptoProvider as Symmetric>::Aes128>();
+        assert!(matches!(
+            <<CruxCryptoProvider as Symmetric>::Sm4_128 as SymmetricState<16>>::init(&KEY_128),
+            Err(CryptoError::Unsupported)
+        ));
+    }
+
+    fn check_other_modes<S: SymmetricState<16>>() {
+        let state = S::init(&KEY_128).unwrap();
         let pt: [u8; 16] = PLAINTEXT[..16].try_into().unwrap();
-        let mut data = pt;
-        c.aes128(&KEY_128, ModeIv::Ecb, Direction::Encrypt, &mut data)
-            .unwrap();
-        assert_eq!(data, hex!("3ad77bb40d7a3660a89ecaf32466ef97"));
+        let mut data = [pt];
+        state.ecb(Direction::Encrypt, &mut data).unwrap();
+        assert_eq!(data[0], hex!("3ad77bb40d7a3660a89ecaf32466ef97"));
         let mut iv = IV;
-        c.aes128(
-            &KEY_128,
-            ModeIv::Cbc(&mut iv),
-            Direction::Decrypt,
-            &mut data,
-        )
-        .unwrap();
+        state.cbc(Direction::Decrypt, &mut iv, &mut data).unwrap();
         assert_eq!(iv, hex!("3ad77bb40d7a3660a89ecaf32466ef97"));
+        let mut data = [pt];
+        let mut iv = IV;
+        state.cbc(Direction::Encrypt, &mut iv, &mut data).unwrap();
+        assert_eq!(data[0], hex!("7649abac8119b246cee98e9b12e9197d"));
+        assert_eq!(iv, data[0]);
         let mut data = pt;
         let mut iv = IV;
-        c.aes128(
-            &KEY_128,
-            ModeIv::Cbc(&mut iv),
-            Direction::Encrypt,
-            &mut data,
-        )
-        .unwrap();
-        assert_eq!(data, hex!("7649abac8119b246cee98e9b12e9197d"));
-        assert_eq!(iv, data);
-        let mut data = pt;
-        let mut iv = IV;
-        c.aes128(
-            &KEY_128,
-            ModeIv::Ofb(&mut iv),
-            Direction::Encrypt,
-            &mut data,
-        )
-        .unwrap();
+        state.ofb(&mut iv, &mut data).unwrap();
         assert_eq!(data, hex!("3b3fd92eb72dad20333449f8e83cfb4a"));
         assert_eq!(iv, hex!("50fe67cc996d32b6da0937e99bafec60"));
         let mut data = pt;
         let mut iv = hex!("f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff");
-        c.aes128(
-            &KEY_128,
-            ModeIv::Ctr(&mut iv),
-            Direction::Encrypt,
-            &mut data,
-        )
-        .unwrap();
+        state.ctr(&mut iv, &mut data).unwrap();
         assert_eq!(data, hex!("874d6191b620e3261bef6864990db6ce"));
         assert_eq!(iv, hex!("f0f1f2f3f4f5f6f7f8f9fafbfcfdff00"));
-        let mut iv = IV;
-        assert_eq!(
-            c.sm4_128(
-                &KEY_128,
-                ModeIv::Cfb(&mut iv),
-                Direction::Encrypt,
-                &mut data
-            ),
-            Err(CryptoError::Unsupported)
-        );
-        assert_eq!(iv, IV);
     }
 
+    /// Camellia-128 (RFC 3713, appendix A) in ECB mode.
     #[test]
-    fn encrypt_decrypt_dispatches_through_symmetric_key() {
-        use tpm2::{AlgSym, TpmiAlgCipherMode, crypto};
-        let c = CruxCryptoProvider;
-        let key = crypto::SymmetricKey::new(AlgSym::Aes128, &KEY_128).unwrap();
-        let mut iv = IV;
-        let mut data = PLAINTEXT;
-        let mode = ModeIv::new(TpmiAlgCipherMode::Cfb, &mut iv).unwrap();
-        crypto::encrypt(&c, key, mode, &mut data).unwrap();
-        assert_eq!(data, CIPHERTEXT_128);
-        assert_eq!(iv, CIPHERTEXT_128[48..]);
+    fn camellia_known_answer() {
+        check_camellia::<<CruxCryptoProvider as Symmetric>::Camellia128>();
+    }
+
+    fn check_camellia<S: SymmetricState<16>>() {
+        let key = hex!("0123456789abcdeffedcba9876543210");
+        let state = S::init(&key).unwrap();
+        let mut data = [key];
+        state.ecb(Direction::Encrypt, &mut data).unwrap();
+        assert_eq!(data[0], hex!("67673138549669730857065648eabe43"));
+        state.ecb(Direction::Decrypt, &mut data).unwrap();
+        assert_eq!(data[0], key);
     }
 }

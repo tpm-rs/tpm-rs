@@ -12,7 +12,7 @@ use crate::timer::TpmTimer;
 use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
 use tpm2::commands::responses;
 use tpm2::commands::{MAC, MACStart};
-use tpm2::crypto::{CryptoProvider, Rng};
+use tpm2::crypto::{Crypto, Rng};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
     Alg, AlgSym, Handle, Tpm2bDigest, TpmaObject, TpmiAlgHash, TpmiAlgMacScheme, TpmiAlgSymMode,
@@ -28,7 +28,7 @@ enum SelectedMac {
     Cmac(AlgSym),
 }
 
-impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
+impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     CommandHandler<'a, 'b, C, S, T, R>
 {
     /// `CryptSelectMac()`: the MAC algorithm of the key `key_handle` (already checked to be a
@@ -177,14 +177,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let mut out = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
         let len = match mac {
             SelectedMac::Hmac(hash) => {
-                let digest = tpm2::crypto::hmac(
-                    &self.crypto(),
-                    hash,
-                    key,
-                    cmd.buffer.get_buffer(),
-                    &mut out,
-                )
-                .map_err(|_| TpmRc::FAILURE)?;
+                let digest = self
+                    .crypto()
+                    .hmac(hash, key, &[cmd.buffer.get_buffer()], &mut out)
+                    .map_err(|_| TpmRc::FAILURE)?;
                 digest.digest().len()
             }
             SelectedMac::Cmac(alg) => {

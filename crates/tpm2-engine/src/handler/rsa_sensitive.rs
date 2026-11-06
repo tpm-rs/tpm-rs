@@ -26,9 +26,9 @@
 //! hold the prime as well (the smaller `RSA_PRIVATE_SIZE`, like Google's production
 //! `ibmswtpm2`), see [`WRITES_CRT_FORM`]; `TPM2_Load` still accepts both forms.
 
-use tpm2::Tpm2bPrivateKeyRsa;
-use tpm2::crypto::{CryptoProvider, Rng};
+use tpm2::crypto::{Crypto, CryptoError, Rng, RsaPrivateKey};
 use tpm2::errors::TpmRc;
+use tpm2::{Tpm2bPrivateKeyRsa, TpmsRsaParms};
 
 use crate::handler::CommandHandler;
 use crate::storage::NvStorage;
@@ -50,7 +50,7 @@ fn significant(bytes: &[u8]) -> &[u8] {
 }
 
 /// Rearranges the CRT form `crt` (`p | q | dP | dQ | qInv` with `p` the larger prime, see
-/// [`tpm2::crypto::Asymmetric::rsa_private_key_to_crt`]) into the reference's layout for a key
+/// [`RsaPrivateKey::crt`]) into the reference's layout for a key
 /// whose prime-only form is `prime`: if `prime` is the smaller prime, the two primes are
 /// swapped, the other values keep their places.
 ///
@@ -123,46 +123,56 @@ fn square_bit_length(x: &[u8]) -> usize {
     bit_length(&bytes)
 }
 
-impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
+impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     CommandHandler<'a, 'b, C, S, T, R>
 {
-    /// Writes the sensitive value (`TPMU_SENSITIVE_COMPOSITE.rsa`) of the RSA key
-    /// `private_key` (the crypto provider's private key) to `out` and returns its length: the
-    /// CRT form if `crt` (a *fixedTPM* parent protects the private area), otherwise the prime
-    /// (see the [module documentation](self)).
+    /// Writes the sensitive value (`TPMU_SENSITIVE_COMPOSITE.rsa`) of the RSA key with the
+    /// parameters `parms`, the modulus `modulus` and the prime `prime` (the private value of the
+    /// object, [`TransientObject::private`](crate::handler::TransientObject::private)) to `out`
+    /// and returns its length: the CRT form if `crt` (a *fixedTPM* parent protects the private
+    /// area), otherwise the prime as it is (see the [module documentation](self)).
     ///
-    /// Returns `None` if `private_key` is not a valid RSA private key.
+    /// Returns `None` if the CRT form is requested and `prime` is not a prime of a valid RSA
+    /// key with that public key, or if `prime` does not fit `out`.
     pub(crate) fn rsa_sensitive_value(
         &self,
-        private_key: &[u8],
+        parms: &TpmsRsaParms,
+        modulus: &[u8],
+        prime: &[u8],
         crt: bool,
         out: &mut [u8; RSA_PRIVATE_SIZE],
     ) -> Result<Option<usize>, TpmRc> {
-        let mut prime = [0u8; RSA_PRIVATE_SIZE / CRT_VALUES];
-        let prime_len = match self
-            .crypto()
-            .rsa_private_key_to_prime_p(private_key, &mut prime)
-        {
-            Ok(Some(len)) => len,
+        if !crt {
+            let Some(out) = out.get_mut(..prime.len()) else {
+                return Ok(None);
+            };
+            out.copy_from_slice(prime);
+            return Ok(Some(prime.len()));
+        }
+        let key = match crate::handler::rsa_private_key::<C>(parms, modulus, prime) {
+            Ok(Some(key)) => key,
             Ok(None) | Err(_) => return Ok(None),
         };
-        if !crt {
-            out[..prime_len].copy_from_slice(&prime[..prime_len]);
-            return Ok(Some(prime_len));
-        }
-        let crt_len = match self.crypto().rsa_private_key_to_crt(private_key, out) {
-            Ok(Some(len)) => len,
-            Ok(None) => return Ok(None),
-            Err(_) => return Err(TpmRc::FAILURE),
-        };
-        if !order_crt_for_prime(&prime[..prime_len], &mut out[..crt_len]) {
-            return Err(TpmRc::FAILURE);
-        }
-        Ok(Some(crt_len))
+        self.rsa_crt_value(&key, prime, out).map(Some)
     }
 
-    /// Returns whether both primes of the RSA key `private_key` are in the acceptable range for
-    /// the modulus `modulus`.
+    /// Writes the CRT form of the RSA key `key`, whose prime-only form is `prime`, in the
+    /// reference's layout ([`order_crt_for_prime`]) to `out` and returns its length.
+    pub(crate) fn rsa_crt_value(
+        &self,
+        key: &RsaPrivateKey<C>,
+        prime: &[u8],
+        out: &mut [u8; RSA_PRIVATE_SIZE],
+    ) -> Result<usize, TpmRc> {
+        let crt_len = key.crt(out).map_err(|_| TpmRc::FAILURE)?.as_slice().len();
+        if !order_crt_for_prime(prime, &mut out[..crt_len]) {
+            return Err(TpmRc::FAILURE);
+        }
+        Ok(crt_len)
+    }
+
+    /// Returns whether both primes of the RSA key `key` are in the acceptable range for the
+    /// modulus `modulus`.
     ///
     /// TPM 2.0 Part 1, "RSA", "Introduction": "The TPM will also validate that the provided and
     /// computed prime factors are in an acceptable range. To be acceptable, the square of the
@@ -170,15 +180,15 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     /// The references check only the most significant bit of the provided prime, and the
     /// computed one not at all (`bug-fix-rsa-prime-range.patch`).
     ///
-    /// A crypto provider without [`tpm2::crypto::Asymmetric::rsa_private_key_to_crt`]
-    /// (`CryptoError::Unsupported`) cannot check the range; the key is then accepted (such a
-    /// provider cannot produce the CRT form either).
-    pub(crate) fn rsa_primes_in_range(&self, private_key: &[u8], modulus: &[u8]) -> bool {
-        let mut crt = [0u8; CRT_VALUES * MAX_PRIME_BYTES];
-        let len = match self.crypto().rsa_private_key_to_crt(private_key, &mut crt) {
-            Ok(Some(len)) => len,
-            Err(tpm2::crypto::CryptoError::Unsupported) => return true,
-            Ok(None) | Err(_) => return false,
+    /// A crypto backend without [`RsaPrivateKey::crt`] (`CryptoError::Unsupported`) cannot
+    /// check the range; the key is then accepted (such a backend cannot produce the CRT form
+    /// either).
+    pub(crate) fn rsa_primes_in_range(&self, key: &RsaPrivateKey<C>, modulus: &[u8]) -> bool {
+        let mut crt = [0u8; RSA_PRIVATE_SIZE];
+        let len = match key.crt(&mut crt) {
+            Ok(crt) => crt.as_slice().len(),
+            Err(CryptoError::Unsupported) => return true,
+            Err(_) => return false,
         };
         let size = len / CRT_VALUES;
         let modulus_bits = bit_length(modulus);

@@ -11,7 +11,7 @@ use crate::{errors::UnmarshalError, marshal::marshal_helper, *};
 /// [TPM2.0 1.83] 24.1 TPM2_CreatePrimary (Command)
 #[doc(alias = "TPM2_CreatePrimary")]
 #[doc(alias = "CreatePrimary_In")]
-#[derive(Clone, Copy, PartialEq, Debug, Default, Eq)]
+#[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct CreatePrimary<'a> {
     pub primary_handle: Handle,
     pub in_sensitive: Tpm2bSensitiveCreate<'a>,
@@ -21,7 +21,7 @@ pub struct CreatePrimary<'a> {
 }
 /// [TPM2.0 1.83] 24.1 TPM2_CreatePrimary (Response)
 #[doc(alias = "CreatePrimary_Out")]
-#[derive(Clone, Copy, PartialEq, Debug, Default, Eq)]
+#[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct CreatePrimaryRsp<'a> {
     pub object_handle: Handle,
     pub out_public: Tpm2bPublic<'a>,

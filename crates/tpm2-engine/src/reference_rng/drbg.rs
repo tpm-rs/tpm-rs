@@ -143,7 +143,7 @@ pub(crate) mod tests {
             Ok(())
         }
 
-        fn reseed(&mut self, _: &[u8]) -> Result<(), CryptoError> {
+        fn stir_bytes(&mut self, _: &[u8]) -> Result<(), CryptoError> {
             Ok(())
         }
     }
@@ -156,7 +156,7 @@ pub(crate) mod tests {
             Err(CryptoError::Internal)
         }
 
-        fn reseed(&mut self, _: &[u8]) -> Result<(), CryptoError> {
+        fn stir_bytes(&mut self, _: &[u8]) -> Result<(), CryptoError> {
             Ok(())
         }
     }
@@ -345,7 +345,7 @@ pub(crate) mod tests {
             Ok(())
         }
 
-        fn reseed(&mut self, _: &[u8]) -> Result<(), CryptoError> {
+        fn stir_bytes(&mut self, _: &[u8]) -> Result<(), CryptoError> {
             Ok(())
         }
     }

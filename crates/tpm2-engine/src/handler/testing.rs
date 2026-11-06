@@ -6,10 +6,10 @@ use tpm2::Alg;
 use tpm2::TpmCc;
 use tpm2::TpmlAlg;
 use tpm2::commands::{GetTestResult, IncrementalSelfTest, SelfTest, responses};
-use tpm2::crypto::{CryptoProvider, Rng};
+use tpm2::crypto::{Crypto, Rng};
 use tpm2::errors::{Position, TpmRc};
 
-impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
+impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     CommandHandler<'a, 'b, C, S, T, R>
 {
     /// Handles the [TpmCc::SelfTest] command.

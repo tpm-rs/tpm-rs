@@ -53,25 +53,40 @@ impl From<BsslError> for CryptoError {
 }
 
 // ============================================================================
-// HMAC-SHA1 Safe Binding over `bssl-sys`
+// HMAC Safe Binding over `bssl-sys`
 // ============================================================================
 
-/// Safe wrapper around BoringSSL's `HMAC_CTX` configured for HMAC-SHA1.
-pub struct HmacSha1 {
+/// Safe wrapper around BoringSSL's `HMAC_CTX`, configured for the SHA-1,
+/// SHA-256, SHA-384 or SHA-512 HMAC with an `N`-byte tag (20, 32, 48 or 64).
+pub struct Hmac<const N: usize> {
     ctx: bssl_sys::HMAC_CTX,
 }
 
-impl HmacSha1 {
-    /// Creates a new HMAC-SHA1 context initialized with the provided `key`.
+impl<const N: usize> Hmac<N> {
+    /// Returns the static `EVP_MD` of the SHA-1/SHA-2 hash with an `N`-byte digest.
+    fn md() -> Result<*const bssl_sys::EVP_MD, BsslError> {
+        // SAFETY: Each `EVP_sha*` function returns a static, immutable `EVP_MD` pointer.
+        unsafe {
+            match N {
+                20 => Ok(bssl_sys::EVP_sha1()),
+                32 => Ok(bssl_sys::EVP_sha256()),
+                48 => Ok(bssl_sys::EVP_sha384()),
+                64 => Ok(bssl_sys::EVP_sha512()),
+                _ => Err(BsslError::Unsupported),
+            }
+        }
+    }
+
+    /// Creates a new HMAC context initialized with the provided `key`.
     pub fn new_from_slice(key: &[u8]) -> Result<Self, BsslError> {
+        let md = Self::md()?;
         let mut ctx = MaybeUninit::<bssl_sys::HMAC_CTX>::uninit();
         // SAFETY:
         // - `ctx.as_mut_ptr()` is a valid pointer to uninitialized `HMAC_CTX` stack memory.
-        // - `EVP_sha1()` returns a static, valid `EVP_MD` pointer.
+        // - `md` is a static, valid `EVP_MD` pointer.
         // - `key.as_ptr()` is non-null (even for empty slices in Rust) and valid for `key.len()` bytes.
         let res = unsafe {
             bssl_sys::HMAC_CTX_init(ctx.as_mut_ptr());
-            let md = bssl_sys::EVP_sha1();
             bssl_sys::HMAC_Init_ex(
                 ctx.as_mut_ptr(),
                 key.as_ptr().cast::<c_void>(),
@@ -94,7 +109,7 @@ impl HmacSha1 {
         }
     }
 
-    /// Updates the HMAC-SHA1 state with `data`.
+    /// Updates the HMAC state with `data`.
     pub fn update(&mut self, data: &[u8]) -> Result<(), BsslError> {
         if data.is_empty() {
             return Ok(());
@@ -108,13 +123,14 @@ impl HmacSha1 {
         }
     }
 
-    /// Finalizes the HMAC-SHA1 computation and writes the 20-byte tag into `out`.
-    pub fn finalize(mut self, out: &mut [u8; 20]) -> Result<(), BsslError> {
+    /// Finalizes the HMAC computation and writes the `N`-byte tag into `out`.
+    /// The context is then spent.
+    pub fn finalize(&mut self, out: &mut [u8; N]) -> Result<(), BsslError> {
         let mut len: c_uint = 0;
-        // SAFETY: `self.ctx` is an initialized `HMAC_CTX`, `out` has space for 20 bytes (SHA-1 digest size),
-        // and `len` is a valid mutable pointer.
+        // SAFETY: `self.ctx` is an initialized `HMAC_CTX`, `out` has space for the `N`-byte
+        // digest of its hash, and `len` is a valid mutable pointer.
         let res = unsafe { bssl_sys::HMAC_Final(&mut self.ctx, out.as_mut_ptr(), &mut len) };
-        if res == 1 && len == 20 {
+        if res == 1 && len as usize == N {
             Ok(())
         } else {
             Err(BsslError::Internal)
@@ -122,7 +138,7 @@ impl HmacSha1 {
     }
 }
 
-impl Clone for HmacSha1 {
+impl<const N: usize> Clone for Hmac<N> {
     fn clone(&self) -> Self {
         let mut ctx = MaybeUninit::<bssl_sys::HMAC_CTX>::uninit();
         // SAFETY: `ctx` is initialized by `HMAC_CTX_init`, and `self.ctx` is a valid initialized `HMAC_CTX`.
@@ -138,13 +154,20 @@ impl Clone for HmacSha1 {
     }
 }
 
-impl Drop for HmacSha1 {
+impl<const N: usize> Drop for Hmac<N> {
     fn drop(&mut self) {
         // SAFETY: `self.ctx` was initialized by `HMAC_CTX_init` in `new_from_slice` or `clone`.
         unsafe {
             bssl_sys::HMAC_CTX_cleanup(&mut self.ctx);
         }
     }
+}
+
+/// Overwrites `buf` with zeros using `OPENSSL_cleanse`, which the compiler cannot elide (for
+/// secrets such as private scalars and seeds).
+pub fn cleanse(buf: &mut [u8]) {
+    // SAFETY: `buf` is valid for writing `buf.len()` bytes.
+    unsafe { bssl_sys::OPENSSL_cleanse(buf.as_mut_ptr().cast::<c_void>(), buf.len()) };
 }
 
 // ============================================================================
@@ -194,7 +217,7 @@ impl CmacCtx {
         }
     }
 
-    fn finalize(self, out: &mut [u8; 16]) -> Result<(), BsslError> {
+    fn finalize(&mut self, out: &mut [u8; 16]) -> Result<(), BsslError> {
         let mut out_len: usize = 0;
         // SAFETY: `self.0` is an initialized `CMAC_CTX`, `out` is a valid 16-byte buffer,
         // and `out_len` is a valid mutable pointer.
@@ -247,7 +270,8 @@ macro_rules! impl_bssl_cmac {
             }
 
             /// Finalizes the CMAC computation and writes the 16-byte tag into `out`.
-            pub fn finalize(self, out: &mut [u8; 16]) -> Result<(), BsslError> {
+            /// The context is then spent.
+            pub fn finalize(&mut self, out: &mut [u8; 16]) -> Result<(), BsslError> {
                 self.0.finalize(out)
             }
         }
@@ -276,148 +300,20 @@ impl_bssl_cmac!(
 );
 
 // ============================================================================
-// AES-CFB Safe Bindings over `bssl-sys`
+// AES Safe Bindings over `bssl-sys`
 // ============================================================================
 
-/// Internal streaming AES-CFB-128 state wrapping BoringSSL's `AES_KEY` and `AES_cfb128_encrypt`.
-#[derive(Clone)]
-struct AesCfb {
-    key: bssl_sys::AES_KEY,
-    ivec: [u8; 16],
-    prev_iv: [u8; 16],
-    num: c_int,
-    enc: c_int,
-}
-
-impl AesCfb {
-    fn new(key_bytes: &[u8], iv: &[u8; 16], enc: c_int) -> Result<Self, BsslError> {
-        let bits = (key_bytes.len() * 8) as c_uint;
-        let mut aes_key = MaybeUninit::<bssl_sys::AES_KEY>::uninit();
-        // SAFETY:
-        // - In CFB mode, the block cipher is always used in the encryption direction (`E_K(IV)`),
-        //   so both encryption (`AES_ENCRYPT`) and decryption (`AES_DECRYPT`) require `AES_set_encrypt_key`.
-        // - `key_bytes` is valid for `bits / 8` bytes, and `aes_key` is valid uninitialized memory.
-        let res = unsafe {
-            bssl_sys::AES_set_encrypt_key(key_bytes.as_ptr(), bits, aes_key.as_mut_ptr())
-        };
-        // Note: `AES_set_encrypt_key` returns 0 on success and negative on error.
-        if res == 0 {
-            // SAFETY: `AES_set_encrypt_key` returned 0, so `aes_key` is initialized.
-            Ok(Self {
-                key: unsafe { aes_key.assume_init() },
-                ivec: *iv,
-                prev_iv: *iv,
-                num: 0,
-                enc,
-            })
-        } else {
-            Err(BsslError::InvalidData)
-        }
-    }
-
-    fn update(&mut self, mut data: &mut [u8]) -> Result<(), BsslError> {
-        while !data.is_empty() {
-            // 1. If we are in the middle of a partial 16-byte block (`self.num != 0`),
-            //    feed up to the remaining bytes of that block first so `self.num` wraps to 0.
-            if self.num != 0 {
-                let rem_in_block = (16 - self.num as usize).min(data.len());
-                let (chunk, rest) = data.split_at_mut(rem_in_block);
-                // SAFETY: `chunk` is non-empty and valid for in-place encryption/decryption (`in == out`);
-                // `self.key` is initialized; `self.ivec` is 16 bytes; `self.num` is in `1..16`.
-                unsafe {
-                    bssl_sys::AES_cfb128_encrypt(
-                        chunk.as_ptr(),
-                        chunk.as_mut_ptr(),
-                        chunk.len(),
-                        &self.key,
-                        self.ivec.as_mut_ptr(),
-                        &mut self.num,
-                        self.enc,
-                    );
-                }
-                data = rest;
-                continue;
-            }
-
-            // 2. `self.num` is now 0. Process all full 16-byte blocks in bulk.
-            if data.len() >= 16 {
-                let full_len = (data.len() / 16) * 16;
-                let (chunk, rest) = data.split_at_mut(full_len);
-                // SAFETY: `chunk` is a non-empty multiple of 16 bytes; `self.key` is initialized.
-                unsafe {
-                    bssl_sys::AES_cfb128_encrypt(
-                        chunk.as_ptr(),
-                        chunk.as_mut_ptr(),
-                        chunk.len(),
-                        &self.key,
-                        self.ivec.as_mut_ptr(),
-                        &mut self.num,
-                        self.enc,
-                    );
-                }
-                debug_assert_eq!(self.num, 0);
-                data = rest;
-                continue;
-            }
-
-            // 3. `self.num` is 0 and `1 <= data.len() < 16`.
-            //    Record `self.ivec` into `self.prev_iv` before `AES_cfb128_encrypt` overwrites
-            //    `self.ivec` with the encrypted keystream block, so `finalize` can reconstruct
-            //    the exact TPM 2.0 output IV (`[ciphertext[0..num], prev_iv[num..16]]`).
-            self.prev_iv = self.ivec;
-            // SAFETY: `data` is non-empty (`< 16` bytes); `self.key` is initialized.
-            unsafe {
-                bssl_sys::AES_cfb128_encrypt(
-                    data.as_ptr(),
-                    data.as_mut_ptr(),
-                    data.len(),
-                    &self.key,
-                    self.ivec.as_mut_ptr(),
-                    &mut self.num,
-                    self.enc,
-                );
-            }
-            break;
-        }
-        Ok(())
-    }
-
-    fn finalize(self, iv_out: &mut [u8; 16]) -> Result<(), BsslError> {
-        *iv_out = self.ivec;
-        if self.num > 0 {
-            let n = self.num as usize;
-            iv_out[n..].copy_from_slice(&self.prev_iv[n..]);
-        }
-        Ok(())
-    }
-}
-
-impl Drop for AesCfb {
-    fn drop(&mut self) {
-        // SAFETY: `self.key`, `self.ivec`, and `self.prev_iv` are valid stack-allocated fields.
-        unsafe {
-            bssl_sys::OPENSSL_cleanse(
-                ptr::from_mut(&mut self.key).cast::<c_void>(),
-                core::mem::size_of_val(&self.key),
-            );
-            bssl_sys::OPENSSL_cleanse(self.ivec.as_mut_ptr().cast::<c_void>(), self.ivec.len());
-            bssl_sys::OPENSSL_cleanse(
-                self.prev_iv.as_mut_ptr().cast::<c_void>(),
-                self.prev_iv.len(),
-            );
-        }
-    }
-}
-
-/// The AES block cipher (BoringSSL's `AES_KEY`, `AES_encrypt` and `AES_decrypt`) keyed for both
-/// directions, for the block cipher modes that are built on single-block operations (CTR, OFB,
-/// CBC and ECB).
-pub struct AesBlock {
+/// An AES-128, AES-192 or AES-256 key (BoringSSL's `AES_KEY`), expanded for both directions,
+/// with the block cipher modes of TPM 2.0 on BoringSSL's `AES_*` mode functions.
+///
+/// The IV of each mode is updated in place to the chaining value of
+/// `tpm2::crypto::backend::SymmetricState`.
+pub struct Aes {
     encrypt_key: bssl_sys::AES_KEY,
     decrypt_key: bssl_sys::AES_KEY,
 }
 
-impl AesBlock {
+impl Aes {
     /// Expands the AES-128, AES-192 or AES-256 key `key` (16, 24 or 32 bytes) into the
     /// encryption and decryption key schedules. Any other key length is
     /// [`BsslError::InvalidData`].
@@ -462,9 +358,111 @@ impl AesBlock {
         // SAFETY: `input` and `block` are valid 16-byte blocks; `self.decrypt_key` is initialized.
         unsafe { bssl_sys::AES_decrypt(input.as_ptr(), block.as_mut_ptr(), &self.decrypt_key) };
     }
+
+    /// CTR mode (`AES_ctr128_encrypt`, a 128-bit big-endian counter starting at `iv`): XORs
+    /// `data` in place with the keystream, leaving the next counter value in `iv`.
+    pub fn ctr(&self, iv: &mut [u8; 16], data: &mut [u8]) {
+        if data.is_empty() {
+            return;
+        }
+        let mut ecount = [0u8; 16];
+        let mut num: c_uint = 0;
+        // SAFETY: `data` is valid for in-place processing of `data.len()` bytes, `iv` and
+        // `ecount` are 16-byte buffers, and `self.encrypt_key` is initialized.
+        unsafe {
+            bssl_sys::AES_ctr128_encrypt(
+                data.as_ptr(),
+                data.as_mut_ptr(),
+                data.len(),
+                &self.encrypt_key,
+                iv.as_mut_ptr(),
+                ecount.as_mut_ptr(),
+                &mut num,
+            );
+        }
+        cleanse(&mut ecount);
+    }
+
+    /// OFB mode (`AES_ofb128_encrypt`): XORs `data` in place with the keystream, leaving the
+    /// last (full) keystream block in `iv`.
+    pub fn ofb(&self, iv: &mut [u8; 16], data: &mut [u8]) {
+        if data.is_empty() {
+            return;
+        }
+        let mut num: c_int = 0;
+        // SAFETY: `data` is valid for in-place processing of `data.len()` bytes, `iv` is a
+        // 16-byte buffer, and `self.encrypt_key` is initialized.
+        unsafe {
+            bssl_sys::AES_ofb128_encrypt(
+                data.as_ptr(),
+                data.as_mut_ptr(),
+                data.len(),
+                &self.encrypt_key,
+                iv.as_mut_ptr(),
+                &mut num,
+            );
+        }
+    }
+
+    /// CBC mode (`AES_cbc_encrypt`): encrypts (`encrypt`) or decrypts the whole blocks of
+    /// `data` in place, leaving the last ciphertext block in `iv`.
+    pub fn cbc(&self, encrypt: bool, iv: &mut [u8; 16], data: &mut [[u8; 16]]) {
+        if data.is_empty() {
+            return;
+        }
+        let (key, enc) = if encrypt {
+            (&self.encrypt_key, bssl_sys::AES_ENCRYPT)
+        } else {
+            (&self.decrypt_key, bssl_sys::AES_DECRYPT)
+        };
+        let data = data.as_flattened_mut();
+        // SAFETY: `data` is valid for in-place processing of `data.len()` bytes (a multiple of
+        // 16), `iv` is a 16-byte buffer, and `key` is the initialized schedule of the direction.
+        unsafe {
+            bssl_sys::AES_cbc_encrypt(
+                data.as_ptr(),
+                data.as_mut_ptr(),
+                data.len(),
+                key,
+                iv.as_mut_ptr(),
+                enc,
+            );
+        }
+    }
+
+    /// CFB mode with full-block feedback (`AES_cfb128_encrypt`): encrypts (`encrypt`) or
+    /// decrypts `data` in place. `iv` is left with the last ciphertext block; after a partial
+    /// final block of `n` bytes, only `iv[..n]` holds its ciphertext (the rest is keystream).
+    pub fn cfb(&self, encrypt: bool, iv: &mut [u8; 16], data: &mut [u8]) {
+        if data.is_empty() {
+            return;
+        }
+        let mut num: c_int = 0;
+        let enc = if encrypt {
+            bssl_sys::AES_ENCRYPT
+        } else {
+            bssl_sys::AES_DECRYPT
+        };
+        // SAFETY:
+        // - In CFB mode, the block cipher is always used in the encryption direction (`E_K(IV)`),
+        //   so both directions use the encryption schedule.
+        // - `data` is valid for in-place processing of `data.len()` bytes and `iv` is a 16-byte
+        //   buffer.
+        unsafe {
+            bssl_sys::AES_cfb128_encrypt(
+                data.as_ptr(),
+                data.as_mut_ptr(),
+                data.len(),
+                &self.encrypt_key,
+                iv.as_mut_ptr(),
+                &mut num,
+                enc,
+            );
+        }
+    }
 }
 
-impl Drop for AesBlock {
+impl Drop for Aes {
     fn drop(&mut self) {
         // SAFETY: both key schedules are valid fields of `self`.
         unsafe {
@@ -480,100 +478,9 @@ impl Drop for AesBlock {
     }
 }
 
-macro_rules! impl_bssl_aes_cfb {
-    ($name:ident, $key_len:literal, $doc:expr) => {
-        #[doc = $doc]
-        #[derive(Clone)]
-        pub struct $name(AesCfb);
-
-        impl $name {
-            /// Creates a new AES-CFB encryptor initialized with `key` and `iv`.
-            pub fn new_encrypt(key: &[u8; $key_len], iv: &[u8; 16]) -> Result<Self, BsslError> {
-                AesCfb::new(key, iv, bssl_sys::AES_ENCRYPT).map(Self)
-            }
-
-            /// Creates a new AES-CFB decryptor initialized with `key` and `iv`.
-            pub fn new_decrypt(key: &[u8; $key_len], iv: &[u8; 16]) -> Result<Self, BsslError> {
-                AesCfb::new(key, iv, bssl_sys::AES_DECRYPT).map(Self)
-            }
-
-            /// Encrypts or decrypts `data` in place.
-            pub fn update(&mut self, data: &mut [u8]) -> Result<(), BsslError> {
-                self.0.update(data)
-            }
-
-            /// Finalizes the cipher stream and writes the resulting feedback IV to `iv_out`.
-            pub fn finalize(self, iv_out: &mut [u8; 16]) -> Result<(), BsslError> {
-                self.0.finalize(iv_out)
-            }
-        }
-    };
-}
-
-impl_bssl_aes_cfb!(
-    Aes128Cfb,
-    16,
-    "Safe wrapper around BoringSSL's `AES_cfb128_encrypt` for 128-bit keys."
-);
-
-impl_bssl_aes_cfb!(
-    Aes192Cfb,
-    24,
-    "Safe wrapper around BoringSSL's `AES_cfb128_encrypt` for 192-bit keys."
-);
-
-impl_bssl_aes_cfb!(
-    Aes256Cfb,
-    32,
-    "Safe wrapper around BoringSSL's `AES_cfb128_encrypt` for 256-bit keys."
-);
-
 // ============================================================================
 // Internal RAII Helpers for BoringSSL Memory, Bignum, RSA, EVP, and EC
 // ============================================================================
-
-/// Scoped heap buffer allocated via `OPENSSL_malloc` that is cleansed and freed on drop.
-struct ScopedBsslBuffer {
-    ptr: NonNull<u8>,
-    len: usize,
-}
-
-impl ScopedBsslBuffer {
-    fn new(len: usize) -> Result<Self, BsslError> {
-        let alloc_len = len.max(1);
-        // SAFETY: `OPENSSL_malloc` allocates `alloc_len` bytes on the heap or returns NULL.
-        let raw = unsafe { bssl_sys::OPENSSL_malloc(alloc_len) } as *mut u8;
-        let ptr = NonNull::new(raw).ok_or(BsslError::Internal)?;
-        // SAFETY: `ptr` is valid for `alloc_len` bytes.
-        unsafe {
-            ptr::write_bytes(ptr.as_ptr(), 0, alloc_len);
-        }
-        Ok(Self { ptr, len })
-    }
-
-    fn as_ptr(&self) -> *const u8 {
-        self.ptr.as_ptr()
-    }
-
-    fn as_mut_ptr(&mut self) -> *mut u8 {
-        self.ptr.as_ptr()
-    }
-
-    fn as_slice(&self) -> &[u8] {
-        // SAFETY: `self.ptr` is valid and initialized for `self.len` bytes.
-        unsafe { core::slice::from_raw_parts(self.ptr.as_ptr(), self.len) }
-    }
-}
-
-impl Drop for ScopedBsslBuffer {
-    fn drop(&mut self) {
-        // SAFETY: `self.ptr` was allocated with `OPENSSL_malloc` with at least `self.len` bytes.
-        unsafe {
-            bssl_sys::OPENSSL_cleanse(self.ptr.as_ptr() as *mut c_void, self.len);
-            bssl_sys::OPENSSL_free(self.ptr.as_ptr() as *mut c_void);
-        }
-    }
-}
 
 /// Safe RAII wrapper around `*mut bssl_sys::BIGNUM`.
 struct Bignum {
@@ -696,35 +603,13 @@ impl RsaKey {
     }
 
     /// Creates an RSA public key from big-endian modulus `n_bytes` and public `exponent`
-    /// (`0` selects the default exponent 65537).
+    /// (`RSA_new_public_key`, which checks the key), or [`BsslError::InvalidData`] if
+    /// BoringSSL rejects it.
     fn from_public_key_be(n_bytes: &[u8], exponent: u32) -> Result<Self, BsslError> {
         let n = Bignum::from_bytes_be(n_bytes)?;
-        let e = Bignum::from_u32(if exponent == 0 { 65537 } else { exponent })?;
-        // SAFETY: `n.as_ptr()` and `e.as_ptr()` are valid `BIGNUM`s. `RSA_new_public_key` copies/adopts them.
+        let e = Bignum::from_u32(exponent)?;
+        // SAFETY: `n.as_ptr()` and `e.as_ptr()` are valid `BIGNUM`s. `RSA_new_public_key` copies them.
         let rsa_ptr = unsafe { bssl_sys::RSA_new_public_key(n.as_ptr(), e.as_ptr()) };
-        let ptr = NonNull::new(rsa_ptr).ok_or(BsslError::InvalidData)?;
-        Ok(Self { ptr })
-    }
-
-    /// Parses an RSA private key from PKCS#8 DER or PKCS#1 RSAPrivateKey DER bytes.
-    fn from_private_key_der(der: &[u8]) -> Result<Self, BsslError> {
-        // SAFETY: `EVP_pkey_rsa()` returns a static `EVP_PKEY_ALG` pointer.
-        let alg = unsafe { bssl_sys::EVP_pkey_rsa() };
-        // SAFETY: `der.as_ptr()` is valid for `der.len()` bytes.
-        let pkey_ptr =
-            unsafe { bssl_sys::EVP_PKEY_from_private_key_info(der.as_ptr(), der.len(), &alg, 1) };
-        if let Some(pkey_nn) = NonNull::new(pkey_ptr) {
-            let pkey = EvpPkey { ptr: pkey_nn };
-            // SAFETY: `pkey.as_ptr()` is a valid `EVP_PKEY`. `EVP_PKEY_get1_RSA` increments the refcount.
-            let rsa_ptr = unsafe { bssl_sys::EVP_PKEY_get1_RSA(pkey.as_ptr()) };
-            if let Some(ptr) = NonNull::new(rsa_ptr) {
-                return Ok(Self { ptr });
-            }
-        }
-
-        // Fallback to PKCS#1 RSAPrivateKey DER
-        // SAFETY: `der.as_ptr()` is valid for `der.len()` bytes.
-        let rsa_ptr = unsafe { bssl_sys::RSA_private_key_from_bytes(der.as_ptr(), der.len()) };
         let ptr = NonNull::new(rsa_ptr).ok_or(BsslError::InvalidData)?;
         Ok(Self { ptr })
     }
@@ -738,45 +623,20 @@ impl RsaKey {
         unsafe { bssl_sys::RSA_size(self.ptr.as_ptr()) as usize }
     }
 
-    /// Serializes the RSA private key into RFC 5208 PKCS#8 `PrivateKeyInfo` DER format.
-    fn to_pkcs8_der(&self, out: &mut [u8]) -> Result<usize, BsslError> {
-        let pkey = EvpPkey::from_rsa(self)?;
-        let mut cbb = MaybeUninit::<bssl_sys::CBB>::uninit();
-        // SAFETY: `CBB_init` initializes `cbb` with an initial capacity of 512 bytes.
-        if unsafe { bssl_sys::CBB_init(cbb.as_mut_ptr(), 512) } != 1 {
-            return Err(BsslError::Internal);
-        }
-        // SAFETY: `cbb` is initialized and `pkey.as_ptr()` is valid.
-        let marshal_res =
-            unsafe { bssl_sys::EVP_marshal_private_key(cbb.as_mut_ptr(), pkey.as_ptr()) };
-        if marshal_res != 1 {
-            // SAFETY: `cbb` is initialized and must be cleaned up on error.
-            unsafe { bssl_sys::CBB_cleanup(cbb.as_mut_ptr()) };
-            return Err(BsslError::Internal);
-        }
-        let mut buf_ptr: *mut u8 = ptr::null_mut();
-        let mut buf_len: usize = 0;
-        // SAFETY: `cbb` is finalized, transferring ownership of `buf_ptr` (allocated via `OPENSSL_malloc`) to caller.
-        if unsafe { bssl_sys::CBB_finish(cbb.as_mut_ptr(), &mut buf_ptr, &mut buf_len) } != 1 {
-            unsafe { bssl_sys::CBB_cleanup(cbb.as_mut_ptr()) };
-            return Err(BsslError::Internal);
-        }
-        let res = if out.len() < buf_len {
-            Err(BsslError::BufferTooSmall)
-        } else {
-            // SAFETY: `buf_ptr` is valid for `buf_len` bytes.
-            let slice = unsafe { core::slice::from_raw_parts(buf_ptr, buf_len) };
-            out[..buf_len].copy_from_slice(slice);
-            Ok(buf_len)
-        };
-        // SAFETY: `buf_ptr` was allocated by `CBB_finish` via `OPENSSL_malloc` and must be cleansed and freed.
-        unsafe {
-            bssl_sys::OPENSSL_cleanse(buf_ptr as *mut c_void, buf_len);
-            bssl_sys::OPENSSL_free(buf_ptr as *mut c_void);
-        }
-        res
+    /// Returns the modulus `n` (borrowed from the key).
+    fn n(&self) -> *const bssl_sys::BIGNUM {
+        // SAFETY: `self.ptr` is a valid `RSA` pointer; the result lives as long as `self`.
+        unsafe { bssl_sys::RSA_get0_n(self.ptr.as_ptr()) }
     }
 }
+
+// SAFETY: an `RsaKey` uniquely owns its reference to the `RSA` object, and BoringSSL `RSA`
+// objects may be used concurrently from several threads once constructed (their lazily computed
+// Montgomery and blinding state is protected by the object's lock).
+unsafe impl Send for RsaKey {}
+// SAFETY: see `Send`; every operation through `&RsaKey` is a thread-safe BoringSSL operation on a
+// constructed key.
+unsafe impl Sync for RsaKey {}
 
 impl Drop for RsaKey {
     fn drop(&mut self) {
@@ -875,552 +735,690 @@ fn hash_alg_to_evp_md(hash_alg: TpmiAlgHash) -> Result<*const bssl_sys::EVP_MD, 
         }
     }
 }
+
+/// Checks that the big-endian integer `value` is below the modulus of `rsa`
+/// ([`BsslError::InvalidData`] otherwise).
+fn check_below_modulus(rsa: &RsaKey, value: &[u8]) -> Result<(), BsslError> {
+    let v = Bignum::from_bytes_be(value)?;
+    let n = rsa.n();
+    // SAFETY: `n` (if non-null) and `v` are valid `BIGNUM`s.
+    if n.is_null() || unsafe { bssl_sys::BN_cmp(v.as_ptr(), n) } >= 0 {
+        return Err(BsslError::InvalidData);
+    }
+    Ok(())
+}
+
+/// Creates an `EVP_PKEY_CTX` for RSAES-OAEP encryption (`encrypt`) or decryption with `rsa`,
+/// with `hash_alg` for the label hash and MGF1, and the OAEP label `label`.
+fn oaep_ctx(
+    rsa: &RsaKey,
+    hash_alg: TpmiAlgHash,
+    label: &[u8],
+    encrypt: bool,
+) -> Result<EvpPkeyCtx, BsslError> {
+    let md = hash_alg_to_evp_md(hash_alg)?;
+    // `EVP_PKEY_CTX_new` takes its own reference to the key.
+    let ctx = EvpPkeyCtx::new(&EvpPkey::from_rsa(rsa)?)?;
+    // SAFETY: `ctx.as_ptr()` is a valid `EVP_PKEY_CTX` of an RSA key and `md` a static `EVP_MD`.
+    unsafe {
+        let init = if encrypt {
+            bssl_sys::EVP_PKEY_encrypt_init(ctx.as_ptr())
+        } else {
+            bssl_sys::EVP_PKEY_decrypt_init(ctx.as_ptr())
+        };
+        if init != 1
+            || bssl_sys::EVP_PKEY_CTX_set_rsa_padding(
+                ctx.as_ptr(),
+                bssl_sys::RSA_PKCS1_OAEP_PADDING as c_int,
+            ) != 1
+            || bssl_sys::EVP_PKEY_CTX_set_rsa_oaep_md(ctx.as_ptr(), md) != 1
+            || bssl_sys::EVP_PKEY_CTX_set_rsa_mgf1_md(ctx.as_ptr(), md) != 1
+        {
+            return Err(BsslError::Internal);
+        }
+    }
+    if !label.is_empty() {
+        // SAFETY: Allocate a buffer via `OPENSSL_malloc` for `EVP_PKEY_CTX_set0_rsa_oaep_label`, which
+        // takes ownership of the pointer on success (1) and frees it when `ctx` is freed.
+        let label_ptr = unsafe { bssl_sys::OPENSSL_malloc(label.len()) } as *mut u8;
+        if label_ptr.is_null() {
+            return Err(BsslError::Internal);
+        }
+        // SAFETY: `label_ptr` is valid for `label.len()` bytes and does not overlap `label`.
+        unsafe {
+            ptr::copy_nonoverlapping(label.as_ptr(), label_ptr, label.len());
+            if bssl_sys::EVP_PKEY_CTX_set0_rsa_oaep_label(ctx.as_ptr(), label_ptr, label.len()) != 1
+            {
+                bssl_sys::OPENSSL_free(label_ptr as *mut c_void);
+                return Err(BsslError::Internal);
+            }
+        }
+    }
+    Ok(ctx)
+}
+
 // ============================================================================
 // RSA Safe Bindings over `bssl-sys`
 // ============================================================================
 
-/// Signs a pre-hashed digest using RSASSA-PKCS1-v1_5 (`RSA_sign`).
-pub fn rsa_sign_pkcs1v15(
-    private_key_der: &[u8],
-    hash_alg: TpmiAlgHash,
-    digest: &[u8],
-    signature_out: &mut [u8],
-) -> Result<usize, BsslError> {
-    let nid = hash_alg_to_nid(hash_alg)?;
-    let rsa = RsaKey::from_private_key_der(private_key_der)?;
-    let key_size = rsa.size();
-    if signature_out.len() < key_size {
-        return Err(BsslError::BufferTooSmall);
-    }
-
-    let mut sig_len: c_uint = 0;
-    // SAFETY:
-    // - `digest.as_ptr()` is valid for `digest.len()` bytes.
-    // - `signature_out.as_mut_ptr()` is valid for `key_size` bytes.
-    // - `rsa.as_ptr()` is a valid private `RSA` key.
-    let res = unsafe {
-        bssl_sys::RSA_sign(
-            nid,
-            digest.as_ptr(),
-            digest.len(),
-            signature_out.as_mut_ptr(),
-            &mut sig_len,
-            rsa.as_ptr(),
-        )
-    };
-    // `RSA_sign` fails if the key is too small for the `DigestInfo` encoding of `digest`.
-    if res != 1 {
-        return Err(BsslError::InvalidData);
-    }
-    Ok(sig_len as usize)
-}
-
-/// Verifies a pre-hashed digest against an RSASSA-PKCS1-v1_5 signature (`RSA_verify`).
-///
-/// The public key is the big-endian modulus `public_key_be` with the public `exponent` (`0`
-/// selects the default exponent 65537).
-pub fn rsa_verify_pkcs1v15(
-    public_key_be: &[u8],
+/// A validated RSA public key: a BoringSSL `RSA` with the modulus `n` and the public exponent
+/// `e`.
+pub struct RsaPublic {
+    rsa: RsaKey,
     exponent: u32,
-    hash_alg: TpmiAlgHash,
-    digest: &[u8],
-    signature: &[u8],
-) -> Result<(), BsslError> {
-    let nid = hash_alg_to_nid(hash_alg)?;
-    let rsa = RsaKey::from_public_key_be(public_key_be, exponent)?;
-    // SAFETY:
-    // - `digest.as_ptr()` is valid for `digest.len()` bytes.
-    // - `signature.as_ptr()` is valid for `signature.len()` bytes.
-    // - `rsa.as_ptr()` is a valid public `RSA` key.
-    let res = unsafe {
-        bssl_sys::RSA_verify(
-            nid,
-            digest.as_ptr(),
-            digest.len(),
-            signature.as_ptr(),
-            signature.len(),
-            rsa.as_ptr(),
-        )
-    };
-    if res == 1 {
-        Ok(())
-    } else {
-        Err(BsslError::InvalidData)
-    }
 }
 
-/// Signs a pre-hashed digest using RSASSA-PSS with salt length equal to digest length (`RSA_sign_pss_mgf1`).
-pub fn rsa_sign_pss(
-    private_key_der: &[u8],
-    hash_alg: TpmiAlgHash,
-    digest: &[u8],
-    signature_out: &mut [u8],
-) -> Result<usize, BsslError> {
-    let md = hash_alg_to_evp_md(hash_alg)?;
-    let rsa = RsaKey::from_private_key_der(private_key_der)?;
-    let key_size = rsa.size();
-    if signature_out.len() < key_size {
-        return Err(BsslError::BufferTooSmall);
+impl RsaPublic {
+    /// Creates the public key of the big-endian modulus `modulus` and the public exponent
+    /// `exponent` (`RSA_new_public_key`), or [`BsslError::InvalidData`] if BoringSSL rejects
+    /// the key (e.g. an even modulus or exponent).
+    pub fn new(modulus: &[u8], exponent: u32) -> Result<Self, BsslError> {
+        Ok(Self {
+            rsa: RsaKey::from_public_key_be(modulus, exponent)?,
+            exponent,
+        })
     }
 
-    let mut sig_len: usize = 0;
-    // SAFETY:
-    // - `signature_out` has at least `key_size` bytes.
-    // - `digest.as_ptr()` is valid for `digest.len()` bytes.
-    // - `md` is a valid `EVP_MD` pointer.
-    let res = unsafe {
-        bssl_sys::RSA_sign_pss_mgf1(
-            rsa.as_ptr(),
-            &mut sig_len,
-            signature_out.as_mut_ptr(),
-            signature_out.len(),
-            digest.as_ptr(),
-            digest.len(),
-            md,
-            md,
-            bssl_sys::RSA_PSS_SALTLEN_DIGEST,
-        )
-    };
-    // `RSA_sign_pss_mgf1` fails if the key is too small for the digest and salt.
-    if res != 1 {
-        return Err(BsslError::InvalidData);
-    }
-    Ok(sig_len)
-}
-
-/// Verifies a pre-hashed digest against an RSASSA-PSS signature (`RSA_verify_pss_mgf1`).
-///
-/// Tries `RSA_PSS_SALTLEN_DIGEST` first, falling back to `RSA_PSS_SALTLEN_AUTO` for TPM 2.0 compatibility
-/// with signatures that use maximal salt length.
-///
-/// The public key is the big-endian modulus `public_key_be` with the public `exponent` (`0`
-/// selects the default exponent 65537).
-pub fn rsa_verify_pss(
-    public_key_be: &[u8],
-    exponent: u32,
-    hash_alg: TpmiAlgHash,
-    digest: &[u8],
-    signature: &[u8],
-) -> Result<(), BsslError> {
-    let md = hash_alg_to_evp_md(hash_alg)?;
-    let rsa = RsaKey::from_public_key_be(public_key_be, exponent)?;
-    // SAFETY: `signature.as_ptr()` and `digest.as_ptr()` are valid for their respective lengths.
-    let res_digest = unsafe {
-        bssl_sys::RSA_verify_pss_mgf1(
-            rsa.as_ptr(),
-            digest.as_ptr(),
-            digest.len(),
-            md,
-            md,
-            bssl_sys::RSA_PSS_SALTLEN_DIGEST,
-            signature.as_ptr(),
-            signature.len(),
-        )
-    };
-    if res_digest == 1 {
-        return Ok(());
+    /// Returns the public exponent `e`.
+    pub fn exponent(&self) -> u32 {
+        self.exponent
     }
 
-    // Fallback to auto salt length detection (`RSA_PSS_SALTLEN_AUTO`)
-    // SAFETY: Same valid pointers as above.
-    let res_auto = unsafe {
-        bssl_sys::RSA_verify_pss_mgf1(
-            rsa.as_ptr(),
-            digest.as_ptr(),
-            digest.len(),
-            md,
-            md,
-            bssl_sys::RSA_PSS_SALTLEN_AUTO,
-            signature.as_ptr(),
-            signature.len(),
-        )
-    };
-    if res_auto == 1 {
-        Ok(())
-    } else {
-        Err(BsslError::InvalidData)
-    }
-}
-
-/// Encrypts `data` using RSAES-PKCS1-v1_5 (`RSA_encrypt` with `RSA_PKCS1_PADDING`).
-///
-/// The public key is the big-endian modulus `public_key_be` with the public `exponent` (`0`
-/// selects the default exponent 65537).
-pub fn rsa_encrypt_pkcs1v15(
-    public_key_be: &[u8],
-    exponent: u32,
-    data: &[u8],
-    ciphertext_out: &mut [u8],
-) -> Result<usize, BsslError> {
-    let rsa = RsaKey::from_public_key_be(public_key_be, exponent)?;
-    let key_size = rsa.size();
-    if ciphertext_out.len() < key_size {
-        return Err(BsslError::BufferTooSmall);
+    /// Returns the size of the modulus in bytes.
+    pub fn size(&self) -> usize {
+        self.rsa.size()
     }
 
-    let mut out_len: usize = 0;
-    // SAFETY:
-    // - `ciphertext_out` is valid for `ciphertext_out.len() >= key_size` bytes.
-    // - `data` is valid for `data.len()` bytes.
-    let res = unsafe {
-        bssl_sys::RSA_encrypt(
-            rsa.as_ptr(),
-            &mut out_len,
-            ciphertext_out.as_mut_ptr(),
-            ciphertext_out.len(),
-            data.as_ptr(),
-            data.len(),
-            bssl_sys::RSA_PKCS1_PADDING as c_int,
-        )
-    };
-    // `RSA_encrypt` fails if `data` is too large for PKCS#1 v1.5 padding with this key.
-    if res != 1 {
-        return Err(BsslError::InvalidData);
-    }
-    Ok(out_len)
-}
-
-/// Decrypts `ciphertext` using RSAES-PKCS1-v1_5 (`RSA_decrypt` with `RSA_PKCS1_PADDING`).
-pub fn rsa_decrypt_pkcs1v15(
-    private_key_der: &[u8],
-    ciphertext: &[u8],
-    plaintext_out: &mut [u8],
-) -> Result<usize, BsslError> {
-    let rsa = RsaKey::from_private_key_der(private_key_der)?;
-    let key_size = rsa.size();
-    let mut temp_buf = ScopedBsslBuffer::new(key_size)?;
-    let mut out_len: usize = 0;
-
-    // SAFETY:
-    // - `temp_buf` is valid for `key_size` bytes (BoringSSL requires `max_out >= RSA_size`).
-    // - `ciphertext` is valid for `ciphertext.len()` bytes.
-    let res = unsafe {
-        bssl_sys::RSA_decrypt(
-            rsa.as_ptr(),
-            &mut out_len,
-            temp_buf.as_mut_ptr(),
-            key_size,
-            ciphertext.as_ptr(),
-            ciphertext.len(),
-            bssl_sys::RSA_PKCS1_PADDING as c_int,
-        )
-    };
-    if res != 1 {
-        return Err(BsslError::InvalidData);
-    }
-    if plaintext_out.len() < out_len {
-        return Err(BsslError::BufferTooSmall);
-    }
-    plaintext_out[..out_len].copy_from_slice(&temp_buf.as_slice()[..out_len]);
-    Ok(out_len)
-}
-
-/// Encrypts `data` using RSA-OAEP with the specified hash algorithm and label.
-///
-/// The public key is the big-endian modulus `public_key_be` with the public `exponent` (`0`
-/// selects the default exponent 65537).
-pub fn rsa_encrypt_oaep(
-    hash_alg: TpmiAlgHash,
-    public_key_be: &[u8],
-    exponent: u32,
-    data: &[u8],
-    label: &[u8],
-    ciphertext_out: &mut [u8],
-) -> Result<usize, BsslError> {
-    let _label_str = core::str::from_utf8(label).map_err(|_| BsslError::InvalidData)?;
-    let md = hash_alg_to_evp_md(hash_alg)?;
-    let rsa = RsaKey::from_public_key_be(public_key_be, exponent)?;
-    let key_size = rsa.size();
-    if ciphertext_out.len() < key_size {
-        return Err(BsslError::BufferTooSmall);
-    }
-
-    let pkey = EvpPkey::from_rsa(&rsa)?;
-    let ctx = EvpPkeyCtx::new(&pkey)?;
-
-    // SAFETY: `ctx.as_ptr()` is a valid `EVP_PKEY_CTX`.
-    unsafe {
-        if bssl_sys::EVP_PKEY_encrypt_init(ctx.as_ptr()) != 1
-            || bssl_sys::EVP_PKEY_CTX_set_rsa_padding(
-                ctx.as_ptr(),
-                bssl_sys::RSA_PKCS1_OAEP_PADDING as c_int,
-            ) != 1
-            || bssl_sys::EVP_PKEY_CTX_set_rsa_oaep_md(ctx.as_ptr(), md) != 1
-            || bssl_sys::EVP_PKEY_CTX_set_rsa_mgf1_md(ctx.as_ptr(), md) != 1
+    /// Writes the big-endian modulus `n`, left-padded with zeros to `out.len()` bytes.
+    pub fn modulus(&self, out: &mut [u8]) -> Result<(), BsslError> {
+        let n = self.rsa.n();
+        // SAFETY: `out` is valid for `out.len()` bytes and `n` (if non-null) is a valid `BIGNUM`;
+        // `BN_bn2bin_padded` fails if `n` does not fit.
+        if n.is_null() || unsafe { bssl_sys::BN_bn2bin_padded(out.as_mut_ptr(), out.len(), n) } != 1
         {
             return Err(BsslError::Internal);
         }
+        Ok(())
     }
 
-    if !label.is_empty() {
-        // SAFETY: Allocate a buffer via `OPENSSL_malloc` for `EVP_PKEY_CTX_set0_rsa_oaep_label`, which
-        // takes ownership of the pointer on success (1) and frees it when `ctx` is freed.
-        let label_ptr = unsafe { bssl_sys::OPENSSL_malloc(label.len()) } as *mut u8;
-        if label_ptr.is_null() {
+    /// Raw modular exponentiation $c = m^e \bmod n$ (`RSA_encrypt` with `RSA_NO_PADDING`) of the
+    /// big-endian `m` (of the modulus size) into `out` (of the modulus size), or
+    /// [`BsslError::InvalidData`] if `m >= n`.
+    pub fn encrypt_raw(&self, m: &[u8], out: &mut [u8]) -> Result<(), BsslError> {
+        let size = self.size();
+        if m.len() != size || out.len() != size {
+            return Err(BsslError::BufferTooSmall);
+        }
+        check_below_modulus(&self.rsa, m)?;
+        let mut out_len: usize = 0;
+        // SAFETY: `m` and `out` are valid for `size` bytes.
+        let res = unsafe {
+            bssl_sys::RSA_encrypt(
+                self.rsa.as_ptr(),
+                &mut out_len,
+                out.as_mut_ptr(),
+                size,
+                m.as_ptr(),
+                size,
+                bssl_sys::RSA_NO_PADDING as c_int,
+            )
+        };
+        if res != 1 || out_len != size {
             return Err(BsslError::Internal);
         }
-        unsafe {
-            ptr::copy_nonoverlapping(label.as_ptr(), label_ptr, label.len());
-            if bssl_sys::EVP_PKEY_CTX_set0_rsa_oaep_label(ctx.as_ptr(), label_ptr, label.len()) != 1
-            {
-                bssl_sys::OPENSSL_free(label_ptr as *mut c_void);
-                return Err(BsslError::Internal);
-            }
+        Ok(())
+    }
+
+    /// Encrypts `data` using RSAES-PKCS1-v1_5 (`RSA_encrypt` with `RSA_PKCS1_PADDING`) into
+    /// `out` (of the modulus size), or [`BsslError::InvalidData`] if `data` is too long.
+    pub fn encrypt_pkcs1(&self, data: &[u8], out: &mut [u8]) -> Result<(), BsslError> {
+        let size = self.size();
+        if out.len() != size {
+            return Err(BsslError::BufferTooSmall);
+        }
+        let mut out_len: usize = 0;
+        // SAFETY: `out` is valid for `size` bytes and `data` for `data.len()` bytes.
+        let res = unsafe {
+            bssl_sys::RSA_encrypt(
+                self.rsa.as_ptr(),
+                &mut out_len,
+                out.as_mut_ptr(),
+                size,
+                data.as_ptr(),
+                data.len(),
+                bssl_sys::RSA_PKCS1_PADDING as c_int,
+            )
+        };
+        // `RSA_encrypt` fails if `data` is too large for PKCS#1 v1.5 padding with this key.
+        if res != 1 {
+            return Err(BsslError::InvalidData);
+        }
+        if out_len != size {
+            return Err(BsslError::Internal);
+        }
+        Ok(())
+    }
+
+    /// Encrypts `data` using RSAES-OAEP with `hash_alg` (label hash and MGF1) and the OAEP label
+    /// `label` into `out` (of the modulus size), or [`BsslError::InvalidData`] if `data` is too
+    /// long.
+    pub fn encrypt_oaep(
+        &self,
+        hash_alg: TpmiAlgHash,
+        label: &[u8],
+        data: &[u8],
+        out: &mut [u8],
+    ) -> Result<(), BsslError> {
+        let size = self.size();
+        if out.len() != size {
+            return Err(BsslError::BufferTooSmall);
+        }
+        let ctx = oaep_ctx(&self.rsa, hash_alg, label, true)?;
+        let mut out_len = out.len();
+        // SAFETY: `out` is valid for `out_len` bytes and `data` is valid for `data.len()` bytes.
+        let res = unsafe {
+            bssl_sys::EVP_PKEY_encrypt(
+                ctx.as_ptr(),
+                out.as_mut_ptr(),
+                &mut out_len,
+                data.as_ptr(),
+                data.len(),
+            )
+        };
+        // `EVP_PKEY_encrypt` fails if `data` is too large for OAEP padding with this key.
+        if res != 1 {
+            return Err(BsslError::InvalidData);
+        }
+        if out_len != size {
+            return Err(BsslError::Internal);
+        }
+        Ok(())
+    }
+
+    /// Verifies the RSASSA-PKCS1-v1_5 signature `signature` over the pre-hashed `digest`
+    /// (`RSA_verify`), or [`BsslError::InvalidData`] if it is invalid.
+    pub fn verify_pkcs1(
+        &self,
+        hash_alg: TpmiAlgHash,
+        digest: &[u8],
+        signature: &[u8],
+    ) -> Result<(), BsslError> {
+        let nid = hash_alg_to_nid(hash_alg)?;
+        // SAFETY:
+        // - `digest.as_ptr()` is valid for `digest.len()` bytes.
+        // - `signature.as_ptr()` is valid for `signature.len()` bytes.
+        // - `self.rsa.as_ptr()` is a valid public `RSA` key.
+        let res = unsafe {
+            bssl_sys::RSA_verify(
+                nid,
+                digest.as_ptr(),
+                digest.len(),
+                signature.as_ptr(),
+                signature.len(),
+                self.rsa.as_ptr(),
+            )
+        };
+        if res == 1 {
+            Ok(())
+        } else {
+            Err(BsslError::InvalidData)
         }
     }
 
-    let mut out_len = ciphertext_out.len();
-    // SAFETY: `ciphertext_out` is valid for `out_len` bytes and `data` is valid for `data.len()` bytes.
-    let res = unsafe {
-        bssl_sys::EVP_PKEY_encrypt(
-            ctx.as_ptr(),
-            ciphertext_out.as_mut_ptr(),
-            &mut out_len,
-            data.as_ptr(),
-            data.len(),
-        )
-    };
-    // `EVP_PKEY_encrypt` fails if `data` is too large for OAEP padding with this key.
-    if res != 1 {
-        return Err(BsslError::InvalidData);
+    /// Verifies the RSASSA-PSS signature `signature` over the pre-hashed `digest`
+    /// (`RSA_verify_pss_mgf1` with `RSA_PSS_SALTLEN_AUTO`, so that signatures with any salt
+    /// length are accepted, as by TPM 2.0 `PssDecode`), or [`BsslError::InvalidData`] if it is
+    /// invalid.
+    pub fn verify_pss(
+        &self,
+        hash_alg: TpmiAlgHash,
+        digest: &[u8],
+        signature: &[u8],
+    ) -> Result<(), BsslError> {
+        let md = hash_alg_to_evp_md(hash_alg)?;
+        // SAFETY: `signature.as_ptr()` and `digest.as_ptr()` are valid for their respective
+        // lengths, `md` is a static `EVP_MD` and `self.rsa` a valid public `RSA` key.
+        let res = unsafe {
+            bssl_sys::RSA_verify_pss_mgf1(
+                self.rsa.as_ptr(),
+                digest.as_ptr(),
+                digest.len(),
+                md,
+                md,
+                bssl_sys::RSA_PSS_SALTLEN_AUTO,
+                signature.as_ptr(),
+                signature.len(),
+            )
+        };
+        if res == 1 {
+            Ok(())
+        } else {
+            Err(BsslError::InvalidData)
+        }
     }
-    Ok(out_len)
 }
 
-/// Decrypts `ciphertext` using RSA-OAEP with the specified hash algorithm and label.
-pub fn rsa_decrypt_oaep(
-    hash_alg: TpmiAlgHash,
-    private_key_der: &[u8],
-    ciphertext: &[u8],
-    label: &[u8],
-    plaintext_out: &mut [u8],
-) -> Result<usize, BsslError> {
-    let _label_str = core::str::from_utf8(label).map_err(|_| BsslError::InvalidData)?;
-    let md = hash_alg_to_evp_md(hash_alg)?;
-    let rsa = RsaKey::from_private_key_der(private_key_der)?;
-    let key_size = rsa.size();
-    let pkey = EvpPkey::from_rsa(&rsa)?;
-    let ctx = EvpPkeyCtx::new(&pkey)?;
+/// A validated RSA private key: a BoringSSL `RSA` with all its CRT components.
+pub struct RsaPrivate {
+    rsa: RsaKey,
+}
 
-    // SAFETY: `ctx.as_ptr()` is a valid `EVP_PKEY_CTX`.
-    unsafe {
-        if bssl_sys::EVP_PKEY_decrypt_init(ctx.as_ptr()) != 1
-            || bssl_sys::EVP_PKEY_CTX_set_rsa_padding(
+impl RsaPrivate {
+    /// Imports the RSA private key of the big-endian modulus `modulus`, one of its prime
+    /// factors `prime` (either one) and the public `exponent` (`>= 3` and odd), or
+    /// [`BsslError::InvalidData`] if `prime` does not factor `modulus` into two primes of
+    /// (about) the same size, or the key is otherwise invalid.
+    pub fn from_prime(modulus: &[u8], prime: &[u8], exponent: u32) -> Result<Self, BsslError> {
+        if exponent < 3 || exponent.is_multiple_of(2) {
+            return Err(BsslError::InvalidData);
+        }
+
+        let n = Bignum::from_bytes_be(modulus)?;
+        let p = Bignum::from_bytes_be(prime)?;
+        let e = Bignum::from_u32(exponent)?;
+
+        if !n.is_odd() || !p.is_odd() || p.num_bits() <= 1 || n.num_bits() < 512 {
+            return Err(BsslError::InvalidData);
+        }
+
+        let ctx = BnCtx::new()?;
+        let q = Bignum::new()?;
+        let rem = Bignum::new()?;
+
+        // Divide n by p: q = n / p, rem = n % p
+        // SAFETY: All `BIGNUM` and `BN_CTX` pointers are valid.
+        if unsafe {
+            bssl_sys::BN_div(
+                q.as_ptr(),
+                rem.as_ptr(),
+                n.as_ptr(),
+                p.as_ptr(),
                 ctx.as_ptr(),
-                bssl_sys::RSA_PKCS1_OAEP_PADDING as c_int,
-            ) != 1
-            || bssl_sys::EVP_PKEY_CTX_set_rsa_oaep_md(ctx.as_ptr(), md) != 1
-            || bssl_sys::EVP_PKEY_CTX_set_rsa_mgf1_md(ctx.as_ptr(), md) != 1
+            )
+        } != 1
+        {
+            return Err(BsslError::InvalidData);
+        }
+
+        if !rem.is_zero()
+            || !q.is_odd()
+            || q.num_bits() <= 1
+            || p.num_bits().abs_diff(q.num_bits()) > 1
+        {
+            return Err(BsslError::InvalidData);
+        }
+
+        // Verify p * q == n
+        let prod = Bignum::new()?;
+        // SAFETY: All `BIGNUM` and `BN_CTX` pointers are valid.
+        if unsafe { bssl_sys::BN_mul(prod.as_ptr(), p.as_ptr(), q.as_ptr(), ctx.as_ptr()) } != 1
+            || unsafe { bssl_sys::BN_cmp(prod.as_ptr(), n.as_ptr()) } != 0
+        {
+            return Err(BsslError::InvalidData);
+        }
+
+        // Verify primality of p and q
+        if !p.is_prime(&ctx)? || !q.is_prime(&ctx)? {
+            return Err(BsslError::InvalidData);
+        }
+
+        rsa_construct(&n, &p, &q, &e, &ctx).map(|rsa| Self { rsa })
+    }
+
+    /// Generates a key pair with a modulus of `bits` bits (1024 to 4096, a multiple of 128) and
+    /// the public `exponent` (`>= 3` and odd) with BoringSSL's `RSA_generate_key_ex` and
+    /// BoringSSL's own RNG.
+    pub fn generate(bits: usize, exponent: u32) -> Result<Self, BsslError> {
+        check_key_generation(bits, exponent)?;
+        let e = Bignum::from_u32(exponent)?;
+        let rsa = RsaKey::new()?;
+        // SAFETY: `rsa.as_ptr()` and `e.as_ptr()` are valid non-null pointers.
+        let res = unsafe {
+            bssl_sys::RSA_generate_key_ex(rsa.as_ptr(), bits as c_int, e.as_ptr(), ptr::null_mut())
+        };
+        if res != 1 {
+            return Err(BsslError::Internal);
+        }
+        Ok(Self { rsa })
+    }
+
+    /// Generates a key pair as [`generate`](Self::generate), drawing the prime candidates from
+    /// `rng` (and testing them with BoringSSL's `BN_primality_test`), so that the key is
+    /// deterministic for a deterministic `rng`. The larger prime is `p`.
+    pub fn generate_from_rng(
+        bits: usize,
+        exponent: u32,
+        rng: &mut impl rand_core::RngCore,
+    ) -> Result<Self, BsslError> {
+        check_key_generation(bits, exponent)?;
+        let e = Bignum::from_u32(exponent)?;
+        let ctx = BnCtx::new()?;
+        let prime_bits = bits / 2;
+
+        for _ in 0..32 {
+            let mut p = generate_deterministic_prime(rng, prime_bits, &e, &ctx)?;
+            let mut q = generate_deterministic_prime(rng, prime_bits, &e, &ctx)?;
+            // SAFETY: `p` and `q` are valid non-null `BIGNUM`s.
+            let cmp = unsafe { bssl_sys::BN_cmp(p.as_ptr(), q.as_ptr()) };
+            if cmp == 0 {
+                continue;
+            }
+            if cmp < 0 {
+                core::mem::swap(&mut p, &mut q);
+            }
+
+            let n = Bignum::new()?;
+            // SAFETY: `n`, `p`, `q`, and `ctx` are valid non-null pointers.
+            if unsafe { bssl_sys::BN_mul(n.as_ptr(), p.as_ptr(), q.as_ptr(), ctx.as_ptr()) } != 1 {
+                return Err(BsslError::Internal);
+            }
+            if n.num_bits() != bits {
+                continue;
+            }
+            if let Ok(rsa) = rsa_construct(&n, &p, &q, &e, &ctx) {
+                return Ok(Self { rsa });
+            }
+        }
+        Err(BsslError::Internal)
+    }
+
+    /// Returns the public key of this key.
+    pub fn public(&self) -> Result<RsaPublic, BsslError> {
+        // SAFETY: `self.rsa` is a valid `RSA` key; the getters return borrowed pointers (or
+        // NULL) that live as long as `self.rsa`.
+        let (n, e) = unsafe {
+            (
+                bssl_sys::RSA_get0_n(self.rsa.as_ptr()),
+                bssl_sys::RSA_get0_e(self.rsa.as_ptr()),
+            )
+        };
+        if n.is_null() || e.is_null() {
+            return Err(BsslError::Internal);
+        }
+        // SAFETY: `e` is a valid non-null `BIGNUM`.
+        let exponent = u32::try_from(unsafe { bssl_sys::BN_get_word(e) })
+            .map_err(|_| BsslError::Unsupported)?;
+        // SAFETY: `n` and `e` are valid `BIGNUM`s, which `RSA_new_public_key` copies.
+        let rsa_ptr = unsafe { bssl_sys::RSA_new_public_key(n, e) };
+        Ok(RsaPublic {
+            rsa: RsaKey {
+                ptr: NonNull::new(rsa_ptr).ok_or(BsslError::Internal)?,
+            },
+            exponent,
+        })
+    }
+
+    /// Writes the prime factor `p` (the one this key was imported with, or the one BoringSSL
+    /// calls `p` for a generated key), big-endian and left-padded with zeros to `out.len()`
+    /// bytes.
+    pub fn prime(&self, out: &mut [u8]) -> Result<(), BsslError> {
+        // SAFETY: `self.rsa` is a valid private `RSA` key.
+        let p = unsafe { bssl_sys::RSA_get0_p(self.rsa.as_ptr()) };
+        // SAFETY: `out` is valid for `out.len()` bytes and `p` (if non-null) is a valid `BIGNUM`;
+        // `BN_bn2bin_padded` fails if `p` does not fit.
+        if p.is_null() || unsafe { bssl_sys::BN_bn2bin_padded(out.as_mut_ptr(), out.len(), p) } != 1
         {
             return Err(BsslError::Internal);
         }
+        Ok(())
     }
 
-    if !label.is_empty() {
-        // SAFETY: Allocate a buffer via `OPENSSL_malloc` for `EVP_PKEY_CTX_set0_rsa_oaep_label`, which
-        // takes ownership of the pointer on success (1) and frees it when `ctx` is freed.
-        let label_ptr = unsafe { bssl_sys::OPENSSL_malloc(label.len()) } as *mut u8;
-        if label_ptr.is_null() {
+    /// Writes the CRT form `[p, q, dP, dQ, qInv]` of this key, where `p` is the larger prime,
+    /// `dP = d mod (p - 1)`, `dQ = d mod (q - 1)` and `qInv = q^-1 mod p`, each big-endian and
+    /// left-padded with zeros to `N` bytes (see `tpm2::crypto::backend::RsaKey::store_crt`).
+    pub fn crt<const N: usize>(&self, out: &mut [[u8; N]; 5]) -> Result<(), BsslError> {
+        // SAFETY: `self.rsa` is a valid private `RSA` key; the getters return borrowed
+        // pointers (or NULL) that live as long as `self.rsa`.
+        let (p, q, d) = unsafe {
+            (
+                bssl_sys::RSA_get0_p(self.rsa.as_ptr()),
+                bssl_sys::RSA_get0_q(self.rsa.as_ptr()),
+                bssl_sys::RSA_get0_d(self.rsa.as_ptr()),
+            )
+        };
+        if p.is_null() || q.is_null() || d.is_null() {
+            return Err(BsslError::InvalidData);
+        }
+        // SAFETY: `p` and `q` are valid non-null `BIGNUM`s.
+        let (p, q) = if unsafe { bssl_sys::BN_cmp(p, q) } < 0 {
+            (q, p)
+        } else {
+            (p, q)
+        };
+        let ctx = BnCtx::new()?;
+        let one = Bignum::from_u32(1)?;
+        let (pm1, qm1) = (Bignum::new()?, Bignum::new()?);
+        let (dp, dq, qinv) = (Bignum::new()?, Bignum::new()?, Bignum::new()?);
+        // SAFETY: valid `BIGNUM` and `BN_CTX` pointers; the outputs are distinct from the inputs.
+        let ok = unsafe {
+            bssl_sys::BN_sub(pm1.as_ptr(), p, one.as_ptr()) == 1
+                && bssl_sys::BN_sub(qm1.as_ptr(), q, one.as_ptr()) == 1
+                && bssl_sys::BN_div(ptr::null_mut(), dp.as_ptr(), d, pm1.as_ptr(), ctx.as_ptr())
+                    == 1
+                && bssl_sys::BN_div(ptr::null_mut(), dq.as_ptr(), d, qm1.as_ptr(), ctx.as_ptr())
+                    == 1
+        };
+        if !ok {
             return Err(BsslError::Internal);
         }
-        unsafe {
-            ptr::copy_nonoverlapping(label.as_ptr(), label_ptr, label.len());
-            if bssl_sys::EVP_PKEY_CTX_set0_rsa_oaep_label(ctx.as_ptr(), label_ptr, label.len()) != 1
-            {
-                bssl_sys::OPENSSL_free(label_ptr as *mut c_void);
-                return Err(BsslError::Internal);
+        // SAFETY: valid `BIGNUM` and `BN_CTX` pointers; NULL if `q` is not invertible mod `p`.
+        if unsafe { bssl_sys::BN_mod_inverse(qinv.as_ptr(), q, p, ctx.as_ptr()) }.is_null() {
+            return Err(BsslError::InvalidData);
+        }
+        let values = [p, q, dp.as_ptr(), dq.as_ptr(), qinv.as_ptr()];
+        for (value, out) in values.into_iter().zip(out.iter_mut()) {
+            // SAFETY: `out` is valid for `N` bytes and `value` is a valid `BIGNUM`;
+            // `BN_bn2bin_padded` fails if it does not fit.
+            if unsafe { bssl_sys::BN_bn2bin_padded(out.as_mut_ptr(), N, value) } != 1 {
+                return Err(BsslError::BufferTooSmall);
             }
         }
+        Ok(())
     }
 
-    let mut temp_buf = ScopedBsslBuffer::new(key_size)?;
-    let mut out_len = key_size;
-    // SAFETY: `temp_buf` is valid for `key_size` bytes and `ciphertext` is valid for `ciphertext.len()` bytes.
-    let res = unsafe {
-        bssl_sys::EVP_PKEY_decrypt(
-            ctx.as_ptr(),
-            temp_buf.as_mut_ptr(),
-            &mut out_len,
-            ciphertext.as_ptr(),
-            ciphertext.len(),
-        )
-    };
-    // `EVP_PKEY_decrypt` fails if the ciphertext, its padding, or the label is invalid.
-    if res != 1 {
-        return Err(BsslError::InvalidData);
+    /// Returns the size of the modulus in bytes.
+    pub fn size(&self) -> usize {
+        self.rsa.size()
     }
-    if plaintext_out.len() < out_len {
-        return Err(BsslError::BufferTooSmall);
+
+    /// Raw modular exponentiation $m = c^d \bmod n$ (`RSA_decrypt` with `RSA_NO_PADDING`) of the
+    /// big-endian `c` (of the modulus size) into `out` (of the modulus size), or
+    /// [`BsslError::InvalidData`] if `c >= n`.
+    pub fn decrypt_raw(&self, c: &[u8], out: &mut [u8]) -> Result<(), BsslError> {
+        let size = self.size();
+        if c.len() != size || out.len() != size {
+            return Err(BsslError::BufferTooSmall);
+        }
+        check_below_modulus(&self.rsa, c)?;
+        let mut out_len: usize = 0;
+        // SAFETY: `c` and `out` are valid for `size` bytes.
+        let res = unsafe {
+            bssl_sys::RSA_decrypt(
+                self.rsa.as_ptr(),
+                &mut out_len,
+                out.as_mut_ptr(),
+                size,
+                c.as_ptr(),
+                size,
+                bssl_sys::RSA_NO_PADDING as c_int,
+            )
+        };
+        if res != 1 || out_len != size {
+            return Err(BsslError::Internal);
+        }
+        Ok(())
     }
-    plaintext_out[..out_len].copy_from_slice(&temp_buf.as_slice()[..out_len]);
-    Ok(out_len)
+
+    /// Decrypts `ciphertext` using RSAES-PKCS1-v1_5 (`RSA_decrypt` with `RSA_PKCS1_PADDING`)
+    /// into `out` (of the modulus size), returning the message length, or
+    /// [`BsslError::InvalidData`] if the ciphertext or its padding is invalid.
+    pub fn decrypt_pkcs1(&self, ciphertext: &[u8], out: &mut [u8]) -> Result<usize, BsslError> {
+        let size = self.size();
+        if out.len() != size {
+            return Err(BsslError::BufferTooSmall);
+        }
+        let mut out_len: usize = 0;
+        // SAFETY:
+        // - `out` is valid for `size` bytes (BoringSSL requires `max_out >= RSA_size`).
+        // - `ciphertext` is valid for `ciphertext.len()` bytes.
+        let res = unsafe {
+            bssl_sys::RSA_decrypt(
+                self.rsa.as_ptr(),
+                &mut out_len,
+                out.as_mut_ptr(),
+                size,
+                ciphertext.as_ptr(),
+                ciphertext.len(),
+                bssl_sys::RSA_PKCS1_PADDING as c_int,
+            )
+        };
+        if res != 1 {
+            return Err(BsslError::InvalidData);
+        }
+        Ok(out_len)
+    }
+
+    /// Decrypts `ciphertext` using RSAES-OAEP with `hash_alg` (label hash and MGF1) and the
+    /// OAEP label `label` into `out` (of the modulus size), returning the message length, or
+    /// [`BsslError::InvalidData`] if the ciphertext, its padding, or the label is invalid.
+    pub fn decrypt_oaep(
+        &self,
+        hash_alg: TpmiAlgHash,
+        label: &[u8],
+        ciphertext: &[u8],
+        out: &mut [u8],
+    ) -> Result<usize, BsslError> {
+        let size = self.size();
+        if out.len() != size {
+            return Err(BsslError::BufferTooSmall);
+        }
+        let ctx = oaep_ctx(&self.rsa, hash_alg, label, false)?;
+        let mut out_len = size;
+        // SAFETY: `out` is valid for `size` bytes and `ciphertext` is valid for
+        // `ciphertext.len()` bytes.
+        let res = unsafe {
+            bssl_sys::EVP_PKEY_decrypt(
+                ctx.as_ptr(),
+                out.as_mut_ptr(),
+                &mut out_len,
+                ciphertext.as_ptr(),
+                ciphertext.len(),
+            )
+        };
+        // `EVP_PKEY_decrypt` fails if the ciphertext, its padding, or the label is invalid.
+        if res != 1 {
+            return Err(BsslError::InvalidData);
+        }
+        Ok(out_len)
+    }
+
+    /// Signs the pre-hashed `digest` using RSASSA-PKCS1-v1_5 (`RSA_sign`) into `out` (of the
+    /// modulus size), or [`BsslError::InvalidData`] if the key is too small for the
+    /// `DigestInfo` encoding of `digest`.
+    pub fn sign_pkcs1(
+        &self,
+        hash_alg: TpmiAlgHash,
+        digest: &[u8],
+        out: &mut [u8],
+    ) -> Result<(), BsslError> {
+        let nid = hash_alg_to_nid(hash_alg)?;
+        let size = self.size();
+        if out.len() != size {
+            return Err(BsslError::BufferTooSmall);
+        }
+        let mut sig_len: c_uint = 0;
+        // SAFETY:
+        // - `digest.as_ptr()` is valid for `digest.len()` bytes.
+        // - `out.as_mut_ptr()` is valid for `size` bytes.
+        // - `self.rsa.as_ptr()` is a valid private `RSA` key.
+        let res = unsafe {
+            bssl_sys::RSA_sign(
+                nid,
+                digest.as_ptr(),
+                digest.len(),
+                out.as_mut_ptr(),
+                &mut sig_len,
+                self.rsa.as_ptr(),
+            )
+        };
+        // `RSA_sign` fails if the key is too small for the `DigestInfo` encoding of `digest`.
+        if res != 1 {
+            return Err(BsslError::InvalidData);
+        }
+        if sig_len as usize != size {
+            return Err(BsslError::Internal);
+        }
+        Ok(())
+    }
+
+    /// Signs the pre-hashed `digest` using RSASSA-PSS with `hash_alg` for MGF1 and a salt of
+    /// `salt_len` bytes (`RSA_sign_pss_mgf1`) into `out` (of the modulus size), or
+    /// [`BsslError::InvalidData`] if the key is too small for the digest and salt.
+    pub fn sign_pss(
+        &self,
+        hash_alg: TpmiAlgHash,
+        digest: &[u8],
+        salt_len: usize,
+        out: &mut [u8],
+    ) -> Result<(), BsslError> {
+        let md = hash_alg_to_evp_md(hash_alg)?;
+        let size = self.size();
+        if out.len() != size {
+            return Err(BsslError::BufferTooSmall);
+        }
+        let salt_len = c_int::try_from(salt_len).map_err(|_| BsslError::InvalidData)?;
+        let mut sig_len: usize = 0;
+        // SAFETY:
+        // - `out` has `size` bytes.
+        // - `digest.as_ptr()` is valid for `digest.len()` bytes.
+        // - `md` is a valid `EVP_MD` pointer.
+        let res = unsafe {
+            bssl_sys::RSA_sign_pss_mgf1(
+                self.rsa.as_ptr(),
+                &mut sig_len,
+                out.as_mut_ptr(),
+                size,
+                digest.as_ptr(),
+                digest.len(),
+                md,
+                md,
+                salt_len,
+            )
+        };
+        // `RSA_sign_pss_mgf1` fails if the key is too small for the digest and salt.
+        if res != 1 {
+            return Err(BsslError::InvalidData);
+        }
+        if sig_len != size {
+            return Err(BsslError::Internal);
+        }
+        Ok(())
+    }
 }
 
-/// Raw modular exponentiation $c = m^e \bmod n$ (`RSA_encrypt` with `RSA_NO_PADDING`).
-///
-/// The public key is the big-endian modulus `public_key_be` with the public `exponent` (`0`
-/// selects the default exponent 65537).
-pub fn rsa_encrypt_null(
-    public_key_be: &[u8],
-    exponent: u32,
-    data: &[u8],
-    ciphertext_out: &mut [u8],
-) -> Result<usize, BsslError> {
-    let rsa = RsaKey::from_public_key_be(public_key_be, exponent)?;
-    let mod_len = rsa.size();
-    let m = Bignum::from_bytes_be(data)?;
-
-    // Verify m < n
-    // SAFETY: `rsa.as_ptr()` is a valid `RSA` struct and `m.as_ptr()` is a valid `BIGNUM`.
-    let n_ptr = unsafe { bssl_sys::RSA_get0_n(rsa.as_ptr()) };
-    if n_ptr.is_null() || unsafe { bssl_sys::BN_cmp(m.as_ptr(), n_ptr) } >= 0 {
-        return Err(BsslError::InvalidData);
-    }
-
-    if ciphertext_out.len() < mod_len {
-        return Err(BsslError::BufferTooSmall);
-    }
-
-    let mut padded_in = ScopedBsslBuffer::new(mod_len)?;
-    // SAFETY: `padded_in` has `mod_len` bytes and `m < n`, so `m` fits in `mod_len` bytes.
-    if unsafe { bssl_sys::BN_bn2bin_padded(padded_in.as_mut_ptr(), mod_len, m.as_ptr()) } != 1 {
-        return Err(BsslError::InvalidData);
-    }
-
-    let mut out_len: usize = 0;
-    // SAFETY: Both `padded_in` and `ciphertext_out` are valid for `mod_len` bytes.
-    let res = unsafe {
-        bssl_sys::RSA_encrypt(
-            rsa.as_ptr(),
-            &mut out_len,
-            ciphertext_out.as_mut_ptr(),
-            mod_len,
-            padded_in.as_ptr(),
-            mod_len,
-            bssl_sys::RSA_NO_PADDING as c_int,
-        )
-    };
-    if res != 1 || out_len != mod_len {
-        return Err(BsslError::Internal);
-    }
-    Ok(mod_len)
-}
-
-/// Raw modular exponentiation $m = c^d \bmod n$ (`RSA_decrypt` with `RSA_NO_PADDING`).
-pub fn rsa_decrypt_null(
-    private_key_der: &[u8],
-    ciphertext: &[u8],
-    plaintext_out: &mut [u8],
-) -> Result<usize, BsslError> {
-    let rsa = RsaKey::from_private_key_der(private_key_der)?;
-    let mod_len = rsa.size();
-    let c = Bignum::from_bytes_be(ciphertext)?;
-
-    // Verify c < n
-    // SAFETY: `rsa.as_ptr()` is a valid `RSA` struct and `c.as_ptr()` is a valid `BIGNUM`.
-    let n_ptr = unsafe { bssl_sys::RSA_get0_n(rsa.as_ptr()) };
-    if n_ptr.is_null() || unsafe { bssl_sys::BN_cmp(c.as_ptr(), n_ptr) } >= 0 {
-        return Err(BsslError::InvalidData);
-    }
-
-    if plaintext_out.len() < mod_len {
-        return Err(BsslError::BufferTooSmall);
-    }
-
-    let mut padded_in = ScopedBsslBuffer::new(mod_len)?;
-    // SAFETY: `padded_in` has `mod_len` bytes and `c < n`, so `c` fits in `mod_len` bytes.
-    if unsafe { bssl_sys::BN_bn2bin_padded(padded_in.as_mut_ptr(), mod_len, c.as_ptr()) } != 1 {
-        return Err(BsslError::InvalidData);
-    }
-
-    let mut out_len: usize = 0;
-    // SAFETY: Both `padded_in` and `plaintext_out` are valid for `mod_len` bytes.
-    let res = unsafe {
-        bssl_sys::RSA_decrypt(
-            rsa.as_ptr(),
-            &mut out_len,
-            plaintext_out.as_mut_ptr(),
-            mod_len,
-            padded_in.as_ptr(),
-            mod_len,
-            bssl_sys::RSA_NO_PADDING as c_int,
-        )
-    };
-    if res != 1 || out_len != mod_len {
-        return Err(BsslError::Internal);
-    }
-    Ok(mod_len)
-}
-
-/// Imports an RSA private key from big-endian `(modulus, prime_p, exponent)` and serializes it to PKCS#8 DER.
-pub fn rsa_import_private_key(
-    modulus: &[u8],
-    prime_p: &[u8],
-    exponent: u32,
-    private_key_out: &mut [u8],
-) -> Result<usize, BsslError> {
-    if exponent < 3 || exponent.is_multiple_of(2) {
-        return Err(BsslError::InvalidData);
-    }
-
-    let n = Bignum::from_bytes_be(modulus)?;
-    let p = Bignum::from_bytes_be(prime_p)?;
-    let e = Bignum::from_u32(exponent)?;
-
-    if !n.is_odd() || !p.is_odd() || p.num_bits() <= 1 || n.num_bits() < 512 {
-        return Err(BsslError::InvalidData);
-    }
-
-    let ctx = BnCtx::new()?;
-    let q = Bignum::new()?;
-    let rem = Bignum::new()?;
-
-    // Divide n by p: q = n / p, rem = n % p
-    // SAFETY: All `BIGNUM` and `BN_CTX` pointers are valid.
-    if unsafe {
-        bssl_sys::BN_div(
-            q.as_ptr(),
-            rem.as_ptr(),
-            n.as_ptr(),
-            p.as_ptr(),
-            ctx.as_ptr(),
-        )
-    } != 1
+/// Checks the parameters of an RSA key generation: [`BsslError::Unsupported`] for a modulus size
+/// other than 1024 to 4096 bits in steps of 128, or an exponent that is even or below 3.
+fn check_key_generation(bits: usize, exponent: u32) -> Result<(), BsslError> {
+    if !(1024..=4096).contains(&bits)
+        || !bits.is_multiple_of(128)
+        || exponent < 3
+        || exponent.is_multiple_of(2)
     {
-        return Err(BsslError::InvalidData);
+        return Err(BsslError::Unsupported);
     }
-
-    if !rem.is_zero() || !q.is_odd() || q.num_bits() <= 1 || p.num_bits().abs_diff(q.num_bits()) > 1
-    {
-        return Err(BsslError::InvalidData);
-    }
-
-    // Verify p * q == n
-    let prod = Bignum::new()?;
-    // SAFETY: All `BIGNUM` and `BN_CTX` pointers are valid.
-    if unsafe { bssl_sys::BN_mul(prod.as_ptr(), p.as_ptr(), q.as_ptr(), ctx.as_ptr()) } != 1
-        || unsafe { bssl_sys::BN_cmp(prod.as_ptr(), n.as_ptr()) } != 0
-    {
-        return Err(BsslError::InvalidData);
-    }
-
-    // Verify primality of p and q
-    if !p.is_prime(&ctx)? || !q.is_prime(&ctx)? {
-        return Err(BsslError::InvalidData);
-    }
-
-    rsa_construct_and_serialize_pkcs8(&n, &p, &q, &e, &ctx, private_key_out)
+    Ok(())
 }
 
-/// Derives CRT parameters `(d, dmp1, dmq1, iqmp)` from `(n, p, q, e)` and serializes the RSA key to PKCS#8 DER.
-fn rsa_construct_and_serialize_pkcs8(
+/// Derives the private exponent `d = e^-1 mod lcm(p - 1, q - 1)` and the CRT parameters
+/// `(dmp1, dmq1, iqmp)` from `(n, p, q, e)` and constructs the RSA private key
+/// (`RSA_new_private_key`, which checks it).
+fn rsa_construct(
     n: &Bignum,
     p: &Bignum,
     q: &Bignum,
     e: &Bignum,
     ctx: &BnCtx,
-    private_key_out: &mut [u8],
-) -> Result<usize, BsslError> {
+) -> Result<RsaKey, BsslError> {
     // Compute p - 1 and q - 1
     let one = Bignum::from_u32(1)?;
     let pm1 = Bignum::new()?;
@@ -1498,8 +1496,8 @@ fn rsa_construct_and_serialize_pkcs8(
         return Err(BsslError::InvalidData);
     }
 
-    // Construct RSA private key and serialize to PKCS#8 DER
-    // SAFETY: All `BIGNUM` parameters are valid and non-null.
+    // Construct the RSA private key
+    // SAFETY: All `BIGNUM` parameters are valid and non-null; `RSA_new_private_key` copies them.
     let rsa_ptr = unsafe {
         bssl_sys::RSA_new_private_key(
             n.as_ptr(),
@@ -1512,19 +1510,19 @@ fn rsa_construct_and_serialize_pkcs8(
             iqmp.as_ptr(),
         )
     };
-    let rsa = RsaKey {
+    Ok(RsaKey {
         ptr: NonNull::new(rsa_ptr).ok_or(BsslError::InvalidData)?,
-    };
-    rsa.to_pkcs8_der(private_key_out)
+    })
 }
 
-/// Generates a random prime of `prime_bits` bits from `rng` using BoringSSL's `BN_primality_test`.
+/// Generates a random prime `p` of `prime_bits` bits with `gcd(p - 1, e) = 1` from `rng` using
+/// BoringSSL's `BN_primality_test`.
 fn generate_deterministic_prime(
-    rng: &mut rand_chacha::ChaCha20Rng,
+    rng: &mut impl rand_core::RngCore,
     prime_bits: usize,
+    e: &Bignum,
     ctx: &BnCtx,
 ) -> Result<Bignum, BsslError> {
-    use rand_core::RngCore as _;
     let prime_bytes = prime_bits / 8;
     let mut buf = [0u8; 256];
     if prime_bytes == 0 || prime_bytes > buf.len() {
@@ -1538,12 +1536,20 @@ fn generate_deterministic_prime(
     buf[prime_bytes - 1] |= 0x01;
 
     let cand = Bignum::from_bytes_be(&buf[..prime_bytes])?;
+    let one = Bignum::from_u32(1)?;
+    let cand_m1 = Bignum::new()?;
+    let gcd = Bignum::new()?;
 
     loop {
-        // Check gcd(cand - 1, 65537) == 1 (equivalent to cand % 65537 != 1 since 65537 is prime)
-        // SAFETY: `cand.as_ptr()` is a valid non-null `BIGNUM`.
-        let rem = unsafe { bssl_sys::BN_mod_word(cand.as_ptr(), 65537) };
-        if rem != 1 && cand.is_prime(ctx)? {
+        // Check gcd(cand - 1, e) == 1 (for the prime e = 65537: cand % 65537 != 1)
+        // SAFETY: valid `BIGNUM` and `BN_CTX` pointers; the outputs are distinct from the inputs.
+        let coprime = unsafe {
+            bssl_sys::BN_sub(cand_m1.as_ptr(), cand.as_ptr(), one.as_ptr()) == 1
+                && bssl_sys::BN_gcd(gcd.as_ptr(), cand_m1.as_ptr(), e.as_ptr(), ctx.as_ptr()) == 1
+                && bssl_sys::BN_is_one(gcd.as_ptr()) == 1
+        };
+        if coprime && cand.is_prime(ctx)? {
+            cleanse(&mut buf);
             return Ok(cand);
         }
         // Increment candidate by 2 to test next odd integer
@@ -1561,192 +1567,6 @@ fn generate_deterministic_prime(
             }
         }
     }
-}
-
-/// Generates an RSA key pair of `bits` bits (e.g. 1024, 2048, 3072, 4096).
-///
-/// - When `seed` is `None`, uses BoringSSL's `RSA_generate_key_ex` directly.
-/// - When `seed` is `Some(seed_bytes)`, derives a deterministic byte stream via SHA-256 + `ChaCha20Rng`
-///   and generates prime factors using BoringSSL's `BIGNUM` and `BN_primality_test`.
-pub fn rsa_generate_key(
-    bits: usize,
-    public_key_out: &mut [u8],
-    private_key_out: &mut [u8],
-    seed: Option<&[u8]>,
-) -> Result<(usize, usize), BsslError> {
-    if !(1024..=4096).contains(&bits) || !bits.is_multiple_of(128) {
-        return Err(BsslError::Unsupported);
-    }
-    let mod_len = bits / 8;
-    if public_key_out.len() < mod_len || private_key_out.len() < bits / 2 {
-        return Err(BsslError::BufferTooSmall);
-    }
-
-    let e = Bignum::from_u32(65537)?;
-
-    match seed {
-        None => {
-            let rsa = RsaKey::new()?;
-            // SAFETY: `rsa.as_ptr()` and `e.as_ptr()` are valid non-null pointers.
-            let res = unsafe {
-                bssl_sys::RSA_generate_key_ex(
-                    rsa.as_ptr(),
-                    bits as c_int,
-                    e.as_ptr(),
-                    ptr::null_mut(),
-                )
-            };
-            if res != 1 {
-                return Err(BsslError::Internal);
-            }
-            // SAFETY: `rsa.as_ptr()` is a valid initialized `RSA` key.
-            let n_ptr = unsafe { bssl_sys::RSA_get0_n(rsa.as_ptr()) };
-            if n_ptr.is_null()
-                || unsafe {
-                    bssl_sys::BN_bn2bin_padded(public_key_out.as_mut_ptr(), mod_len, n_ptr)
-                } != 1
-            {
-                return Err(BsslError::Internal);
-            }
-            let priv_len = rsa.to_pkcs8_der(private_key_out)?;
-            Ok((mod_len, priv_len))
-        }
-        Some(seed_bytes) => {
-            let seed_32 = bssl_crypto::digest::Sha256::hash(seed_bytes);
-            use rand_chacha::rand_core::SeedableRng as _;
-            let mut rng = rand_chacha::ChaCha20Rng::from_seed(seed_32);
-            let ctx = BnCtx::new()?;
-            let prime_bits = bits / 2;
-
-            for _ in 0..32 {
-                let mut p = generate_deterministic_prime(&mut rng, prime_bits, &ctx)?;
-                let mut q = generate_deterministic_prime(&mut rng, prime_bits, &ctx)?;
-                // SAFETY: `p` and `q` are valid non-null `BIGNUM`s.
-                let cmp = unsafe { bssl_sys::BN_cmp(p.as_ptr(), q.as_ptr()) };
-                if cmp == 0 {
-                    continue;
-                }
-                if cmp < 0 {
-                    core::mem::swap(&mut p, &mut q);
-                }
-
-                let n = Bignum::new()?;
-                // SAFETY: `n`, `p`, `q`, and `ctx` are valid non-null pointers.
-                if unsafe { bssl_sys::BN_mul(n.as_ptr(), p.as_ptr(), q.as_ptr(), ctx.as_ptr()) }
-                    != 1
-                {
-                    return Err(BsslError::Internal);
-                }
-                if n.num_bits() != bits {
-                    continue;
-                }
-
-                match rsa_construct_and_serialize_pkcs8(&n, &p, &q, &e, &ctx, private_key_out) {
-                    Ok(priv_len) => {
-                        // SAFETY: `public_key_out` has at least `mod_len` bytes, and `n` has `bits` bits.
-                        if unsafe {
-                            bssl_sys::BN_bn2bin_padded(
-                                public_key_out.as_mut_ptr(),
-                                mod_len,
-                                n.as_ptr(),
-                            )
-                        } != 1
-                        {
-                            return Err(BsslError::Internal);
-                        }
-                        return Ok((mod_len, priv_len));
-                    }
-                    Err(BsslError::BufferTooSmall) => return Err(BsslError::BufferTooSmall),
-                    Err(_) => continue,
-                }
-            }
-            Err(BsslError::Internal)
-        }
-    }
-}
-
-/// Extracts the first prime factor `p` from a PKCS#8 DER RSA private key as big-endian bytes.
-pub fn rsa_private_key_to_prime_p(
-    private_key_der: &[u8],
-    prime_p_out: &mut [u8],
-) -> Result<usize, BsslError> {
-    let rsa = RsaKey::from_private_key_der(private_key_der)?;
-    // SAFETY: `rsa.as_ptr()` is a valid private `RSA` key.
-    let p_ptr = unsafe { bssl_sys::RSA_get0_p(rsa.as_ptr()) };
-    if p_ptr.is_null() {
-        return Err(BsslError::InvalidData);
-    }
-    // SAFETY: `p_ptr` is a valid non-null `BIGNUM`.
-    let p_len = unsafe { bssl_sys::BN_num_bytes(p_ptr) as usize };
-    if prime_p_out.len() < p_len {
-        return Err(BsslError::BufferTooSmall);
-    }
-    // SAFETY: `prime_p_out` is valid for `p_len` bytes.
-    if unsafe { bssl_sys::BN_bn2bin_padded(prime_p_out.as_mut_ptr(), p_len, p_ptr) } != 1 {
-        return Err(BsslError::Internal);
-    }
-    Ok(p_len)
-}
-
-/// Writes the CRT form `p | q | dP | dQ | qInv` of a PKCS#8 DER RSA private key, where `p` is
-/// the larger prime, `dP = d mod (p - 1)`, `dQ = d mod (q - 1)` and `qInv = q^-1 mod p`, each
-/// big-endian and zero-padded to the byte size of `p` (see
-/// `tpm2::crypto::Asymmetric::rsa_private_key_to_crt`). Returns the total length.
-pub fn rsa_private_key_to_crt(
-    private_key_der: &[u8],
-    crt_out: &mut [u8],
-) -> Result<usize, BsslError> {
-    let rsa = RsaKey::from_private_key_der(private_key_der)?;
-    // SAFETY: `rsa.as_ptr()` is a valid private `RSA` key; the getters return borrowed
-    // pointers (or NULL) that live as long as `rsa`.
-    let (p, q, d) = unsafe {
-        (
-            bssl_sys::RSA_get0_p(rsa.as_ptr()),
-            bssl_sys::RSA_get0_q(rsa.as_ptr()),
-            bssl_sys::RSA_get0_d(rsa.as_ptr()),
-        )
-    };
-    if p.is_null() || q.is_null() || d.is_null() {
-        return Err(BsslError::InvalidData);
-    }
-    // SAFETY: `p` and `q` are valid non-null `BIGNUM`s.
-    let (p, q) = if unsafe { bssl_sys::BN_cmp(p, q) } < 0 {
-        (q, p)
-    } else {
-        (p, q)
-    };
-    let ctx = BnCtx::new()?;
-    let one = Bignum::from_u32(1)?;
-    let (pm1, qm1) = (Bignum::new()?, Bignum::new()?);
-    let (dp, dq, qinv) = (Bignum::new()?, Bignum::new()?, Bignum::new()?);
-    // SAFETY: valid `BIGNUM` and `BN_CTX` pointers; the outputs are distinct from the inputs.
-    let ok = unsafe {
-        bssl_sys::BN_sub(pm1.as_ptr(), p, one.as_ptr()) == 1
-            && bssl_sys::BN_sub(qm1.as_ptr(), q, one.as_ptr()) == 1
-            && bssl_sys::BN_div(ptr::null_mut(), dp.as_ptr(), d, pm1.as_ptr(), ctx.as_ptr()) == 1
-            && bssl_sys::BN_div(ptr::null_mut(), dq.as_ptr(), d, qm1.as_ptr(), ctx.as_ptr()) == 1
-    };
-    if !ok {
-        return Err(BsslError::Internal);
-    }
-    // SAFETY: valid `BIGNUM` and `BN_CTX` pointers; NULL if `q` is not invertible mod `p`.
-    if unsafe { bssl_sys::BN_mod_inverse(qinv.as_ptr(), q, p, ctx.as_ptr()) }.is_null() {
-        return Err(BsslError::InvalidData);
-    }
-    // SAFETY: `p` is a valid non-null `BIGNUM`.
-    let size = unsafe { bssl_sys::BN_num_bytes(p) as usize };
-    if crt_out.len() < 5 * size {
-        return Err(BsslError::BufferTooSmall);
-    }
-    let values = [p, q, dp.as_ptr(), dq.as_ptr(), qinv.as_ptr()];
-    for (value, out) in values.into_iter().zip(crt_out.chunks_exact_mut(size)) {
-        // SAFETY: `out` is valid for `size` bytes and `value` is a valid `BIGNUM` (every value
-        // is below `p`, so it fits).
-        if unsafe { bssl_sys::BN_bn2bin_padded(out.as_mut_ptr(), size, value) } != 1 {
-            return Err(BsslError::Internal);
-        }
-    }
-    Ok(5 * size)
 }
 
 // ============================================================================
@@ -2197,11 +2017,14 @@ pub fn ec_generate_key(
             .is_ok()
         {
             let (x_out, y_out) = public_key_out[..2 * coord_len].split_at_mut(coord_len);
-            ec_point_multiply_generator(group, &cand[..coord_len], x_out, y_out)?;
+            let res = ec_point_multiply_generator(group, &cand[..coord_len], x_out, y_out);
             private_key_out[..coord_len].copy_from_slice(&cand[..coord_len]);
+            cleanse(&mut cand);
+            res?;
             return Ok((2 * coord_len, coord_len));
         }
     }
+    cleanse(&mut cand);
     Err(BsslError::Internal)
 }
 
@@ -2330,17 +2153,26 @@ macro_rules! mlkem_bindings {
                 marshal_fixed(out, |cbb| unsafe { bssl_sys::$marshal(cbb, &public) })
             }
 
+            /// Checks the encapsulation key `public_key` with BoringSSL's parsing
+            /// (`EVP_PKEY_from_raw_public_key`: the modulus check of FIPS 203,
+            /// Section 7.2), or [`BsslError::InvalidData`] if it fails.
+            pub fn check_public_key(public_key: &[u8; PUBLIC_KEY_BYTES]) -> Result<(), BsslError> {
+                // SAFETY: `$evp_pkey_alg` returns a static `EVP_PKEY_ALG`.
+                EvpPkey::from_raw_public_key(unsafe { bssl_sys::$evp_pkey_alg() }, public_key)
+                    .map(|_| ())
+            }
+
             /// Encapsulates to the encapsulation key `public_key` with the
             /// randomness `entropy` (`ML-KEM.Encaps_internal(ek, m)`), or
             /// [`BsslError::InvalidData`] if `public_key` fails BoringSSL's
-            /// parsing (its size and the modulus check of FIPS 203, Section 7.2).
+            /// parsing (the modulus check of FIPS 203, Section 7.2).
             ///
             /// The randomness goes through
             /// `EVP_KEM_encap_external_entropy_for_testing`, BoringSSL's only
             /// public derandomized encapsulation; the TPM draws `entropy` from
             /// its DRBG (TPM 2.0 Part 1), as the TCG reference does.
             pub fn encapsulate(
-                public_key: &[u8],
+                public_key: &[u8; PUBLIC_KEY_BYTES],
                 entropy: &[u8; 32],
                 ciphertext_out: &mut [u8; CIPHERTEXT_BYTES],
                 shared_secret_out: &mut [u8; 32],
@@ -2426,8 +2258,9 @@ mlkem_bindings!(
 macro_rules! mldsa_bindings {
     (
         $(#[$doc:meta])* $module:ident,
-        $private:ident, $public:ident, $public_bytes:expr,
+        $private:ident, $public:ident, $prehash:ident, $public_bytes:expr,
         $from_seed:ident, $public_from_private:ident, $marshal:ident, $parse:ident,
+        $prehash_init:ident, $prehash_update:ident, $prehash_finalize:ident,
         $verify:ident $(,)?
     ) => {
         $(#[$doc])*
@@ -2458,15 +2291,11 @@ macro_rules! mldsa_bindings {
                 marshal_fixed(out, |cbb| unsafe { bssl_sys::$marshal(cbb, public.as_ptr()) })
             }
 
-            /// Verifies `signature` over the message representative `mu` with the
-            /// encoded verification key `public_key` (`ML-DSA.Verify_internal`
-            /// from line 8 on), or [`BsslError::InvalidData`] if the key does not
-            /// parse or the signature is invalid.
-            pub fn verify_mu(
+            /// Parses the encoded verification key `public_key`, or
+            /// [`BsslError::InvalidData`] if it does not parse (or has trailing data).
+            fn parse_public_key(
                 public_key: &[u8],
-                mu: &[u8; 64],
-                signature: &[u8],
-            ) -> Result<(), BsslError> {
+            ) -> Result<CleansedKey<bssl_sys::$public>, BsslError> {
                 let mut cbs = MaybeUninit::<bssl_sys::CBS>::uninit();
                 // SAFETY: `CBS_init` initializes `cbs` over `public_key`, which is
                 // valid for `public_key.len()` bytes and outlives `cbs`.
@@ -2481,6 +2310,62 @@ macro_rules! mldsa_bindings {
                 if unsafe { bssl_sys::CBS_len(cbs.as_ptr()) } != 0 {
                     return Err(BsslError::InvalidData);
                 }
+                Ok(public)
+            }
+
+            /// Checks that the encoded verification key `public_key` parses, or
+            /// [`BsslError::InvalidData`].
+            pub fn check_public_key(public_key: &[u8; PUBLIC_KEY_BYTES]) -> Result<(), BsslError> {
+                parse_public_key(public_key).map(|_| ())
+            }
+
+            /// Computes the message representative `mu` of the concatenation of the
+            /// `msg` slices for pure ML-DSA with the context string `context`
+            /// (`ML-DSA.Sign`/`ML-DSA.Verify` up to `mu`, BoringSSL's
+            /// `*_prehash_init`/`_update`/`_finalize`) and the encoded verification
+            /// key `public_key`, or [`BsslError::InvalidData`] if the key does not
+            /// parse or `context` is longer than 255 bytes.
+            pub fn mu(
+                public_key: &[u8; PUBLIC_KEY_BYTES],
+                context: &[u8],
+                msg: &[&[u8]],
+                out: &mut [u8; 64],
+            ) -> Result<(), BsslError> {
+                let public = parse_public_key(public_key)?;
+                let mut state = MaybeUninit::<bssl_sys::$prehash>::uninit();
+                // SAFETY: `state` is valid for writing a pre-hashing state, `public` is
+                // an initialized public key, and `context` is valid for its length.
+                if unsafe {
+                    bssl_sys::$prehash_init(
+                        state.as_mut_ptr(),
+                        public.as_ptr(),
+                        context.as_ptr(),
+                        context.len(),
+                    )
+                } != 1
+                {
+                    return Err(BsslError::InvalidData);
+                }
+                for part in msg {
+                    // SAFETY: `state` was initialized by `$prehash_init` and `part` is
+                    // valid for its length.
+                    unsafe { bssl_sys::$prehash_update(state.as_mut_ptr(), part.as_ptr(), part.len()) };
+                }
+                // SAFETY: `state` is initialized and `out` has `MLDSA_MU_BYTES` (64) bytes.
+                unsafe { bssl_sys::$prehash_finalize(out.as_mut_ptr(), state.as_mut_ptr()) };
+                Ok(())
+            }
+
+            /// Verifies `signature` over the message representative `mu` with the
+            /// encoded verification key `public_key` (`ML-DSA.Verify_internal`
+            /// from line 8 on), or [`BsslError::InvalidData`] if the key does not
+            /// parse or the signature is invalid.
+            pub fn verify_mu(
+                public_key: &[u8],
+                mu: &[u8; 64],
+                signature: &[u8],
+            ) -> Result<(), BsslError> {
+                let public = parse_public_key(public_key)?;
                 // SAFETY: `public` is an initialized public key, and `signature`
                 // and `mu` are valid for their lengths.
                 let res = unsafe {
@@ -2497,11 +2382,15 @@ mldsa_bindings!(
     mldsa44,
     MLDSA44_private_key,
     MLDSA44_public_key,
+    MLDSA44_prehash,
     1312,
     MLDSA44_private_key_from_seed,
     MLDSA44_public_from_private,
     MLDSA44_marshal_public_key,
     MLDSA44_parse_public_key,
+    MLDSA44_prehash_init,
+    MLDSA44_prehash_update,
+    MLDSA44_prehash_finalize,
     MLDSA44_verify_message_representative,
 );
 
@@ -2510,11 +2399,15 @@ mldsa_bindings!(
     mldsa65,
     MLDSA65_private_key,
     MLDSA65_public_key,
+    MLDSA65_prehash,
     1952,
     MLDSA65_private_key_from_seed,
     MLDSA65_public_from_private,
     MLDSA65_marshal_public_key,
     MLDSA65_parse_public_key,
+    MLDSA65_prehash_init,
+    MLDSA65_prehash_update,
+    MLDSA65_prehash_finalize,
     MLDSA65_verify_message_representative,
 );
 
@@ -2523,10 +2416,14 @@ mldsa_bindings!(
     mldsa87,
     MLDSA87_private_key,
     MLDSA87_public_key,
+    MLDSA87_prehash,
     2592,
     MLDSA87_private_key_from_seed,
     MLDSA87_public_from_private,
     MLDSA87_marshal_public_key,
     MLDSA87_parse_public_key,
+    MLDSA87_prehash_init,
+    MLDSA87_prehash_update,
+    MLDSA87_prehash_finalize,
     MLDSA87_verify_message_representative,
 );

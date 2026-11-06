@@ -27,7 +27,7 @@ use tpm2::Handle;
 #[allow(unused_imports)]
 use tpm2::TpmCc;
 use tpm2::commands::responses;
-use tpm2::crypto::{CryptoProvider, Rng};
+use tpm2::crypto::{Crypto, Rng};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Tpm2bDigest, TpmaObject, TpmtSigScheme, TpmtSignature, TpmtTkVerified};
 
@@ -41,7 +41,7 @@ enum SequenceKind {
     Verify,
 }
 
-impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
+impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     CommandHandler<'a, 'b, C, S, T, R>
 {
     /// Handles the [TpmCc::SignSequenceStart] (`0x1AA`) command.
@@ -336,15 +336,16 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 } else {
                     mu.update(buffer);
                 }
-                let mut mu_bytes = [0u8; tpm2::crypto::MLDSA_MU_SIZE];
+                let mut mu_bytes = [0u8; tpm2::TpmiMldsaParms::MU_BYTES];
                 mu.finalize_into(&mut mu_bytes);
                 let len = self.mldsa_sign_mu(&obj, &mu_bytes, &mut mldsa_signature)?;
                 let sig = tpm2::Tpm2bSignatureMldsa::from_bytes(&mldsa_signature[..len])
                     .map_err(|_| TpmRc::FAILURE)?;
                 match sequence.pre_hash {
-                    Some(hash) => {
-                        TpmtSignature::HashMldsa(tpm2::TpmsSignatureHashMldsa { hash, sig })
-                    }
+                    Some(hash) => TpmtSignature::HashMldsa(tpm2::TpmsSignatureHashMldsa {
+                        hash,
+                        signature: sig,
+                    }),
                     None => TpmtSignature::Mldsa(sig),
                 }
             }
@@ -458,11 +459,11 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     mu.update(&digest[..len]);
                     let _ = pre_hash;
                 }
-                let mut mu_bytes = [0u8; tpm2::crypto::MLDSA_MU_SIZE];
+                let mut mu_bytes = [0u8; tpm2::TpmiMldsaParms::MU_BYTES];
                 mu.finalize_into(&mut mu_bytes);
                 let sig = match &cmd.signature {
                     TpmtSignature::Mldsa(sig) => sig.get_buffer(),
-                    TpmtSignature::HashMldsa(sig) => sig.sig.get_buffer(),
+                    TpmtSignature::HashMldsa(sig) => sig.signature.get_buffer(),
                     _ => return Err(TpmRc::SCHEME.with(Position::parameter(1))),
                 };
                 if !self.mldsa_verify_mu(&obj, &mu_bytes, sig)? {

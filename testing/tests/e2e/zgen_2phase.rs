@@ -4,15 +4,14 @@
 //! of the commitment, and the validation of the key, scheme, points and counter.
 
 use crate::_common::{
-    AES128_CFB, CLIENT_CRYPTO, create_primary_returning_public, ecc_point_bytes,
-    ecc_point_from_bytes, ecc_public, execute_with_corrupted_bytes, execute_with_password_sessions,
-    flush_handle, load_external_ecc_key_on, rc_at, rsa_public_with_symmetric, sdo_user,
+    AES128_CFB, client_ecc_key, client_ecc_mul_point, create_primary_returning_public,
+    ecc_point_bytes, ecc_point_from_bytes, ecc_public, execute_with_corrupted_bytes,
+    execute_with_password_sessions, flush_handle, load_external_ecc_key_on, rc_at,
+    rsa_public_with_symmetric, sdo_user,
 };
 use testing::tpm::Tpm;
 use tpm2::Alg;
 use tpm2::commands::{ECEphemeral, ZGen2Phase};
-use tpm2::crypto::Ecc;
-use tpm2::crypto::asymmetric::{Asymmetric, KeyParams};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
     Handle, PublicParmsAndId, Tpm2bEccPoint, TpmEccCurve, TpmaObject, TpmiAlgHash,
@@ -50,18 +49,7 @@ fn create_party(sim: &mut Tpm, curve: TpmEccCurve) -> (Handle, Tpm2bEccPoint<'st
 
 /// A client-side key pair on `curve`: (private scalar, public point `x || y`).
 fn client_key(curve: TpmEccCurve) -> (Vec<u8>, Vec<u8>) {
-    let mut public = [0u8; 132];
-    let mut private = [0u8; 66];
-    let (pub_len, priv_len) = CLIENT_CRYPTO
-        .generate_key(
-            Alg::ECC,
-            Some(KeyParams::Ecc(curve)),
-            &mut public,
-            &mut private,
-            None,
-        )
-        .unwrap();
-    (private[..priv_len].to_vec(), public[..pub_len].to_vec())
+    client_ecc_key(curve)
 }
 
 /// Runs TPM2_ZGen_2Phase with `keyA`, `inQsB`, `inQeB`, `inScheme` and `counter`.
@@ -150,16 +138,9 @@ fn ecdh_matches_client_computation() {
         counter,
     )
     .unwrap();
-    let mut expected = [0u8; 64];
-    CLIENT_CRYPTO
-        .point_multiply(curve, &ds_b, &ecc_point_bytes(&qs_a.0), &mut expected)
-        .unwrap()
-        .unwrap();
+    let expected = client_ecc_mul_point(curve, &ds_b, &ecc_point_bytes(&qs_a.0)).unwrap();
     assert_eq!(z1, expected);
-    CLIENT_CRYPTO
-        .point_multiply(curve, &de_b, &ecc_point_bytes(&qe_a.0), &mut expected)
-        .unwrap()
-        .unwrap();
+    let expected = client_ecc_mul_point(curve, &de_b, &ecc_point_bytes(&qe_a.0)).unwrap();
     assert_eq!(z2, expected);
 }
 
@@ -603,11 +584,7 @@ fn external_key_as_key_a() {
         counter,
     )
     .unwrap();
-    let mut expected = [0u8; 96];
-    CLIENT_CRYPTO
-        .point_multiply(curve, &ds_a, &qs_b, &mut expected)
-        .unwrap()
-        .unwrap();
+    let expected = client_ecc_mul_point(curve, &ds_a, &qs_b).unwrap();
     assert_eq!(z1, expected);
 }
 

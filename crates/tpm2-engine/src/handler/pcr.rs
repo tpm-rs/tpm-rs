@@ -9,7 +9,7 @@ use crate::timer::TpmTimer;
 use tpm2::commands::{
     PCRAllocate, PCREvent, PCRExtend, PCRRead, PCRReset, PCRSetAuthPolicy, PCRSetAuthValue,
 };
-use tpm2::crypto::{CryptoProvider, Rng};
+use tpm2::crypto::{Crypto, Rng};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
     Handle, Tpm2bDigest, TpmiAlgHash, TpmlDigest, TpmlDigestValues, TpmlPcrSelection,
@@ -113,7 +113,7 @@ fn pcr_storage_size() -> u32 {
     (per_pcr as u32) * IMPLEMENTATION_PCR
 }
 
-impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
+impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     CommandHandler<'a, 'b, C, S, T, R>
 {
     /// Records that PCR `pcr` changed (`PCRChanged`): increments the PCR update counter unless

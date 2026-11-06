@@ -8,7 +8,7 @@
 //! The parameters of every curve are always available as statics (e.g. [`NIST_P192`]), so that
 //! crypto backends can implement curves generically without enabling `tpm2` features (which
 //! would widen the TPM built with them); [`ecc_curve_params`] returns a curve only if the
-//! corresponding `ecc_curve_*` [crate feature](crate#algorithm-feature-flags) is enabled. The
+//! corresponding curve [crate feature](crate#algorithm-feature-flags) is enabled. The
 //! table is shared by the TPM (`TPM2_ECC_Parameters`, scalar ranges, point arithmetic the crypto
 //! provider does not offer) and by the crypto backends.
 
@@ -216,25 +216,27 @@ pub static SM2_P256: EccCurveParams = EccCurveParams {
     h: &ONE,
 };
 
-/// Returns the domain parameters of `curve`, or `None` for [`TpmEccCurve::None`] and for curves
-/// without parameters in this table (Brainpool, Curve25519 and Curve448).
+/// Returns the domain parameters of `curve`, or `None` for curves without parameters in this
+/// table (Brainpool, Curve25519 and Curve448).
 pub fn ecc_curve_params(curve: TpmEccCurve) -> Option<&'static EccCurveParams> {
+    // The wildcard is unreachable if only curves of this table are enabled.
+    #[allow(unreachable_patterns)]
     match curve {
-        #[cfg(feature = "ecc_curve_nist_p192")]
+        #[cfg(feature = "nist_p192")]
         TpmEccCurve::NistP192 => Some(&NIST_P192),
-        #[cfg(feature = "ecc_curve_nist_p224")]
+        #[cfg(feature = "nist_p224")]
         TpmEccCurve::NistP224 => Some(&NIST_P224),
-        #[cfg(feature = "ecc_curve_nist_p256")]
+        #[cfg(feature = "nist_p256")]
         TpmEccCurve::NistP256 => Some(&NIST_P256),
-        #[cfg(feature = "ecc_curve_nist_p384")]
+        #[cfg(feature = "nist_p384")]
         TpmEccCurve::NistP384 => Some(&NIST_P384),
-        #[cfg(feature = "ecc_curve_nist_p521")]
+        #[cfg(feature = "nist_p521")]
         TpmEccCurve::NistP521 => Some(&NIST_P521),
-        #[cfg(feature = "ecc_curve_bn_p256")]
+        #[cfg(feature = "bn_p256")]
         TpmEccCurve::BNP256 => Some(&BN_P256),
-        #[cfg(feature = "ecc_curve_bn_p638")]
+        #[cfg(feature = "bn_p638")]
         TpmEccCurve::BNP638 => Some(&BN_P638),
-        #[cfg(feature = "ecc_curve_sm2_p256")]
+        #[cfg(feature = "sm2_p256")]
         TpmEccCurve::SM2P256 => Some(&SM2_P256),
         _ => None,
     }
@@ -273,24 +275,24 @@ mod tests {
 
     /// [`ecc_curve_params`] returns exactly the curves of the build, with matching sizes.
     #[test]
+    #[allow(clippy::single_element_loop)]
     fn lookup_follows_the_features() {
-        assert!(ecc_curve_params(TpmEccCurve::None).is_none());
         for curve in [
-            #[cfg(feature = "ecc_curve_nist_p192")]
+            #[cfg(feature = "nist_p192")]
             TpmEccCurve::NistP192,
-            #[cfg(feature = "ecc_curve_nist_p224")]
+            #[cfg(feature = "nist_p224")]
             TpmEccCurve::NistP224,
-            #[cfg(feature = "ecc_curve_nist_p256")]
+            #[cfg(feature = "nist_p256")]
             TpmEccCurve::NistP256,
-            #[cfg(feature = "ecc_curve_nist_p384")]
+            #[cfg(feature = "nist_p384")]
             TpmEccCurve::NistP384,
-            #[cfg(feature = "ecc_curve_nist_p521")]
+            #[cfg(feature = "nist_p521")]
             TpmEccCurve::NistP521,
-            #[cfg(feature = "ecc_curve_bn_p256")]
+            #[cfg(feature = "bn_p256")]
             TpmEccCurve::BNP256,
-            #[cfg(feature = "ecc_curve_bn_p638")]
+            #[cfg(feature = "bn_p638")]
             TpmEccCurve::BNP638,
-            #[cfg(feature = "ecc_curve_sm2_p256")]
+            #[cfg(feature = "sm2_p256")]
             TpmEccCurve::SM2P256,
         ] {
             let c = ecc_curve_params(curve).unwrap();

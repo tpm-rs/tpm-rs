@@ -24,11 +24,11 @@ use tpm2::{
     TpmtSigScheme, TpmtSignature,
 };
 
-/// The curves the SM2 tests use: SM2 P-256 (with `ecc_curve_sm2_p256`) and NIST P-256 (SM2 is
+/// The curves the SM2 tests use: SM2 P-256 (with `sm2_p256`) and NIST P-256 (SM2 is
 /// not tied to a curve).
 #[cfg(feature = "sm2")]
 const SM2_CURVES: &[TpmEccCurve] = &[
-    #[cfg(feature = "ecc_curve_sm2_p256")]
+    #[cfg(feature = "sm2_p256")]
     TpmEccCurve::SM2P256,
     TpmEccCurve::NistP256,
 ];

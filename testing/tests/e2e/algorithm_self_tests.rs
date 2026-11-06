@@ -341,7 +341,7 @@ fn load_external_rsa(sim: &mut Tpm) -> Handle {
             TpmsRsaParms {
                 symmetric: None,
                 scheme: None,
-                key_bits: TpmiRsaKeyBits(2048),
+                key_bits: TpmiRsaKeyBits::Rsa2048,
                 exponent: 0,
             },
             Tpm2bPublicKeyRsa::from_bytes(&EXTERNAL_RSA_MODULUS).unwrap(),

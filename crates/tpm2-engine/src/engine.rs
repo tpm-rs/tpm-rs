@@ -57,7 +57,7 @@ use crate::self_test::kdfa_bits;
 use crate::storage::manager::StorageManager;
 use crate::storage::{NvStorage, Tpm2Storage};
 use crate::timer::TpmTimer;
-use tpm2::crypto::{CryptoProvider, Direction, HashStream, HmacStream, Rng};
+use tpm2::crypto::{Crypto, Direction, Rng};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::platform::PcrState;
 use tpm2::{CommandHeader, Handle, ResponseHeader, TpmCc, TpmHt, TpmSe, TpmSt};
@@ -82,7 +82,7 @@ const CFB_MODE: TpmiAlgSymMode = TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb);
 /// [`TpmEngine::init_storage`] once at manufacture, [`TpmEngine::reset`] on every `_TPM_Init`
 /// (power on), and then `TPM2_Startup`.
 #[non_exhaustive]
-pub struct TpmEngine<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> {
+pub struct TpmEngine<'a, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync> {
     /// The platform dependencies (crypto, storage, timer, RNG).
     pub platform: TpmPlatform<'a, C, S, T, R>,
     /// The volatile and persistent TPM state.
@@ -91,6 +91,13 @@ pub struct TpmEngine<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + 
     /// mode), which TPM 2.0 Part 1 ("Command Dispatch") considers "different from the command
     /// execution state": see [`crate::self_test`].
     pub self_test: crate::self_test::SelfTestState,
+    /// The crypto backend's random number generator (`C::Rng`, created from the backend's
+    /// entropy source with [`tpm2::crypto::Random::from_entropy`] by [`TpmEngine::new`]). It
+    /// draws the values the default build takes from the crypto backend (response nonces,
+    /// TPM-generated keys and seeds, secrets, see the `rng` module), the randomness of the
+    /// randomized key operations (RSA padding and blinding, signature nonces) and absorbs the
+    /// data of `TPM2_StirRandom`.
+    pub crypto_rng: C::Rng,
 }
 
 /// Error returned by the [`tpm2::Connection`] implementation of [`TpmEngine`] when the response
@@ -112,7 +119,7 @@ impl core::error::Error for ResponseBufferTooSmall {}
 
 /// A [`TpmEngine`] is a TPM that is reached directly, without any transport: each transaction
 /// executes the command in-process at the engine's current locality.
-impl<C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> tpm2::Connection
+impl<C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync> tpm2::Connection
     for TpmEngine<'_, C, S, T, R>
 {
     type Error = ResponseBufferTooSmall;
@@ -693,7 +700,7 @@ impl ActiveSequence {
     }
 
     /// Feeds input data into the active streaming hash state(s). A CMAC sequence (whose
-    /// update needs the block cipher of the crypto provider) is updated by
+    /// update needs the block cipher of the crypto backend) is updated by
     /// `TPM2_SequenceUpdate` itself.
     pub fn update_hash_states(&mut self, data: &[u8]) {
         match self.sequence_type {
@@ -1426,7 +1433,7 @@ impl GlobalState {
     }
 }
 
-impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<'a, C, S, T, R> {
+impl<'a, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<'a, C, S, T, R> {
     /// Returns the current adjusted clock value in milliseconds (`go.clock`).
     pub fn get_clock(&self) -> u64 {
         // `clock_offset` is the two's-complement difference `Clock - Time`, so wrapping arithmetic
@@ -1751,6 +1758,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
             platform,
             state: GlobalState::default(),
             self_test: Default::default(),
+            crypto_rng: C::from_entropy().map_err(|_| InternalError::HardwareError)?,
         })
     }
 
@@ -4604,7 +4612,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
 
                     let mut new_digest = [0u8; 64];
                     let new_digest_len = compute_hash(
-                        &crate::self_test::Tested::new(&*self.platform.crypto, &self.self_test),
+                        &crate::self_test::Tested::<C>::new(&self.self_test),
                         auth_hash,
                         &extend_buf[..d_len + cp_len + rp_hash_len],
                         &mut new_digest,
@@ -5008,7 +5016,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
 
                     let mut new_digest = [0u8; 64];
                     let new_digest_len = compute_hash(
-                        &crate::self_test::Tested::new(&*self.platform.crypto, &self.self_test),
+                        &crate::self_test::Tested::<C>::new(&self.self_test),
                         auth_hash,
                         &extend_buf[..d_len + cp_len + rp_hash_len],
                         &mut new_digest,
@@ -6444,7 +6452,7 @@ pub(crate) fn command_resp_handles_size(cc: TpmCc) -> usize {
     }
 }
 
-fn compute_nv_name<C: CryptoProvider>(
+fn compute_nv_name<C: Crypto>(
     crypto: &crate::self_test::Tested<'_, C>,
     name_alg: TpmiAlgHash,
     public_area_bytes: &[u8],
@@ -6452,14 +6460,15 @@ fn compute_nv_name<C: CryptoProvider>(
     let mut name_bytes = [0u8; 66];
     let offset = name_alg.marshal((&mut name_bytes[..2]).try_into().unwrap());
     let mut digest_buf = [0u8; tpm2::TpmtHa::MAX_DIGEST_SIZE];
-    let digest = tpm2::crypto::hash(crypto, name_alg, public_area_bytes, &mut digest_buf)
+    let digest = crypto
+        .hash(name_alg, &[public_area_bytes], &mut digest_buf)
         .map_err(|_| TpmRc::FAILURE)?;
     let digest_slice = digest.digest();
     name_bytes[offset..offset + digest_slice.len()].copy_from_slice(digest_slice);
     OwnedName::from_bytes(&name_bytes[..offset + digest_slice.len()]).map_err(|_| TpmRc::FAILURE)
 }
 
-fn handle_name<C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>(
+fn handle_name<C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>(
     ctx: &mut TpmEngine<'_, C, S, T, R>,
     handle: u32,
 ) -> OwnedName {
@@ -6921,13 +6930,8 @@ pub fn handle_requires_auth(cc: TpmCc, handle_index: usize) -> bool {
     }
 }
 
-/// Returns whether `cc` requires the ADMIN role for its handle at `handle_index`.
-pub fn is_admin_role_auth(cc: TpmCc, handle_index: usize) -> bool {
-    command_auth_role(cc, handle_index) == AuthRole::Admin
-}
-
 fn compute_hash_and_hmac(
-    crypto: &crate::self_test::Tested<'_, impl CryptoProvider>,
+    crypto: &crate::self_test::Tested<'_, impl Crypto>,
     auth_hash: TpmiAlgHash,
     key: &[u8],
     updates_hash: &[&[u8]],
@@ -6935,7 +6939,9 @@ fn compute_hash_and_hmac(
     hash_out: &mut [u8],
     hmac_out: &mut [u8],
 ) -> Result<(usize, usize), TpmRc> {
-    let mut hash_ctx = HashStream::new(crypto, auth_hash).map_err(|_| TpmRc::HASH.to_rc())?;
+    let mut hash_ctx = crypto
+        .hash_stream(auth_hash)
+        .map_err(|_| TpmRc::HASH.to_rc())?;
     for data in updates_hash {
         hash_ctx.update(data).map_err(|_| TpmRc::HASH.to_rc())?;
     }
@@ -6945,8 +6951,9 @@ fn compute_hash_and_hmac(
         .map_err(|_| TpmRc::HASH.to_rc())?;
     let digest_slice = digest.digest();
 
-    let mut hmac_state =
-        HmacStream::new(crypto, auth_hash, key).map_err(|_| TpmRc::HASH.to_rc())?;
+    let mut hmac_state = crypto
+        .hmac_stream(auth_hash, key)
+        .map_err(|_| TpmRc::HASH.to_rc())?;
     hmac_state
         .update(digest_slice)
         .map_err(|_| TpmRc::HASH.to_rc())?;
@@ -6968,7 +6975,7 @@ fn compute_hash_and_hmac(
 
 #[allow(clippy::too_many_arguments)]
 fn derive_key_and_iv(
-    crypto: &crate::self_test::Tested<'_, impl CryptoProvider>,
+    crypto: &crate::self_test::Tested<'_, impl Crypto>,
     auth_hash: TpmiAlgHash,
     key: &[u8],
     label: &[u8],
@@ -7015,7 +7022,7 @@ fn reference_s(session_index: usize) -> TpmRc {
 }
 
 fn xor_obfuscation(
-    crypto: &crate::self_test::Tested<'_, impl CryptoProvider>,
+    crypto: &crate::self_test::Tested<'_, impl Crypto>,
     auth_hash: TpmiAlgHash,
     key: &[u8],
     context_u: &[u8],
@@ -7052,13 +7059,14 @@ fn xor_obfuscation(
 }
 
 fn compute_hash(
-    crypto: &crate::self_test::Tested<'_, impl CryptoProvider>,
+    crypto: &crate::self_test::Tested<'_, impl Crypto>,
     auth_hash: TpmiAlgHash,
     data: &[u8],
     hash_out: &mut [u8],
 ) -> Result<usize, TpmRc> {
     let mut digest_buf = [0u8; tpm2::TpmtHa::MAX_DIGEST_SIZE];
-    let digest = tpm2::crypto::hash(crypto, auth_hash, data, &mut digest_buf)
+    let digest = crypto
+        .hash(auth_hash, &[data], &mut digest_buf)
         .map_err(|_| TpmRc::HASH.to_rc())?;
     let slice = digest.digest();
     let len = slice.len();
@@ -7069,12 +7077,14 @@ fn compute_hash(
 /// Hashes the concatenation of `parts` with `auth_hash` into `hash_out`, returning the digest
 /// size.
 fn compute_hash_parts(
-    crypto: &crate::self_test::Tested<'_, impl CryptoProvider>,
+    crypto: &crate::self_test::Tested<'_, impl Crypto>,
     auth_hash: TpmiAlgHash,
     parts: &[&[u8]],
     hash_out: &mut [u8],
 ) -> Result<usize, TpmRc> {
-    let mut hash_ctx = HashStream::new(crypto, auth_hash).map_err(|_| TpmRc::HASH.to_rc())?;
+    let mut hash_ctx = crypto
+        .hash_stream(auth_hash)
+        .map_err(|_| TpmRc::HASH.to_rc())?;
     for data in parts {
         hash_ctx.update(data).map_err(|_| TpmRc::HASH.to_rc())?;
     }
@@ -7088,14 +7098,15 @@ fn compute_hash_parts(
 }
 
 fn compute_response_hmac(
-    crypto: &crate::self_test::Tested<'_, impl CryptoProvider>,
+    crypto: &crate::self_test::Tested<'_, impl Crypto>,
     auth_hash: TpmiAlgHash,
     key: &[u8],
     updates_hmac: &[&[u8]],
     hmac_out: &mut [u8],
 ) -> Result<usize, TpmRc> {
-    let mut hmac_state =
-        HmacStream::new(crypto, auth_hash, key).map_err(|_| TpmRc::HASH.to_rc())?;
+    let mut hmac_state = crypto
+        .hmac_stream(auth_hash, key)
+        .map_err(|_| TpmRc::HASH.to_rc())?;
     for data in updates_hmac {
         hmac_state.update(data).map_err(|_| TpmRc::HASH.to_rc())?;
     }

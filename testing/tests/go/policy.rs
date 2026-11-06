@@ -1,5 +1,6 @@
 // Ported from tpm-go/tpm2/test/policy_test.go
 
+use crate::_common::ClientCrypto;
 use crate::test_utils::*;
 use testing::tpm::Tpm;
 #[allow(deprecated)] // `CreateLoaded` and `Sign` are deprecated in v184.
@@ -21,9 +22,8 @@ use tpm2::{
 
 /// Computes `hashAlg(data)` with the platform crypto provider.
 fn hash_sha256(data: &[u8]) -> Vec<u8> {
-    let crypto = tpm2_platform_linux::PlatformCryptoProvider;
     let mut buf = [0u8; tpm2::TpmtHa::MAX_DIGEST_SIZE];
-    tpm2::crypto::hash(&crypto, TpmiAlgHash::Sha256, data, &mut buf)
+    tpm2::crypto::hash::<ClientCrypto>(TpmiAlgHash::Sha256, &[data], &mut buf)
         .unwrap()
         .digest()
         .to_vec()
@@ -83,7 +83,9 @@ fn signing_key(sim: &mut Tpm) -> (Handle, Tpm2bName<'static>) {
     let create_primary = CreatePrimary {
         primary_handle: Handle::RH_OWNER,
         in_public: tpm2::Tpm2b(public_area),
-        ..Default::default()
+        in_sensitive: Default::default(),
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     let rsp =
         execute_with_password_sessions(sim, &create_primary, 1, &[]).expect("could not create key");
@@ -148,7 +150,7 @@ fn rsa_srk_template() -> TpmtPublic<'static> {
                     mode: Some(TpmiAlgCipherMode::Cfb.into()),
                 }),
                 scheme: None,
-                key_bits: TpmiRsaKeyBits(2048),
+                key_bits: TpmiRsaKeyBits::Rsa2048,
                 exponent: 0,
             },
             Tpm2bPublicKeyRsa::from_bytes(&RSA_UNIQUE_ZEROS).unwrap(),
@@ -180,7 +182,9 @@ fn create_primary(
     let create_primary = CreatePrimary {
         primary_handle: hierarchy,
         in_public: tpm2::Tpm2b(template),
-        ..Default::default()
+        in_sensitive: Default::default(),
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     let rsp = execute_with_password_sessions(sim, &create_primary, 1, &[])
         .expect("could not create primary key");
@@ -694,7 +698,7 @@ fn policy_auth_value(
             TpmsRsaParms {
                 symmetric: None,
                 scheme: Some(TpmtRsaScheme::Rsassa(TpmiAlgHash::Sha256)),
-                key_bits: TpmiRsaKeyBits(2048),
+                key_bits: TpmiRsaKeyBits::Rsa2048,
                 exponent: 0,
             },
             Tpm2bPublicKeyRsa::default(),
@@ -825,7 +829,7 @@ fn duplication_select_setup(sim: &mut Tpm) -> DuplicationSelectSetup {
             TpmsRsaParms {
                 symmetric: None,
                 scheme: Some(TpmtRsaScheme::Rsassa(TpmiAlgHash::Sha256)),
-                key_bits: TpmiRsaKeyBits(2048),
+                key_bits: TpmiRsaKeyBits::Rsa2048,
                 exponent: 0,
             },
             Tpm2bPublicKeyRsa::default(),

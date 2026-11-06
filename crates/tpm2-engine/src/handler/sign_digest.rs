@@ -17,7 +17,7 @@ use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
 #[allow(unused_imports)]
 use tpm2::TpmCc;
 use tpm2::commands::responses;
-use tpm2::crypto::{CryptoProvider, Rng};
+use tpm2::crypto::{Crypto, Rng};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Handle, Tpm2bDigest, TpmaObject, TpmtSigScheme, TpmtSignature, TpmtTkVerified};
 
@@ -98,7 +98,7 @@ pub(crate) fn verified_ticket_hierarchy(obj: &TransientObject) -> Option<u32> {
     (real && obj.public.name_alg.is_some()).then_some(hierarchy)
 }
 
-impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
+impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     CommandHandler<'a, 'b, C, S, T, R>
 {
     /// Handles the [TpmCc::SignDigest] (`0x1A6`) command.
@@ -412,7 +412,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 if !cmd.context.get_buffer().is_empty() {
                     return Err(TpmRc::VALUE.with(Position::parameter(1)));
                 }
-                let mu: [u8; tpm2::crypto::MLDSA_MU_SIZE] = digest
+                let mu: [u8; tpm2::TpmiMldsaParms::MU_BYTES] = digest
                     .try_into()
                     .map_err(|_| TpmRc::SIZE.with(Position::parameter(2)))?;
                 (mu, None)
@@ -448,7 +448,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let len = self.mldsa_sign_mu(obj, &mu, buf)?;
         let sig = tpm2::Tpm2bSignatureMldsa::from_bytes(&buf[..len]).map_err(|_| TpmRc::FAILURE)?;
         Ok(match pre_hash {
-            Some(hash) => TpmtSignature::HashMldsa(tpm2::TpmsSignatureHashMldsa { hash, sig }),
+            Some(hash) => TpmtSignature::HashMldsa(tpm2::TpmsSignatureHashMldsa {
+                hash,
+                signature: sig,
+            }),
             None => TpmtSignature::Mldsa(sig),
         })
     }
@@ -479,7 +482,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 if !cmd.context.get_buffer().is_empty() {
                     return Err(TpmRc::VALUE.with(Position::parameter(1)));
                 }
-                let mu: [u8; tpm2::crypto::MLDSA_MU_SIZE] = digest
+                let mu: [u8; tpm2::TpmiMldsaParms::MU_BYTES] = digest
                     .try_into()
                     .map_err(|_| TpmRc::SIZE.with(Position::parameter(2)))?;
                 let TpmtSignature::Mldsa(sig) = &cmd.signature else {
@@ -493,7 +496,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     return Err(TpmRc::SIZE.with(Position::parameter(2)));
                 }
                 let sig = match &cmd.signature {
-                    TpmtSignature::HashMldsa(sig) if sig.hash == hash_alg => sig.sig.get_buffer(),
+                    TpmtSignature::HashMldsa(sig) if sig.hash == hash_alg => {
+                        sig.signature.get_buffer()
+                    }
                     _ => return Err(TpmRc::SCHEME.with(Position::parameter(3))),
                 };
                 let mu = crate::mldsa::hash_mu(

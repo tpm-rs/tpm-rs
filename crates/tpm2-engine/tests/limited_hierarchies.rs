@@ -10,7 +10,7 @@ use common::{
     setup_real_crypto_tpm,
 };
 use tpm2::commands::{CreatePrimary, GetCapability, Hash};
-use tpm2::crypto::kdf::kdfa_bits;
+use tpm2::crypto::kdfa_bits;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::platform::SimulatedFirmware;
 use tpm2::{
@@ -28,13 +28,11 @@ fn context_hash() -> TpmiAlgHash {
 /// the TCG reference (including their terminating NUL).
 fn limited_proof(base_proof: &[u8], secret: &[u8], secret_label: &[u8]) -> Vec<u8> {
     let mut out = vec![0u8; base_proof.len()];
-    kdfa_bits(
-        &TestCryptoProvider,
+    kdfa_bits::<TestCryptoProvider>(
         context_hash(),
         base_proof,
         b"H_PROOF_SECRET\0",
-        secret,
-        secret_label,
+        (secret, secret_label),
         (base_proof.len() * 8) as u32,
         &mut out,
     )
@@ -48,7 +46,7 @@ fn hashcheck_ticket(proof: &[u8], digest: &[u8]) -> Vec<u8> {
     input.extend_from_slice(&0x000Bu16.to_be_bytes()); // SHA-256
     input.extend_from_slice(digest);
     let mut buf = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
-    tpm2::crypto::hmac(&TestCryptoProvider, context_hash(), proof, &input, &mut buf)
+    tpm2::crypto::hmac::<TestCryptoProvider>(context_hash(), proof, &[&input], &mut buf)
         .unwrap()
         .digest()
         .to_vec()
@@ -104,7 +102,9 @@ fn create_primary(
     let cmd = CreatePrimary {
         primary_handle: hierarchy,
         in_public: Tpm2b(signing_template()),
-        ..Default::default()
+        in_sensitive: Default::default(),
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     execute_command(tpm, &cmd, &[password_auth(b"")]).map(|rsp| rsp.object_handle)
 }

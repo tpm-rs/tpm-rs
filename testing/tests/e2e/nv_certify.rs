@@ -134,7 +134,7 @@ fn nv_certify_rejects_out_of_range_reads() {
     let rsa_parms = TpmsRsaParms {
         symmetric: None,
         scheme: Some(TpmtRsaScheme::Rsassa(TpmiAlgHash::Sha256)),
-        key_bits: TpmiRsaKeyBits(2048),
+        key_bits: TpmiRsaKeyBits::Rsa2048,
         exponent: 0,
     };
     let pub_area = TpmtPublic {
@@ -160,7 +160,8 @@ fn nv_certify_rejects_out_of_range_reads() {
         primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     let signer_rsp_handles =
         execute_with_password_sessions(&mut sim, &create_signer_cmd, 1, &[]).unwrap();

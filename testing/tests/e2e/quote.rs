@@ -1,9 +1,9 @@
 //! TPM2_Quote: signing key and scheme checks, HMAC signers and NULL signer.
 
 use crate::_common::*;
+use crate::_common::{ClientCrypto, client_rsa_verify};
 use testing::tpm::Tpm;
 use tpm2::commands::{PCREvent, PCRRead, Quote, ReadPublic};
-use tpm2::crypto::Asymmetric;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
     Alg, Handle, Tpm2bData, Tpm2bEvent, TpmaObject, TpmiAlgHash, TpmlPcrSelection, TpmtHa,
@@ -172,12 +172,12 @@ fn rsassa_quote_attests_pcr_digest() {
     let quoted_bytes = marshal_to_vec(&attest);
     let mut out = [0u8; TpmtHa::MAX_DIGEST_SIZE];
     let digest =
-        tpm2::crypto::hash(CLIENT_CRYPTO, TpmiAlgHash::Sha256, &quoted_bytes, &mut out).unwrap();
+        tpm2::crypto::hash::<ClientCrypto>(TpmiAlgHash::Sha256, &[&quoted_bytes], &mut out)
+            .unwrap();
     match resp.signature {
         Some(TpmtSignature::Rsassa(sig)) => {
-            assert_eq!(
-                CLIENT_CRYPTO.verify_inner(Alg::RSASSA, &modulus, 0, digest, sig.sig.get_buffer()),
-                Ok(true),
+            assert!(
+                client_rsa_verify(&modulus, 0, Alg::RSASSA, digest, sig.sig.get_buffer()),
                 "Cryptographic signature verification failed"
             );
         }

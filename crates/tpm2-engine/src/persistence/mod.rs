@@ -82,7 +82,8 @@ pub use types::*;
 use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
 use crate::{GlobalState, TpmEngine};
-use tpm2::crypto::{CryptoProvider, Hash, Rng};
+use tpm2::crypto::backend::Hash;
+use tpm2::crypto::{Crypto, Rng};
 
 /// Extracts the persisted state of `global_state` and `storage` into `persisted`; `now_ms` is
 /// the current reading of the platform timer (see the module documentation).
@@ -110,34 +111,32 @@ pub fn serialize<S: NvStorage>(
 }
 
 /// Restores `global_state` and `storage` from `persisted`; `now_ms` is the current reading of
-/// the target's platform timer (see the module documentation), and `crypto` computes the Names
-/// of the loaded objects.
+/// the target's platform timer (see the module documentation), and the hashes of the crypto
+/// backend `H` compute the Names of the loaded objects.
 ///
 /// `persisted` is validated before `global_state` is modified; `storage` is then erased and
 /// rewritten.
-pub fn try_deserialize<S: NvStorage>(
+pub fn try_deserialize<H: Hash, S: NvStorage>(
     persisted: &PersistedTpmState,
     global_state: &mut GlobalState,
     storage: &mut S,
     now_ms: u64,
-    crypto: &impl Hash,
 ) -> Result<(), DeserializeError> {
-    persisted.apply_to_global_state(global_state, storage, now_ms, crypto)
+    persisted.apply_to_global_state::<H, S>(global_state, storage, now_ms)
 }
 
 /// Like [`try_deserialize`], panicking on failure.
-pub fn deserialize<S: NvStorage>(
+pub fn deserialize<H: Hash, S: NvStorage>(
     persisted: &PersistedTpmState,
     global_state: &mut GlobalState,
     storage: &mut S,
     now_ms: u64,
-    crypto: &impl Hash,
 ) {
-    try_deserialize(persisted, global_state, storage, now_ms, crypto)
+    try_deserialize::<H, S>(persisted, global_state, storage, now_ms)
         .expect("Failed to deserialize");
 }
 
-impl<C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<'_, C, S, T, R> {
+impl<C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<'_, C, S, T, R> {
     /// Extracts the complete state of the TPM (its [`GlobalState`], its NV storage and its
     /// algorithm self-test state) into `persisted`, relative to the current reading of its
     /// platform timer.
@@ -153,7 +152,7 @@ impl<C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<'_, 
     /// Restores the complete state of the TPM (its [`GlobalState`], its NV storage and its
     /// algorithm self-test state) from `persisted`, e.g. on the target of a live migration. The
     /// platform time continues from the current reading of its platform timer, and the Names of
-    /// the loaded objects are recomputed with its crypto provider (directly, without the
+    /// the loaded objects are recomputed with its crypto backend (directly, without the
     /// algorithm self tests, which would change the self-test state).
     pub fn restore_persisted_state(
         &mut self,
@@ -163,12 +162,11 @@ impl<C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<'_, 
         let staged = crate::self_test::SelfTestState::default();
         persisted.apply_self_test(&staged)?;
         let now_ms = self.platform.timer.timer_read();
-        try_deserialize(
+        try_deserialize::<C, S>(
             persisted,
             &mut self.state,
             &mut *self.platform.storage,
             now_ms,
-            &*self.platform.crypto,
         )?;
         persisted.apply_self_test(&self.self_test)
     }

@@ -10,14 +10,14 @@ use tpm2::Marshal;
 use tpm2::TpmCc;
 use tpm2::commands::LoadExternal;
 use tpm2::commands::responses;
-use tpm2::crypto::{CryptoProvider, Rng};
+use tpm2::crypto::{Crypto, Rng};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
     PublicParmsAndId, Tpm2bSensitive, TpmaObject, TpmtKeyedHashScheme, TpmtPublic, TpmtSensitive,
     TpmuSensitiveComposite,
 };
 
-impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
+impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     CommandHandler<'a, 'b, C, S, T, R>
 {
     /// Handles the [TpmCc::LoadExternal] (`0x131`) command.
@@ -266,20 +266,17 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     split_sensitive_value(p.get_buffer(), usize::from(rsa_unique.get_size()))
                         .ok_or(TpmRc::BINDING.to_rc())?;
                 // Exp mapped every failure (`InvalidData` included) to `TPM_RC_BINDING`.
-                let len = match self.crypto().rsa_import_private_key(
+                let key = match crate::handler::rsa_private_key::<C>(
+                    rsa_parms,
                     rsa_unique.get_buffer(),
                     prime,
-                    if rsa_parms.exponent == 0 {
-                        65537
-                    } else {
-                        rsa_parms.exponent
-                    },
-                    actual_private_key,
                 ) {
-                    Ok(Some(len)) => len,
+                    Ok(Some(key)) => key,
                     Ok(None) | Err(_) => return Err(TpmRc::BINDING.to_rc()),
                 };
-                if !self.rsa_primes_in_range(&actual_private_key[..len], rsa_unique.get_buffer()) {
+                let len = crate::handler::rsa_private_prime(&key, actual_private_key)
+                    .map_err(|_| TpmRc::BINDING.to_rc())?;
+                if !self.rsa_primes_in_range(&key, rsa_unique.get_buffer()) {
                     return Err(TpmRc::BINDING.to_rc());
                 }
                 // The reference uses the stored CRT values without checking them (only this TPM
@@ -291,9 +288,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 // other values must be those of that key.
                 if crt {
                     let mut expected = [0u8; RSA_PRIVATE_SIZE];
-                    let expected_len = self
-                        .rsa_sensitive_value(&actual_private_key[..len], true, &mut expected)?
-                        .ok_or(TpmRc::BINDING.to_rc())?;
+                    let expected_len =
+                        self.rsa_crt_value(&key, &actual_private_key[..len], &mut expected)?;
                     if expected[..expected_len] != *p.get_buffer() {
                         return Err(TpmRc::BINDING.to_rc());
                     }
@@ -349,7 +345,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         match &public_struct.parms_and_id {
             PublicParmsAndId::Rsa(rsa_parms, rsa_unique) => {
-                let key_size_bytes = (rsa_parms.key_bits.0 / 8) as usize;
+                let key_size_bytes = (rsa_parms.key_bits.as_u16() / 8) as usize;
                 // The modulus must have the key size and its most significant bit SET.
                 if (!allow_empty_unique || rsa_unique.get_size() > 0)
                     && (rsa_unique.get_size() as usize != key_size_bytes
@@ -382,23 +378,16 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     } else {
                         // Exp mapped every failure (`InvalidData` included) to `TPM_RC_BINDING`.
                         // Both primes must also be in the acceptable range (`rsa_sensitive`).
-                        match self.crypto().rsa_import_private_key(
+                        match crate::handler::rsa_private_key::<C>(
+                            rsa_parms,
                             rsa_unique.get_buffer(),
                             rsa_private.get_buffer(),
-                            if rsa_parms.exponent == 0 {
-                                65537
-                            } else {
-                                rsa_parms.exponent
-                            },
-                            actual_private_key,
                         ) {
-                            Ok(Some(len))
-                                if self.rsa_primes_in_range(
-                                    &actual_private_key[..len],
-                                    rsa_unique.get_buffer(),
-                                ) =>
+                            Ok(Some(key))
+                                if self.rsa_primes_in_range(&key, rsa_unique.get_buffer()) =>
                             {
-                                Ok(len)
+                                crate::handler::rsa_private_prime(&key, actual_private_key)
+                                    .map_err(|_| TpmRc::BINDING.to_rc())
                             }
                             Ok(_) | Err(_) => Err(TpmRc::BINDING.to_rc()),
                         }
@@ -524,9 +513,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                             scheme.hash_alg.block_size()
                         }
                         Some(TpmtKeyedHashScheme::Hmac(hash_alg)) => hash_alg.block_size(),
-                        None => tpm2::TPM2_MAX_SYM_DATA as u16,
+                        None => tpm2::TPM2_MAX_SYM_DATA as usize,
                     };
-                    if sensitive_data.get_size() > max_size {
+                    if usize::from(sensitive_data.get_size()) > max_size {
                         return Err(TpmRc::KEY_SIZE.with(pos_sensitive));
                     }
 
@@ -569,11 +558,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     TpmuSensitiveComposite::Mldsa(k) | TpmuSensitiveComposite::HashMldsa(k) => k,
                     _ => return Err(TpmRc::TYPE.with(pos_sensitive)),
                 };
-                let seed: &[u8; tpm2::crypto::MLDSA_SEED_SIZE] =
-                    priv_key
-                        .get_buffer()
-                        .try_into()
-                        .map_err(|_| TpmRc::KEY_SIZE.with(pos_sensitive))?;
+                let seed: &[u8; tpm2::TpmiMldsaParms::PRIV_KEY_BYTES] = priv_key
+                    .get_buffer()
+                    .try_into()
+                    .map_err(|_| TpmRc::KEY_SIZE.with(pos_sensitive))?;
                 if public_struct.name_alg.is_some() {
                     let mut public_key = [0u8; tpm2::TPM2_MAX_MLDSA_PUB_SIZE];
                     let len = self.mldsa_public_key(*parameter_set, seed, &mut public_key)?;
@@ -588,11 +576,10 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 let TpmuSensitiveComposite::Mlkem(priv_key) = &sensitive_struct.sensitive else {
                     return Err(TpmRc::TYPE.with(pos_sensitive));
                 };
-                let seed: &[u8; tpm2::crypto::MLKEM_SEED_SIZE] =
-                    priv_key
-                        .get_buffer()
-                        .try_into()
-                        .map_err(|_| TpmRc::KEY_SIZE.with(pos_sensitive))?;
+                let seed: &[u8; tpm2::TpmiMlkemParms::PRIV_KEY_BYTES] = priv_key
+                    .get_buffer()
+                    .try_into()
+                    .map_err(|_| TpmRc::KEY_SIZE.with(pos_sensitive))?;
                 if public_struct.name_alg.is_some() {
                     let mut public_key = [0u8; tpm2::TPM2_MAX_MLKEM_PUB_SIZE];
                     let len = self.mlkem_public_key(parms.parameter_set, seed, &mut public_key)?;
@@ -614,7 +601,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     ) -> Result<(), TpmRc> {
         match &public_struct.parms_and_id {
             PublicParmsAndId::Rsa(rsa_parms, rsa_unique) => {
-                let kb = rsa_parms.key_bits.0;
+                let kb = rsa_parms.key_bits.as_u16();
                 if !matches!(kb, 1024 | 2048 | 3072 | 4096) {
                     return Err(TpmRc::VALUE.with(Position::parameter(2)));
                 }
@@ -659,7 +646,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             // linked, the TPM shall return `TPM_RC_BINDING`."
             PublicParmsAndId::KeyedHash(_, _) => {}
             PublicParmsAndId::Mldsa(parms, unique) => {
-                let expected_size = parms.parameter_set.public_key_bytes();
+                let expected_size = parms.parameter_set.pub_key_bytes();
                 if (!allow_empty_unique || unique.get_size() > 0)
                     && unique.get_size() as usize != expected_size
                 {
@@ -667,7 +654,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 }
             }
             PublicParmsAndId::HashMldsa(parms, unique) => {
-                let expected_size = parms.parameter_set.public_key_bytes();
+                let expected_size = parms.parameter_set.pub_key_bytes();
                 if (!allow_empty_unique || unique.get_size() > 0)
                     && unique.get_size() as usize != expected_size
                 {
@@ -675,7 +662,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 }
             }
             PublicParmsAndId::Mlkem(parms, unique) => {
-                let expected_size = parms.parameter_set.public_key_bytes();
+                let expected_size = parms.parameter_set.pub_key_bytes();
                 if (!allow_empty_unique || unique.get_size() > 0)
                     && unique.get_size() as usize != expected_size
                 {
@@ -728,8 +715,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
             // Exp mapped every failure (invalid point included) to `TPM_RC_ECC_POINT`.
             if !matches!(
-                self.crypto()
-                    .validate_point(curve, &ecc_pub_key[..param_size * 2]),
+                crate::ecc_curves::validate_point::<C>(curve, &ecc_pub_key[..param_size * 2]),
                 Ok(true)
             ) {
                 return Err(TpmRc::ECC_POINT.with(Position::parameter(2)));

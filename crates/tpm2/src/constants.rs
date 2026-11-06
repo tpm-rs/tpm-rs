@@ -8,6 +8,7 @@
 //! hash algorithm ID, returning an `Err` if not.
 use core::fmt;
 
+use crate::bits_to_bytes;
 use crate::errors::UnmarshalError;
 use crate::marshal::{Marshal, Unmarshal};
 
@@ -544,7 +545,7 @@ pub const TPM2_MAX_MLKEM_PRIV_SIZE: usize = 64;
 pub const TPM2_MAX_MLKEM_CT_SIZE: usize = 1568;
 #[doc(alias = "MAX_KEM_CIPHERTEXT_SIZE")]
 pub const TPM2_MAX_KEM_CIPHERTEXT_SIZE: usize =
-    crate::marshal::max(&[crate::TpmsEccPoint::MAX_SIZE, TPM2_MAX_MLKEM_CT_SIZE]);
+    max!(crate::TpmsEccPoint::MAX_SIZE, TPM2_MAX_MLKEM_CT_SIZE);
 #[doc(alias = "MAX_MLDSA_PUB_SIZE")]
 pub const TPM2_MAX_MLDSA_PUB_SIZE: usize = 2592;
 #[doc(alias = "MAX_MLDSA_PRIV_SIZE")]
@@ -600,113 +601,159 @@ pub const TPM2_MAX_LOADED_OBJECTS: u32 = 3;
 /// `TPM_ECC_CURVE` and `TPMI_ECC_CURVE` defined in TPM 2.0 Part 2: Structures, Section 6.4 (Table 10) and Section 9.7 (Table 38).
 ///
 /// See definition in Part 2: Structures, section 6.4.
-#[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
-#[repr(u16)]
+///
+/// Defines ECC curve identifiers supported by the TPM (NIST, Brainpool, Barreto-Naehrig, SM2, Edwards/Curve25519/448).
+/// Used in ECC parameter definitions, ephemeral key generation, and curve capability queries (`TPML_ECC_CURVE`).
+///
+/// `TPM_ECC_NONE` (0x0000) is represented by [`Option<TpmEccCurve>::None`]; a curve that is not
+/// enabled by the Cargo features is rejected with [`UnmarshalError::CURVE`] (`TPM_RC_CURVE`).
+#[doc(alias = "TPM_ECC_CURVE")]
+#[doc(alias = "TPMI_ECC_CURVE")]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum TpmEccCurve {
-    #[default]
-    #[doc(alias = "TPM_ECC_NONE")]
-    None = 0x0000,
-    #[cfg(feature = "ecc_curve_nist_p192")]
+    #[cfg(feature = "nist_p192")]
     #[doc(alias = "TPM_ECC_NIST_P192")]
     NistP192 = 0x0001,
-    #[cfg(feature = "ecc_curve_nist_p224")]
+    #[cfg(feature = "nist_p224")]
     #[doc(alias = "TPM_ECC_NIST_P224")]
     NistP224 = 0x0002,
-    #[cfg(feature = "ecc_curve_nist_p256")]
+    #[cfg(feature = "nist_p256")]
     #[doc(alias = "TPM_ECC_NIST_P256")]
     NistP256 = 0x0003,
-    #[cfg(feature = "ecc_curve_nist_p384")]
+    #[cfg(feature = "nist_p384")]
     #[doc(alias = "TPM_ECC_NIST_P384")]
     NistP384 = 0x0004,
-    #[cfg(feature = "ecc_curve_nist_p521")]
+    #[cfg(feature = "nist_p521")]
     #[doc(alias = "TPM_ECC_NIST_P521")]
     NistP521 = 0x0005,
-    #[cfg(feature = "ecc_curve_bn_p256")]
+    #[cfg(feature = "bn_p256")]
     #[doc(alias = "TPM_ECC_BN_P256")]
     BNP256 = 0x0010,
-    #[cfg(feature = "ecc_curve_bn_p638")]
+    #[cfg(feature = "bn_p638")]
     #[doc(alias = "TPM_ECC_BN_P638")]
     BNP638 = 0x0011,
-    #[cfg(feature = "ecc_curve_sm2_p256")]
+    #[cfg(feature = "sm2_p256")]
     #[doc(alias = "TPM_ECC_SM2_P256")]
     SM2P256 = 0x0020,
-    #[cfg(feature = "ecc_curve_bp_p256_r1")]
+    #[cfg(feature = "bp_p256_r1")]
     #[doc(alias = "TPM_ECC_BP_P256_R1")]
     BpP256R1 = 0x0030,
-    #[cfg(feature = "ecc_curve_bp_p384_r1")]
+    #[cfg(feature = "bp_p384_r1")]
     #[doc(alias = "TPM_ECC_BP_P384_R1")]
     BpP384R1 = 0x0031,
-    #[cfg(feature = "ecc_curve_bp_p512_r1")]
+    #[cfg(feature = "bp_p512_r1")]
     #[doc(alias = "TPM_ECC_BP_P512_R1")]
     BpP512R1 = 0x0032,
-    #[cfg(feature = "ecc_curve_curve25519")]
+    #[cfg(feature = "curve25519")]
     #[doc(alias = "TPM_ECC_CURVE_25519")]
     Curve25519 = 0x0040,
-    #[cfg(feature = "ecc_curve_curve448")]
+    #[cfg(feature = "curve448")]
     #[doc(alias = "TPM_ECC_CURVE_448")]
     Curve448 = 0x0041,
 }
 
 impl TpmEccCurve {
-    pub const MAX_ECC_KEY_BITS: usize = crate::marshal::max(&[
-        #[cfg(feature = "ecc_curve_nist_p192")]
-        192,
-        #[cfg(feature = "ecc_curve_nist_p224")]
-        224,
-        #[cfg(feature = "ecc_curve_nist_p256")]
-        256,
-        #[cfg(feature = "ecc_curve_nist_p384")]
-        384,
-        #[cfg(feature = "ecc_curve_nist_p521")]
-        521,
-        #[cfg(feature = "ecc_curve_bn_p256")]
-        256,
-        #[cfg(feature = "ecc_curve_bn_p638")]
-        638,
-        #[cfg(feature = "ecc_curve_sm2_p256")]
-        256,
-        #[cfg(feature = "ecc_curve_bp_p256_r1")]
-        256,
-        #[cfg(feature = "ecc_curve_bp_p384_r1")]
-        384,
-        #[cfg(feature = "ecc_curve_bp_p512_r1")]
-        512,
-        #[cfg(feature = "ecc_curve_curve25519")]
-        256,
-        #[cfg(feature = "ecc_curve_curve448")]
-        448,
-    ]);
-    pub const MAX_ECC_KEY_BYTES: usize = Self::MAX_ECC_KEY_BITS.div_ceil(8);
+    pub(crate) const ALL: &[Self] = &[
+        #[cfg(feature = "nist_p192")]
+        Self::NistP192,
+        #[cfg(feature = "nist_p224")]
+        Self::NistP224,
+        #[cfg(feature = "nist_p256")]
+        Self::NistP256,
+        #[cfg(feature = "nist_p384")]
+        Self::NistP384,
+        #[cfg(feature = "nist_p521")]
+        Self::NistP521,
+        #[cfg(feature = "bn_p256")]
+        Self::BNP256,
+        #[cfg(feature = "bn_p638")]
+        Self::BNP638,
+        #[cfg(feature = "sm2_p256")]
+        Self::SM2P256,
+        #[cfg(feature = "bp_p256_r1")]
+        Self::BpP256R1,
+        #[cfg(feature = "bp_p384_r1")]
+        Self::BpP384R1,
+        #[cfg(feature = "bp_p512_r1")]
+        Self::BpP512R1,
+        #[cfg(feature = "curve25519")]
+        Self::Curve25519,
+        #[cfg(feature = "curve448")]
+        Self::Curve448,
+    ];
+
+    pub const MAX_ECC_KEY_BITS: u16 = max_by!(Self::ALL, Self::key_bits);
+    /// Maximum size of an ECC coordinate, scalar, or encoded point. Ed448
+    /// (RFC 8032) uses 57-byte keys and points, one byte more than
+    /// `bits_to_bytes(448)`.
+    pub const MAX_ECC_KEY_BYTES: usize = max!(
+        bits_to_bytes(Self::MAX_ECC_KEY_BITS),
+        #[cfg(all(feature = "curve448", feature = "eddsa"))]
+        57,
+    );
+
+    pub const fn key_bits(self) -> u16 {
+        match self {
+            #[cfg(feature = "nist_p192")]
+            Self::NistP192 => 192,
+            #[cfg(feature = "nist_p224")]
+            Self::NistP224 => 224,
+            #[cfg(feature = "nist_p256")]
+            Self::NistP256 => 256,
+            #[cfg(feature = "bn_p256")]
+            Self::BNP256 => 256,
+            #[cfg(feature = "sm2_p256")]
+            Self::SM2P256 => 256,
+            #[cfg(feature = "bp_p256_r1")]
+            Self::BpP256R1 => 256,
+            #[cfg(feature = "curve25519")]
+            Self::Curve25519 => 256,
+            #[cfg(feature = "nist_p384")]
+            Self::NistP384 => 384,
+            #[cfg(feature = "bp_p384_r1")]
+            Self::BpP384R1 => 384,
+            #[cfg(feature = "curve448")]
+            Self::Curve448 => 448,
+            #[cfg(feature = "bp_p512_r1")]
+            Self::BpP512R1 => 512,
+            #[cfg(feature = "nist_p521")]
+            Self::NistP521 => 521,
+            #[cfg(feature = "bn_p638")]
+            Self::BNP638 => 638,
+        }
+    }
+    pub const fn key_bytes(self) -> usize {
+        bits_to_bytes(self.key_bits())
+    }
 
     /// Returns the coordinate and scalar parameter size (in bytes) for this curve.
     pub const fn parameter_size(self) -> usize {
         match self {
-            Self::None => 0,
-            #[cfg(feature = "ecc_curve_nist_p192")]
+            #[cfg(feature = "nist_p192")]
             Self::NistP192 => 24,
-            #[cfg(feature = "ecc_curve_nist_p224")]
+            #[cfg(feature = "nist_p224")]
             Self::NistP224 => 28,
-            #[cfg(feature = "ecc_curve_nist_p256")]
+            #[cfg(feature = "nist_p256")]
             Self::NistP256 => 32,
-            #[cfg(feature = "ecc_curve_nist_p384")]
+            #[cfg(feature = "nist_p384")]
             Self::NistP384 => 48,
-            #[cfg(feature = "ecc_curve_nist_p521")]
+            #[cfg(feature = "nist_p521")]
             Self::NistP521 => 66,
-            #[cfg(feature = "ecc_curve_bn_p256")]
+            #[cfg(feature = "bn_p256")]
             Self::BNP256 => 32,
-            #[cfg(feature = "ecc_curve_bn_p638")]
+            #[cfg(feature = "bn_p638")]
             Self::BNP638 => 80,
-            #[cfg(feature = "ecc_curve_sm2_p256")]
+            #[cfg(feature = "sm2_p256")]
             Self::SM2P256 => 32,
-            #[cfg(feature = "ecc_curve_bp_p256_r1")]
+            #[cfg(feature = "bp_p256_r1")]
             Self::BpP256R1 => 32,
-            #[cfg(feature = "ecc_curve_bp_p384_r1")]
+            #[cfg(feature = "bp_p384_r1")]
             Self::BpP384R1 => 48,
-            #[cfg(feature = "ecc_curve_bp_p512_r1")]
+            #[cfg(feature = "bp_p512_r1")]
             Self::BpP512R1 => 64,
-            #[cfg(feature = "ecc_curve_curve25519")]
+            #[cfg(feature = "curve25519")]
             Self::Curve25519 => 32,
-            #[cfg(feature = "ecc_curve_curve448")]
+            #[cfg(feature = "curve448")]
             Self::Curve448 => 56,
         }
     }
@@ -715,36 +762,7 @@ impl TpmEccCurve {
 impl TryFrom<u16> for TpmEccCurve {
     type Error = UnmarshalError;
     fn try_from(val: u16) -> Result<Self, Self::Error> {
-        match val {
-            0x0000 => Ok(Self::None),
-            #[cfg(feature = "ecc_curve_nist_p192")]
-            0x0001 => Ok(Self::NistP192),
-            #[cfg(feature = "ecc_curve_nist_p224")]
-            0x0002 => Ok(Self::NistP224),
-            #[cfg(feature = "ecc_curve_nist_p256")]
-            0x0003 => Ok(Self::NistP256),
-            #[cfg(feature = "ecc_curve_nist_p384")]
-            0x0004 => Ok(Self::NistP384),
-            #[cfg(feature = "ecc_curve_nist_p521")]
-            0x0005 => Ok(Self::NistP521),
-            #[cfg(feature = "ecc_curve_bn_p256")]
-            0x0010 => Ok(Self::BNP256),
-            #[cfg(feature = "ecc_curve_bn_p638")]
-            0x0011 => Ok(Self::BNP638),
-            #[cfg(feature = "ecc_curve_sm2_p256")]
-            0x0020 => Ok(Self::SM2P256),
-            #[cfg(feature = "ecc_curve_bp_p256_r1")]
-            0x0030 => Ok(Self::BpP256R1),
-            #[cfg(feature = "ecc_curve_bp_p384_r1")]
-            0x0031 => Ok(Self::BpP384R1),
-            #[cfg(feature = "ecc_curve_bp_p512_r1")]
-            0x0032 => Ok(Self::BpP512R1),
-            #[cfg(feature = "ecc_curve_curve25519")]
-            0x0040 => Ok(Self::Curve25519),
-            #[cfg(feature = "ecc_curve_curve448")]
-            0x0041 => Ok(Self::Curve448),
-            _ => Err(UnmarshalError::CURVE),
-        }
+        find_by!(Self::ALL, |c| u16::from(c) == val).ok_or(UnmarshalError::CURVE)
     }
 }
 impl From<TpmEccCurve> for u16 {
@@ -763,13 +781,11 @@ impl Marshal for TpmEccCurve {
 }
 impl<'a> Unmarshal<'a> for TpmEccCurve {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
-        match u16::unmarshal(src)?.try_into()? {
-            Self::None => Err(UnmarshalError::CURVE),
-            curve => Ok(curve),
-        }
+        u16::unmarshal(src)?.try_into()
     }
 }
 
+/// `TPMI_ECC_CURVE+` with `TPM_ECC_NONE` (0x0000) as [`None`].
 impl Marshal for Option<TpmEccCurve> {
     const MAX_SIZE: usize = u16::MAX_SIZE;
     type MaxBuffer = [u8; Self::MAX_SIZE];
@@ -777,15 +793,15 @@ impl Marshal for Option<TpmEccCurve> {
     fn marshal(&self, dst: &mut [u8; Self::MAX_SIZE]) -> usize {
         match self {
             Some(curve) => curve.marshal(dst),
-            None => u16::from(TpmEccCurve::None).marshal(dst),
+            None => 0x0000u16.marshal(dst),
         }
     }
 }
 impl<'a> Unmarshal<'a> for Option<TpmEccCurve> {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
-        match u16::unmarshal(src)?.try_into()? {
-            TpmEccCurve::None => Ok(None),
-            curve => Ok(Some(curve)),
+        match u16::unmarshal(src)? {
+            0x0000 => Ok(None),
+            val => Ok(Some(val.try_into()?)),
         }
     }
 }
@@ -1146,9 +1162,13 @@ impl fmt::Debug for TpmCc {
     }
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
+/// `TPM_EO` (Evaluation Option) defined in TPM 2.0 Part 2: Structures, Section 6.10 (Table 17).
+///
+/// Defines comparison and arithmetic operations used in conditional policy assertions
+/// (such as `TPM2_PolicyNV` and `TPM2_PolicyAuthorizeNV`).
+#[doc(alias = "TPM_EO")]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum TpmEo {
-    #[default]
     #[doc(alias = "TPM_EO_EQ")]
     Eq = 0x0000,
     #[doc(alias = "TPM_EO_NEQ")]
@@ -1312,9 +1332,16 @@ impl fmt::Debug for TpmSt {
     }
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
+/// `TPM_SU` (Startup Type) defined in TPM 2.0 Part 2: Structures, Section 6.11 (Table 18).
+///
+/// Indicates the startup and shutdown type for the TPM:
+/// - [`Clear`](Self::Clear) (`TPM_SU_CLEAR`): Full cold restart or state reset.
+/// - [`State`](Self::State) (`TPM_SU_STATE`): Restores previously saved TPM state.
+///
+/// Passed as a parameter to `TPM2_Startup` and `TPM2_Shutdown`.
+#[doc(alias = "TPM_SU")]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum TpmSu {
-    #[default]
     #[doc(alias = "TPM_SU_CLEAR")]
     Clear = 0x0000,
     #[doc(alias = "TPM_SU_STATE")]
@@ -1351,9 +1378,17 @@ impl<'a> Unmarshal<'a> for TpmSu {
     }
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
+/// `TPM_SE` (Session Type) defined in TPM 2.0 Part 2: Structures, Section 6.12 (Table 19).
+///
+/// Selects the authorization session type:
+/// - [`HMAC`](Self::HMAC) (`TPM_SE_HMAC`): Authorization session using HMAC.
+/// - [`Policy`](Self::Policy) (`TPM_SE_POLICY`): Authorization session evaluated against policy assertions.
+/// - [`Trial`](Self::Trial) (`TPM_SE_TRIAL`): Trial policy session used to compute a policy digest without verifying authorizations.
+///
+/// Passed to `TPM2_StartAuthSession`.
+#[doc(alias = "TPM_SE")]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum TpmSe {
-    #[default]
     #[doc(alias = "TPM_SE_HMAC")]
     HMAC = 0x00,
     #[doc(alias = "TPM_SE_POLICY")]
@@ -1393,10 +1428,13 @@ impl<'a> Unmarshal<'a> for TpmSe {
     }
 }
 
-/// `TPM_CAP` defined in TPM 2.0 Part 2: Structures, Section 6.12 (Table 22).
-#[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
+/// `TPM_CAP` (Capabilities) defined in TPM 2.0 Part 2: Structures, Section 6.13 (Table 20).
+///
+/// Selects the capability category queried in `TPM2_GetCapability` and `TPM2_TestParms`,
+/// and acts as the selector tag for `TPMS_CAPABILITY_DATA`.
+#[doc(alias = "TPM_CAP")]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum TpmCap {
-    #[default]
     #[doc(alias = "TPM_CAP_ALGS")]
     Algs = 0x00000000,
     #[doc(alias = "TPM_CAP_HANDLES")]
@@ -2307,9 +2345,8 @@ impl<'a> Unmarshal<'a> for TpmPubKey {
 /// [`Self::SAVED_SESSION`] (for `TPM2_GetCapability(TPM_CAP_HANDLES)` inquiries),
 /// per TPM 2.0 Part 2 Section 7.2 Table 28 and Part 3 Section 30.2.
 #[doc(alias = "TPM_HT")]
-#[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum TpmHt {
-    #[default]
     #[doc(alias = "TPM_HT_PCR")]
     PCR = 0x00,
     #[doc(alias = "TPM_HT_NV_INDEX")]
@@ -2979,13 +3016,15 @@ impl<'a> Unmarshal<'a> for Handle {
     }
 }
 
-// TpmNt represents a TPM_NT.
-// See definition in Part 2: Structures, section 13.4.
-#[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
+/// `TPM_NT` (NV Index Types) defined in TPM 2.0 Part 2: Structures, Section 13.4 (Table 206).
+///
+/// Encoded in bits 7:4 of `TPMA_NV` attributes to define the type and behavior of an NV Index
+/// (Ordinary data blob, Counter, Bitfield, Extend digest, or PIN counter).
+#[doc(alias = "TPM_NT")]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum TpmNt {
     // contains data that is opaque to the TPM that can only be modified
     // using TPM2_NV_Write().
-    #[default]
     #[doc(alias = "TPM_NT_ORDINARY")]
     Ordinary = 0x0,
     // contains an 8-octet value that is to be used as a counter and can
@@ -3045,9 +3084,12 @@ impl<'a> Unmarshal<'a> for TpmNt {
     }
 }
 
-/// Represents the adjustment steps for TPM Clock and Time update rate (`TPM_CLOCK_ADJUST`).
-/// See definition in Part 2: Structures, Section 11.3 (`TPM_CLOCK_ADJUST`).
-#[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
+/// `TPM_CLOCK_ADJUST` defined in TPM 2.0 Part 2: Structures, Section 6.8 (Table 15).
+///
+/// Represents the adjustment steps (-3 to +3) passed to `TPM2_ClockRateAdjust` to calibrate
+/// the TPM Clock update rate relative to external reference time without disrupting the clock epoch.
+#[doc(alias = "TPM_CLOCK_ADJUST")]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum TpmClockAdjust {
     /// Slow the Clock update rate by one coarse adjustment step (-3).
     #[doc(alias = "TPM_CLOCK_COARSE_SLOWER")]
@@ -3059,7 +3101,6 @@ pub enum TpmClockAdjust {
     #[doc(alias = "TPM_CLOCK_FINE_SLOWER")]
     FineSlower = -1,
     /// No change to the Clock update rate (0).
-    #[default]
     #[doc(alias = "TPM_CLOCK_NO_CHANGE")]
     NoChange = 0,
     /// Speed the Clock update rate by one fine adjustment step (1).

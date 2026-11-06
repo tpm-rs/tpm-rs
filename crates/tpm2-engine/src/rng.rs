@@ -5,7 +5,8 @@
 //! consume random numbers, through [`TpmEngine::ref_rng`]):
 //!
 //! - By default, `random_platform` draws from the platform RNG ([`TpmPlatform::rng`]) and
-//!   `random_crypto` from the crypto provider's CSPRNG ([`CryptoProvider::get_random`]).
+//!   `random_crypto` from the crypto backend's random number generator
+//!   ([`TpmEngine::crypto_rng`], a `C::Rng` created with [`tpm2::crypto::Random::from_entropy`]).
 //! - With the `reference-rng` feature, both draw from the TPM's own CTR-DRBG (`drbgDefault`,
 //!   [`GlobalState::drbg_state`]), the C reference TPMs' DRBG linked from their original code,
 //!   seeded from the platform RNG as entropy source ([`crate::reference_rng`]); the call sites
@@ -15,7 +16,7 @@
 //! [`TpmPlatform::rng`]: tpm2::platform::TpmPlatform
 //! [`GlobalState::drbg_state`]: crate::GlobalState
 
-use tpm2::crypto::{CryptoProvider, Rng};
+use tpm2::crypto::{Crypto, Rng};
 use tpm2::errors::TpmRc;
 
 use crate::engine::TpmEngine;
@@ -25,7 +26,7 @@ use crate::timer::TpmTimer;
 #[cfg(feature = "reference-rng")]
 use crate::reference_rng::{RefRng, drbg};
 
-impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<'a, C, S, T, R> {
+impl<'a, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<'a, C, S, T, R> {
     /// Random bytes for values that the default build draws from the platform RNG (seeds,
     /// proofs, nonces, `TPM2_GetRandom`, IVs).
     pub(crate) fn random_platform(&mut self, out: &mut [u8]) -> Result<(), TpmRc> {
@@ -42,8 +43,8 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
         }
     }
 
-    /// Random bytes for values that the default build draws from the crypto provider's CSPRNG
-    /// (response nonces, TPM-generated keys and seeds, secrets).
+    /// Random bytes for values that the default build draws from the crypto backend's random
+    /// number generator (response nonces, TPM-generated keys and seeds, secrets).
     pub(crate) fn random_crypto(&mut self, out: &mut [u8]) -> Result<(), TpmRc> {
         #[cfg(feature = "reference-rng")]
         {
@@ -51,10 +52,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
         }
         #[cfg(not(feature = "reference-rng"))]
         {
-            self.platform
-                .crypto
-                .get_random(out)
-                .map_err(|_| TpmRc::FAILURE)
+            self.crypto_rng.fill_bytes(out).map_err(|_| TpmRc::FAILURE)
         }
     }
 

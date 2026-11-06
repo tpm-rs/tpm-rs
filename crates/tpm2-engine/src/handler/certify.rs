@@ -8,11 +8,11 @@ use tpm2::TpmCc;
 use tpm2::TpmGenerated;
 use tpm2::commands::responses;
 use tpm2::commands::{Certify, CertifyCreation};
-use tpm2::crypto::{CryptoProvider, Rng};
+use tpm2::crypto::{Crypto, Rng};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Tpm2bName, TpmsAttest, TpmsCertifyInfo, TpmsCreationInfo, TpmtSigScheme, TpmuAttest};
 
-impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
+impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     CommandHandler<'a, 'b, C, S, T, R>
 {
     /// Handles the [TpmCc::Certify] (`0x148`) command.

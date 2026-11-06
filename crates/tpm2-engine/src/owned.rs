@@ -604,7 +604,7 @@ impl OwnedSignature {
             Self::HashMldsa { hash, sig } => {
                 TpmtSignature::HashMldsa(tpm2::TpmsSignatureHashMldsa {
                     hash: *hash,
-                    sig: sig.as_tpm2b(),
+                    signature: sig.as_tpm2b(),
                 })
             }
         }

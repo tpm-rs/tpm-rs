@@ -2,6 +2,7 @@
 #
 #   make test               the full suite: every target below
 #   make test-workspace     `cargo test --release` (BoringSSL backend)
+#   make test-tpm2          the tpm2 tests (alone: its default features are every algorithm)
 #   make test-reference-rng the tpm2-engine tests with the reference RNG port
 #   make test-no-sha512     the tpm2-engine tests of a TPM without SHA-512
 #   make test-backends      the crypto backend tests (Rust and Crux)
@@ -43,7 +44,7 @@ TARGET_ARGS_tcgtpm := --no-default-features
 # forwards under the same names (testing/Cargo.toml). No target enables all of them
 # (e.g. `camellia192`, `hash_mldsa`), so `test-features` and `clippy` also build
 # tpm-rs with every one of them, and `clippy-features` with each one alone.
-OPTIONAL_FEATURES := ecc_curve_nist_p192 ecc_curve_bn_p638 ecc_curve_sm2_p256 sm2 ecschnorr \
+OPTIONAL_FEATURES := nist_p192 bn_p638 sm2_p256 sm2 ecschnorr \
 	rsa3072 rsa4096 camellia128 camellia192 camellia256 cmac ecmqv mlkem mldsa hash_mldsa \
 	cc-ec-ephemeral cc-zgen-2phase cc-ecc-encrypt cc-ecc-decrypt \
 	cc-policy-capability cc-policy-parameters cc-policy-physical-presence cc-pp-commands \
@@ -66,15 +67,20 @@ VTPM_FEATURES := nv-memory-size-32k,context-hash-sha256,rsa-sensitive-prime-only
 DIFFERENTIAL_TESTS := $(addprefix test-,$(DIFFERENTIAL_TARGETS))
 DIFFERENTIAL_CLIPPY := $(addprefix clippy-,$(DIFFERENTIAL_TARGETS))
 
-.PHONY: test test-workspace test-reference-rng test-no-sha512 test-backends test-differential \
+.PHONY: test test-workspace test-tpm2 test-reference-rng test-no-sha512 test-backends test-differential \
 	$(DIFFERENTIAL_TESTS) test-inproc test-features test-vtpm lint fmt clippy clippy-features \
 	$(DIFFERENTIAL_CLIPPY) doc
 
-test: test-workspace test-reference-rng test-no-sha512 test-backends test-differential test-inproc \
+test: test-workspace test-tpm2 test-reference-rng test-no-sha512 test-backends test-differential test-inproc \
 	test-features test-vtpm
 
 test-workspace:
 	$(CARGO) test --release $(CARGO_TEST_ARGS)
+
+# `tpm2` is not a default member of the workspace (see Cargo.toml): with its default features
+# (every algorithm) it is built, linted and tested only on its own.
+test-tpm2:
+	$(CARGO) test --release -p tpm2 $(CARGO_TEST_ARGS)
 
 test-reference-rng:
 	$(CARGO) test --release -p tpm2-engine --features reference-rng $(CARGO_TEST_ARGS)
@@ -126,6 +132,7 @@ fmt:
 
 clippy: $(DIFFERENTIAL_CLIPPY) clippy-features
 	$(CARGO) clippy --all-targets -- -D warnings
+	$(CARGO) clippy --all-targets -p tpm2 -- -D warnings
 	$(CARGO) clippy --all-targets -p tpm2-engine -p testing --features $(ALL_OPTIONAL_FEATURES) -- -D warnings
 	$(CARGO) clippy --all-targets -p tpm2-engine --features reference-rng -- -D warnings
 	$(CARGO) clippy --all-targets -p tpm2-engine --features $(VTPM_FEATURES) -- -D warnings
@@ -149,3 +156,4 @@ $(DIFFERENTIAL_CLIPPY): clippy-%:
 
 doc:
 	RUSTDOCFLAGS="-D warnings" $(CARGO) doc --no-deps
+	RUSTDOCFLAGS="-D warnings" $(CARGO) doc --no-deps -p tpm2

@@ -1,197 +1,108 @@
+//! SHA-1/SHA-256/SHA-384/SHA-512 hashes (`bssl_crypto::digest`) and HMACs (BoringSSL's
+//! `HMAC_CTX`, [`crate::bssl::Hmac`]).
+
 use crate::BsslCryptoProvider;
 use tpm2::crypto::CryptoError;
+use tpm2::crypto::backend::{Hash, HashState, Hmac, HmacState};
 
-pub struct BsslSha1(bssl_crypto::digest::InsecureSha1);
+/// Defines the hash state `$name` of the `bssl_crypto` digest `$inner` with an `$n`-byte digest.
+macro_rules! digest_state {
+    ($(#[$m:meta])* $name:ident, $inner:ty, $n:literal) => {
+        $(#[$m])*
+        pub struct $name($inner);
 
-impl tpm2::crypto::Update for BsslSha1 {
-    fn update(&mut self, data: &[u8]) -> Result<(), CryptoError> {
-        self.0.update(data);
-        Ok(())
-    }
+        impl HashState<$n> for $name {
+            fn init() -> Result<Self, CryptoError> {
+                Ok(Self(<$inner>::new()))
+            }
+
+            fn update(&mut self, data: &[u8]) -> Result<(), CryptoError> {
+                self.0.update(data);
+                Ok(())
+            }
+
+            fn finalize(&mut self, out: &mut [u8; $n]) -> Result<(), CryptoError> {
+                // `digest` consumes the context: leave a fresh one behind (the state is spent).
+                let ctx = core::mem::replace(&mut self.0, <$inner>::new());
+                *out = ctx.digest();
+                Ok(())
+            }
+        }
+    };
 }
 
-impl tpm2::crypto::Finalize<20> for BsslSha1 {
-    fn finalize(self, out: &mut [u8; 20]) -> Result<(), CryptoError> {
-        let res = self.0.digest();
-        out.copy_from_slice(&res);
-        Ok(())
-    }
+digest_state!(
+    /// SHA-1 hash state for `BsslCryptoProvider`.
+    BsslSha1,
+    bssl_crypto::digest::InsecureSha1,
+    20
+);
+digest_state!(
+    /// SHA-256 hash state for `BsslCryptoProvider`.
+    BsslSha256,
+    bssl_crypto::digest::Sha256,
+    32
+);
+digest_state!(
+    /// SHA-384 hash state for `BsslCryptoProvider`.
+    BsslSha384,
+    bssl_crypto::digest::Sha384,
+    48
+);
+digest_state!(
+    /// SHA-512 hash state for `BsslCryptoProvider`.
+    BsslSha512,
+    bssl_crypto::digest::Sha512,
+    64
+);
+
+impl Hash for BsslCryptoProvider {
+    type Sha1 = BsslSha1;
+    type Sha256 = BsslSha256;
+    type Sha384 = BsslSha384;
+    type Sha512 = BsslSha512;
+    type Sm3_256 = !;
+    type Sha3_256 = !;
+    type Sha3_384 = !;
+    type Sha3_512 = !;
 }
 
-pub struct BsslSha256(bssl_crypto::digest::Sha256);
+/// HMAC state for `BsslCryptoProvider` with an `N`-byte tag: HMAC-SHA-1 (20), HMAC-SHA-256
+/// (32), HMAC-SHA-384 (48) or HMAC-SHA-512 (64), on BoringSSL's `HMAC_CTX`.
+pub struct BsslHmac<const N: usize>(crate::bssl::Hmac<N>);
 
-impl tpm2::crypto::Update for BsslSha256 {
-    fn update(&mut self, data: &[u8]) -> Result<(), CryptoError> {
-        self.0.update(data);
-        Ok(())
-    }
-}
-
-impl tpm2::crypto::Finalize<32> for BsslSha256 {
-    fn finalize(self, out: &mut [u8; 32]) -> Result<(), CryptoError> {
-        let res = self.0.digest();
-        out.copy_from_slice(&res);
-        Ok(())
-    }
-}
-
-pub struct BsslSha384(bssl_crypto::digest::Sha384);
-
-impl tpm2::crypto::Update for BsslSha384 {
-    fn update(&mut self, data: &[u8]) -> Result<(), CryptoError> {
-        self.0.update(data);
-        Ok(())
-    }
-}
-
-impl tpm2::crypto::Finalize<48> for BsslSha384 {
-    fn finalize(self, out: &mut [u8; 48]) -> Result<(), CryptoError> {
-        let res = self.0.digest();
-        out.copy_from_slice(&res);
-        Ok(())
-    }
-}
-
-pub struct BsslSha512(bssl_crypto::digest::Sha512);
-
-impl tpm2::crypto::Update for BsslSha512 {
-    fn update(&mut self, data: &[u8]) -> Result<(), CryptoError> {
-        self.0.update(data);
-        Ok(())
-    }
-}
-
-impl tpm2::crypto::Finalize<64> for BsslSha512 {
-    fn finalize(self, out: &mut [u8; 64]) -> Result<(), CryptoError> {
-        let res = self.0.digest();
-        out.copy_from_slice(&res);
-        Ok(())
-    }
-}
-
-impl tpm2::crypto::Hash for BsslCryptoProvider {
-    type Sha1Context = BsslSha1;
-    fn sha1(&self) -> Result<Self::Sha1Context, CryptoError> {
-        Ok(BsslSha1(bssl_crypto::digest::InsecureSha1::new()))
+impl<const N: usize> HmacState<N> for BsslHmac<N> {
+    fn init(key: &[u8]) -> Result<Self, CryptoError> {
+        crate::bssl::Hmac::new_from_slice(key)
+            .map(Self)
+            .map_err(Into::into)
     }
 
-    type Sha256Context = BsslSha256;
-    fn sha256(&self) -> Result<Self::Sha256Context, CryptoError> {
-        Ok(BsslSha256(bssl_crypto::digest::Sha256::new()))
-    }
-
-    type Sha384Context = BsslSha384;
-    fn sha384(&self) -> Result<Self::Sha384Context, CryptoError> {
-        Ok(BsslSha384(bssl_crypto::digest::Sha384::new()))
-    }
-
-    type Sha512Context = BsslSha512;
-    fn sha512(&self) -> Result<Self::Sha512Context, CryptoError> {
-        Ok(BsslSha512(bssl_crypto::digest::Sha512::new()))
-    }
-
-    type Sm3_256Context = !;
-    type Sha3_256Context = !;
-    type Sha3_384Context = !;
-    type Sha3_512Context = !;
-}
-
-pub struct BsslHmacSha1(crate::bssl::HmacSha1);
-
-impl tpm2::crypto::Update for BsslHmacSha1 {
     fn update(&mut self, data: &[u8]) -> Result<(), CryptoError> {
         self.0.update(data).map_err(Into::into)
     }
-}
 
-impl tpm2::crypto::Finalize<20> for BsslHmacSha1 {
-    fn finalize(self, out: &mut [u8; 20]) -> Result<(), CryptoError> {
+    fn finalize(&mut self, out: &mut [u8; N]) -> Result<(), CryptoError> {
         self.0.finalize(out).map_err(Into::into)
     }
 }
 
-pub struct BsslHmacSha256(bssl_crypto::hmac::HmacSha256);
+/// HMAC-SHA-1 state for `BsslCryptoProvider`.
+pub type BsslHmacSha1 = BsslHmac<20>;
+/// HMAC-SHA-256 state for `BsslCryptoProvider`.
+pub type BsslHmacSha256 = BsslHmac<32>;
+/// HMAC-SHA-384 state for `BsslCryptoProvider`.
+pub type BsslHmacSha384 = BsslHmac<48>;
+/// HMAC-SHA-512 state for `BsslCryptoProvider`.
+pub type BsslHmacSha512 = BsslHmac<64>;
 
-impl tpm2::crypto::Update for BsslHmacSha256 {
-    fn update(&mut self, data: &[u8]) -> Result<(), CryptoError> {
-        self.0.update(data);
-        Ok(())
-    }
-}
-
-impl tpm2::crypto::Finalize<32> for BsslHmacSha256 {
-    fn finalize(self, out: &mut [u8; 32]) -> Result<(), CryptoError> {
-        let res = self.0.digest();
-        out.copy_from_slice(&res);
-        Ok(())
-    }
-}
-
-pub struct BsslHmacSha384(bssl_crypto::hmac::HmacSha384);
-
-impl tpm2::crypto::Update for BsslHmacSha384 {
-    fn update(&mut self, data: &[u8]) -> Result<(), CryptoError> {
-        self.0.update(data);
-        Ok(())
-    }
-}
-
-impl tpm2::crypto::Finalize<48> for BsslHmacSha384 {
-    fn finalize(self, out: &mut [u8; 48]) -> Result<(), CryptoError> {
-        let res = self.0.digest();
-        out.copy_from_slice(&res);
-        Ok(())
-    }
-}
-
-pub struct BsslHmacSha512(bssl_crypto::hmac::HmacSha512);
-
-impl tpm2::crypto::Update for BsslHmacSha512 {
-    fn update(&mut self, data: &[u8]) -> Result<(), CryptoError> {
-        self.0.update(data);
-        Ok(())
-    }
-}
-
-impl tpm2::crypto::Finalize<64> for BsslHmacSha512 {
-    fn finalize(self, out: &mut [u8; 64]) -> Result<(), CryptoError> {
-        let res = self.0.digest();
-        out.copy_from_slice(&res);
-        Ok(())
-    }
-}
-
-impl tpm2::crypto::Hmac for BsslCryptoProvider {
-    type Sha1Context = BsslHmacSha1;
-    fn sha1(&self, key: &[u8]) -> Result<Self::Sha1Context, CryptoError> {
-        crate::bssl::HmacSha1::new_from_slice(key)
-            .map(BsslHmacSha1)
-            .map_err(Into::into)
-    }
-
-    type Sha256Context = BsslHmacSha256;
-    fn sha256(&self, key: &[u8]) -> Result<Self::Sha256Context, CryptoError> {
-        Ok(BsslHmacSha256(
-            bssl_crypto::hmac::HmacSha256::new_from_slice(key),
-        ))
-    }
-
-    type Sha384Context = BsslHmacSha384;
-    fn sha384(&self, key: &[u8]) -> Result<Self::Sha384Context, CryptoError> {
-        Ok(BsslHmacSha384(
-            bssl_crypto::hmac::HmacSha384::new_from_slice(key),
-        ))
-    }
-
-    type Sha512Context = BsslHmacSha512;
-    fn sha512(&self, key: &[u8]) -> Result<Self::Sha512Context, CryptoError> {
-        Ok(BsslHmacSha512(
-            bssl_crypto::hmac::HmacSha512::new_from_slice(key),
-        ))
-    }
-
-    type Sm3_256Context = !;
-    type Sha3_256Context = !;
-    type Sha3_384Context = !;
-    type Sha3_512Context = !;
+impl Hmac for BsslCryptoProvider {
+    type Sha1 = BsslHmacSha1;
+    type Sha256 = BsslHmacSha256;
+    type Sha384 = BsslHmacSha384;
+    type Sha512 = BsslHmacSha512;
+    type Sm3_256 = !;
+    type Sha3_256 = !;
+    type Sha3_384 = !;
+    type Sha3_512 = !;
 }

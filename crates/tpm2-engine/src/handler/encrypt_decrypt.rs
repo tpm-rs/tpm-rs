@@ -13,7 +13,7 @@ use crate::handle_checks::{Tpmi, check};
 use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
 use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
-use tpm2::crypto::{CryptoProvider, Rng};
+use tpm2::crypto::{Crypto, Rng};
 
 /// Maps the result of a crypto operation that reports a semantic failure as `Ok(None)` (an
 /// invalid input such as a point at infinity, a bad ciphertext / padding, or an inconsistent key)
@@ -41,7 +41,7 @@ pub(super) fn crypto_check(result: Result<bool, CryptoError>, rc: TpmRc) -> Resu
     }
 }
 
-impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
+impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     CommandHandler<'a, 'b, C, S, T, R>
 {
     /// Handles the [TpmCc::EncryptDecrypt] (`0x162`) command.

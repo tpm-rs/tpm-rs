@@ -31,7 +31,8 @@ fn corrupted_credential_blob_integrity() {
         primary_handle: Handle::RH_ENDORSEMENT,
         in_sensitive,
         in_public,
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     let ek_resp = execute_with_password_sessions(&mut sim, &create_primary_ek, 1, &[])
         .expect("could not generate EK");
@@ -43,7 +44,8 @@ fn corrupted_credential_blob_integrity() {
         primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public: in_public_srk,
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     let srk_resp = execute_with_password_sessions(&mut sim, &create_primary_srk, 1, &[])
         .expect("could not generate SRK");
@@ -141,7 +143,8 @@ fn missing_key_handle_rejected() {
         primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public: in_public_srk,
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     let srk_resp = execute_with_password_sessions(&mut sim, &create_primary_srk, 1, &[])
         .expect("could not generate SRK");
@@ -174,7 +177,8 @@ fn sign_only_key_rejected() {
         primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public: in_public_p,
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     let p_resp = execute_with_password_sessions(&mut sim, &create_primary_p, 1, &[])
         .expect("could not generate key");
@@ -186,7 +190,8 @@ fn sign_only_key_rejected() {
         primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public: in_public_srk,
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     let srk_resp = execute_with_password_sessions(&mut sim, &create_primary_srk, 1, &[])
         .expect("could not generate SRK");
@@ -379,7 +384,8 @@ fn credential_round_trips_under_ctr_mode_protector() {
                 data: Tpm2bSensitiveData::default(),
             }),
             in_public: tpm2::Tpm2b(template),
-            ..Default::default()
+            outside_info: Default::default(),
+            creation_pcr: Default::default(),
         },
         1,
         &[],

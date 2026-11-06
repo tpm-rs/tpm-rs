@@ -5,6 +5,8 @@ use crate::_common::{
     AES128_CFB, LocalRSADecryptCmd, exec_command, execute_with_password_sessions, flush_context,
     leak_bytes, marshal_to_vec, pw, rsa_decrypt_public, rsa_public, storage_attrs,
 };
+#[cfg(not(all(feature = "rsa3072", feature = "rsa4096")))]
+use crate::_common::{execute_with_corrupted_bytes_status, put_u16};
 use testing::tpm::Tpm;
 use tpm2::commands::{CreatePrimary, ReadPublic};
 use tpm2::{
@@ -50,7 +52,8 @@ fn matches_create_primary_output() {
         primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     let create_rsp = execute_with_password_sessions(&mut sim, &create_cmd, 1, &[]).unwrap();
     let object_handle = create_rsp.object_handle;
@@ -88,12 +91,13 @@ fn rsa_1024_encrypt_decrypt() {
         primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     let rsp = execute_with_password_sessions(&mut sim, &cmd, 1, &[]).unwrap();
     let out_public_struct = rsp.out_public.0;
     if let PublicParmsAndId::Rsa(parms, unique) = &out_public_struct.parms_and_id {
-        assert_eq!(parms.key_bits.0, 1024);
+        assert_eq!(parms.key_bits.as_u16(), 1024);
         assert_eq!(unique.get_buffer().len(), 128); // 1024 bits = 128 bytes
 
         // Perform RSA encryption using public key
@@ -144,14 +148,15 @@ fn decryption_key_round_trip(bits: u16) {
         primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     let rsp = execute_with_password_sessions(&mut sim, &cmd, 1, &[]).unwrap();
     let out_public_struct = rsp.out_public.0;
     let PublicParmsAndId::Rsa(parms, unique) = &out_public_struct.parms_and_id else {
         panic!("expected RSA key");
     };
-    assert_eq!(parms.key_bits.0, bits);
+    assert_eq!(parms.key_bits.as_u16(), bits);
     assert_eq!(unique.get_buffer().len(), usize::from(bits) / 8);
     assert!(
         unique.get_buffer()[0] >= 0x80,
@@ -197,16 +202,28 @@ fn decryption_key_round_trip(bits: u16) {
 #[cfg(not(all(feature = "rsa3072", feature = "rsa4096")))]
 fn unsupported_key_size_rejected(bits: u16) {
     let mut sim = Tpm::new();
+    // An unimplemented key size is not a `TpmiRsaKeyBits` value, so the key size of an RSA-2048
+    // template is patched in the marshaled parameters.
     let cmd = CreatePrimary {
         primary_handle: Handle::RH_OWNER,
         in_sensitive: tpm2::Tpm2b(tpm2::TpmsSensitiveCreate::default()),
-        in_public: tpm2::Tpm2b(rsa_decrypt_public(bits)),
-        ..Default::default()
+        in_public: tpm2::Tpm2b(rsa_decrypt_public(2048)),
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
+    // keyBits follows inSensitive (6 octets), the size of inPublic, type, nameAlg,
+    // objectAttributes, the empty authPolicy, and the NULL symmetric definition and scheme.
+    const KEY_BITS_OFFSET: usize = 6 + 2 + 2 + 2 + 4 + 2 + 2 + 2;
     assert_eq!(
-        execute_with_password_sessions(&mut sim, &cmd, 1, &[])
-            .map(|_| ())
-            .unwrap_err(),
+        execute_with_corrupted_bytes_status(&mut sim, &cmd, 1, &[], |params| {
+            assert_eq!(
+                params[KEY_BITS_OFFSET..KEY_BITS_OFFSET + 2],
+                2048u16.to_be_bytes()
+            );
+            put_u16(params, KEY_BITS_OFFSET, bits);
+        })
+        .map(|_| ())
+        .unwrap_err(),
         tpm2::errors::TpmRc::VALUE
             .with(tpm2::errors::Position::parameter(2))
             .get()

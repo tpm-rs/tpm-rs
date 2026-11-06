@@ -10,11 +10,11 @@ use crate::timer::TpmTimer;
 use tpm2::TpmCc;
 use tpm2::TpmaObject;
 use tpm2::commands::EvictControl;
-use tpm2::crypto::{CryptoProvider, Rng};
+use tpm2::crypto::{Crypto, Rng};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Handle, TpmHt};
 
-impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
+impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     CommandHandler<'a, 'b, C, S, T, R>
 {
     /// Handles the [TpmCc::EvictControl] (`0x120`) command.

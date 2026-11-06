@@ -117,7 +117,8 @@ fn keyedhash_tpm_key_rejected() {
         primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     let create_rsp = execute_with_password_sessions(&mut sim, &create_cmd, 1, &[]).unwrap();
     let keyedhash_key_handle = create_rsp.object_handle;
@@ -280,7 +281,7 @@ fn tpm_key_without_decrypt_rejected() {
     let rsa_parms = TpmsRsaParms {
         symmetric: None,
         scheme: None,
-        key_bits: TpmiRsaKeyBits(2048),
+        key_bits: TpmiRsaKeyBits::Rsa2048,
         exponent: 0,
     };
     let pub_area = TpmtPublic {
@@ -304,7 +305,8 @@ fn tpm_key_without_decrypt_rejected() {
         primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     let create_rsp = execute_with_password_sessions(&mut sim, &create_cmd, 1, &[]).unwrap();
     let rsa_key_handle = create_rsp.object_handle;

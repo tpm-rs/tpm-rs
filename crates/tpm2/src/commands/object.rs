@@ -12,7 +12,7 @@ use crate::{errors::UnmarshalError, marshal::marshal_helper, *};
 /// [TPM2.0 1.83] 12.1 TPM2_Create (Command)
 #[doc(alias = "TPM2_Create")]
 #[doc(alias = "Create_In")]
-#[derive(Clone, Copy, PartialEq, Debug, Default, Eq)]
+#[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct Create<'a> {
     pub parent_handle: Handle,
     pub in_sensitive: Tpm2bSensitiveCreate<'a>,
@@ -22,7 +22,7 @@ pub struct Create<'a> {
 }
 /// [TPM2.0 1.83] 12.1 TPM2_Create (Response)
 #[doc(alias = "Create_Out")]
-#[derive(Clone, Copy, PartialEq, Debug, Default, Eq)]
+#[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct CreateRsp<'a> {
     pub out_private: Tpm2bPrivate<'a>,
     pub out_public: Tpm2bPublic<'a>,
@@ -108,7 +108,7 @@ impl<'a> UnmarshalMessage<'a> for CreateRsp<'a> {
 /// [TPM2.0 1.83] 12.2 TPM2_Load (Command)
 #[doc(alias = "TPM2_Load")]
 #[doc(alias = "Load_In")]
-#[derive(Clone, Copy, PartialEq, Debug, Default, Eq)]
+#[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct Load<'a> {
     pub parent_handle: Handle,
     pub in_private: Tpm2bPrivate<'a>,
@@ -187,7 +187,7 @@ pub struct ReadPublic {
 }
 /// [TPM2.0 1.83] 12.4 TPM2_ReadPublic (Response)
 #[doc(alias = "ReadPublic_Out")]
-#[derive(Clone, Copy, PartialEq, Debug, Default, Eq)]
+#[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct ReadPublicRsp<'a> {
     pub out_public: Tpm2bPublic<'a>,
     pub name: Tpm2bName<'a>,
@@ -543,7 +543,7 @@ impl<'a> UnmarshalMessage<'a> for ObjectChangeAuthRsp<'a> {
 /// [TPM2.0 1.83] 12.3 TPM2_LoadExternal (Command)
 #[doc(alias = "TPM2_LoadExternal")]
 #[doc(alias = "LoadExternal_In")]
-#[derive(Clone, Copy, PartialEq, Debug, Default, Eq)]
+#[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct LoadExternal<'a> {
     pub in_private: Option<Tpm2bSensitive<'a>>,
     pub in_public: Tpm2bPublic<'a>,
@@ -637,7 +637,7 @@ pub struct CreateLoaded<'a> {
 /// [TPM2.0 1.83] 12.9 TPM2_CreateLoaded (Response)
 #[doc(alias = "CreateLoaded_Out")]
 #[deprecated]
-#[derive(Clone, Copy, PartialEq, Debug, Default, Eq)]
+#[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct CreateLoadedRsp<'a> {
     pub object_handle: Handle,
     pub out_private: Tpm2bPrivate<'a>,

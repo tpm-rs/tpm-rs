@@ -50,9 +50,9 @@ default = ["sha512"]
 sha512 = ["tpm2/sha512", "tpm2-engine/sha512", "tpm2-simulator/sha512", "tpm2-platform-linux/sha512"]
 # Optional algorithms and ECC curves of tpm-rs (forwarding to the `tpm2-engine`
 # features of the same names), so that E2E tests can be gated on them.
-ecc_curve_nist_p192 = ["tpm2-engine/ecc_curve_nist_p192"]
-ecc_curve_bn_p638 = ["tpm2-engine/ecc_curve_bn_p638"]
-ecc_curve_sm2_p256 = ["tpm2-engine/ecc_curve_sm2_p256"]
+nist_p192 = ["tpm2-engine/nist_p192"]
+bn_p638 = ["tpm2-engine/bn_p638"]
+sm2_p256 = ["tpm2-engine/sm2_p256"]
 sm2 = ["tpm2-engine/sm2"]
 ecschnorr = ["tpm2-engine/ecschnorr"]
 
@@ -140,9 +140,9 @@ differential = []
 # `--no-default-features` (without `sha512`) for it.
 target-tcgtpm = [
     "differential",
-    "ecc_curve_nist_p192",
-    "ecc_curve_bn_p638",
-    "ecc_curve_sm2_p256",
+    "nist_p192",
+    "bn_p638",
+    "sm2_p256",
     "sm2",
     "ecschnorr",
     "camellia128",
@@ -175,9 +175,9 @@ target-tcgtpm = [
 # `testing/patches/tcgtpm-185-feature/`.
 target-tcgtpm-v185 = [
     "differential",
-    "ecc_curve_nist_p192",
-    "ecc_curve_bn_p638",
-    "ecc_curve_sm2_p256",
+    "nist_p192",
+    "bn_p638",
+    "sm2_p256",
     "sm2",
     "ecschnorr",
     "camellia128",
@@ -223,9 +223,9 @@ target-tcgtpm-v185 = [
 # `testing/patches/ibmswtpm2/`.
 target-ibmswtpm2 = [
     "differential",
-    "ecc_curve_nist_p192",
-    "ecc_curve_bn_p638",
-    "ecc_curve_sm2_p256",
+    "nist_p192",
+    "bn_p638",
+    "sm2_p256",
     "sm2",
     "ecschnorr",
     "camellia128",

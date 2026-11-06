@@ -1,76 +1,187 @@
+//! Tests of `RustCryptoProvider`, through the dispatch functions of `tpm2::crypto` where the
+//! algorithms are enabled in `tpm2` (the TPM profile of the workspace), and through the backend
+//! traits otherwise.
+
 use hex_literal::hex;
-use tpm2::crypto::CryptoProvider;
-use tpm2::crypto::{
-    Asymmetric, AsymmetricSign, CmacStream, ConstantTimeEq, CryptoError, Direction, Ecc, ModeIv,
-    Random, SymmetricKey, TpmiRsaKeyBits, cmac, digest_eq, encrypt_decrypt, symmetric,
+use tpm2::crypto::backend::{
+    CmacState, EccCurve, MldsaKey, MlkemKey, PrivateKey, RsaKey, SymmetricState,
 };
-use tpm2::crypto::{Finalize, Hash, Hmac, Update};
-use tpm2::{AlgSym, TpmEccCurve, TpmiAlgCipherMode, TpmiAlgHash, TpmtHa};
-use tpm2_crypto_rust::RustCryptoProvider;
+use tpm2::crypto::{
+    CipherInput, Crypto, CryptoError, Direction, EccPrivateKey, EccPublicKey, HashContext,
+    HmacContext, Random, Rng, SignatureBuffer, SymmetricKey, digest_eq, ecc_mul_generator, hash,
+    hmac,
+};
+use tpm2::{
+    AlgSym, Tpm2bEccParameter, TpmEccCurve, TpmiAlgCipherMode, TpmiAlgHash, TpmsEccPoint, TpmtHa,
+    TpmtSigScheme,
+};
+use tpm2_crypto_rust::pqc::{RustCryptoMldsa65, RustCryptoMlkem768};
+use tpm2_crypto_rust::rsa::{RustCryptoRsa1024, RustCryptoRsa2048};
+use tpm2_crypto_rust::{RustCryptoCipher, RustCryptoProvider as C, RustCryptoRng};
+
+/// The random number generator of the backend.
+type R = RustCryptoRng;
+
+// ==========================================
+// Random, hashes, HMAC, constant time
+// ==========================================
 
 #[test]
-fn test_rust_crypto_provider_get_random() {
-    let provider = RustCryptoProvider;
-    let mut buf1 = [0u8; 32];
-    let mut buf2 = [0u8; 32];
-    provider.get_random(&mut buf1).expect("get_random failed");
-    provider.get_random(&mut buf2).expect("get_random failed");
-    assert_ne!(buf1, buf2, "get_random produced identical buffers");
+fn random() {
+    let mut rng = C::from_entropy().unwrap();
+    let (mut a, mut b) = ([0u8; 32], [0u8; 32]);
+    rng.fill_bytes(&mut a).unwrap();
+    rng.fill_bytes(&mut b).unwrap();
+    assert_ne!(a, b);
+    // The OS entropy source cannot be stirred: the data is ignored.
+    assert_eq!(rng.stir_bytes(b"additional entropy"), Ok(()));
+    C::rand_bytes(&mut a).unwrap();
+    C::rand_bytes(&mut b).unwrap();
+    assert_ne!(a, b);
+    assert_eq!(C::rand_bytes(&mut []), Ok(()));
+
+    // A seeded generator is deterministic, also after stirring, and depends on the seed and the
+    // stirred data.
+    let output = |seed: &[u8], stir: Option<&[u8]>| {
+        let mut rng = C::from_seed(seed).unwrap();
+        let mut out = [0u8; 64];
+        rng.fill_bytes(&mut out[..10]).unwrap();
+        if let Some(data) = stir {
+            rng.stir_bytes(data).unwrap();
+        }
+        rng.fill_bytes(&mut out[10..]).unwrap();
+        out
+    };
+    assert_eq!(output(b"seed", None), output(b"seed", None));
+    assert_ne!(output(b"seed", None), output(b"other", None));
+    assert_eq!(output(b"seed", Some(b"x")), output(b"seed", Some(b"x")));
+    assert_ne!(output(b"seed", Some(b"x")), output(b"seed", Some(b"y")));
+    assert_ne!(output(b"seed", Some(b"x")), output(b"seed", None));
+    assert_eq!(
+        output(b"seed", Some(b"x"))[..10],
+        output(b"seed", None)[..10]
+    );
 }
 
 #[test]
-fn test_rust_crypto_provider_hash_sha256() {
-    let provider = RustCryptoProvider;
-    let data = b"hello world";
-    let mut ctx = Hash::sha256(&provider).expect("sha256 failed");
-    ctx.update(data).expect("update failed");
-    let mut digest = [0u8; 32];
-    ctx.finalize(&mut digest).expect("finalize failed");
+fn hash_and_hmac() {
+    let mut buf = [0u8; 64];
+    let digest = hash::<C>(TpmiAlgHash::Sha256, &[b"hello ", b"world"], &mut buf).unwrap();
     let expected = hex!("b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9");
-    assert_eq!(digest, expected);
-}
+    assert_eq!(digest, TpmtHa::Sha256(&expected));
 
-#[test]
-fn test_rust_crypto_provider_hmac_sha256() {
-    let provider = RustCryptoProvider;
+    let mut ctx = HashContext::<C>::new(TpmiAlgHash::Sha256).unwrap();
+    ctx.update(b"hello").unwrap();
+    ctx.update(b" world").unwrap();
+    assert_eq!(ctx.finalize(&mut buf).unwrap(), TpmtHa::Sha256(&expected));
+
+    let digest = hash::<C>(TpmiAlgHash::Sha1, &[b"abc"], &mut buf).unwrap();
+    assert_eq!(
+        digest,
+        TpmtHa::Sha1(&hex!("a9993e364706816aba3e25717850c26c9cd0d89d"))
+    );
+    let digest = hash::<C>(TpmiAlgHash::Sha384, &[b"abc"], &mut buf).unwrap();
+    assert_eq!(
+        digest.digest(),
+        hex!(
+            "cb00753f45a35e8bb5a03d699ac65007272c32ab0eded1631a8b605a43ff5bed"
+            "8086072ba1e7cc2358baeca134c825a7"
+        )
+    );
+    #[cfg(feature = "sha512")]
+    assert_eq!(
+        hash::<C>(TpmiAlgHash::Sha512, &[b"abc"], &mut buf)
+            .unwrap()
+            .digest(),
+        hex!(
+            "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a"
+            "2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f"
+        )
+    );
+
     let key = b"key";
     let data = b"The quick brown fox jumps over the lazy dog";
-    let mut ctx = Hmac::sha256(&provider, key).expect("hmac sha256 failed");
-    ctx.update(data).expect("update failed");
-    let mut digest = [0u8; 32];
-    ctx.finalize(&mut digest).expect("finalize failed");
     let expected = hex!("f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8");
-    assert_eq!(digest, expected);
+    let mac = hmac::<C>(
+        TpmiAlgHash::Sha256,
+        key,
+        &[&data[..10], &data[10..]],
+        &mut buf,
+    )
+    .unwrap();
+    assert_eq!(mac, TpmtHa::Sha256(&expected));
+    let mut ctx = HmacContext::<C>::new(TpmiAlgHash::Sha256, key).unwrap();
+    ctx.update(data).unwrap();
+    assert_eq!(ctx.finalize(&mut buf).unwrap(), TpmtHa::Sha256(&expected));
 }
 
 #[test]
-fn test_rust_crypto_provider_concurrency() {
-    use std::thread;
-    let provider = std::sync::Arc::new(RustCryptoProvider);
+fn unsupported_algorithms() {
+    use tpm2::crypto::backend::{Hash, HashState, Hmac, HmacState};
+    assert!(matches!(
+        <<C as Hash>::Sm3_256 as HashState<32>>::init(),
+        Err(CryptoError::Unsupported)
+    ));
+    assert!(matches!(
+        <<C as Hmac>::Sha3_256 as HmacState<32>>::init(b"key"),
+        Err(CryptoError::Unsupported)
+    ));
+    assert!(matches!(
+        <<C as tpm2::crypto::backend::Symmetric>::Sm4_128 as SymmetricState<16>>::init(&[0; 16]),
+        Err(CryptoError::Unsupported)
+    ));
+    assert!(matches!(
+        <<C as tpm2::crypto::backend::Cmac>::Sm4_128 as CmacState<16>>::init(&[0; 16]),
+        Err(CryptoError::Unsupported)
+    ));
+}
 
-    let mut handles = vec![];
-    for i in 0..10 {
-        let p = provider.clone();
-        handles.push(thread::spawn(move || {
-            let data = format!("hello world {}", i);
-            let mut ctx = Hash::sha256(&*p).expect("sha256 failed");
-            ctx.update(data.as_bytes()).expect("update failed");
-            let mut digest = [0u8; 32];
-            ctx.finalize(&mut digest).expect("finalize failed");
-            assert_eq!(digest.len(), 32);
-        }));
-    }
-
+#[test]
+fn concurrency() {
+    let handles: Vec<_> = (0..10)
+        .map(|i| {
+            std::thread::spawn(move || {
+                let data = format!("hello world {i}");
+                let mut buf = [0u8; 32];
+                let digest = hash::<C>(TpmiAlgHash::Sha256, &[data.as_bytes()], &mut buf).unwrap();
+                assert_eq!(digest.digest().len(), 32);
+            })
+        })
+        .collect();
     for h in handles {
         h.join().unwrap();
     }
 }
 
+#[test]
+fn constant_time_eq() {
+    assert!(C::ct_eq(&[], &[]));
+    let a = [0x5Au8; 32];
+    assert!(C::ct_eq(&a, &a.clone()));
+    for i in [0, 15, 31] {
+        let mut b = a;
+        b[i] ^= 0x01;
+        assert!(!C::ct_eq(&a, &b), "difference at byte {i}");
+    }
+    assert!(!C::ct_eq(&a, &a[..31]));
+
+    let b = [0x5Au8; 32];
+    assert!(digest_eq::<C>(TpmtHa::Sha256(&a), TpmtHa::Sha256(&b)));
+    let mut c = b;
+    c[7] = 0;
+    assert!(!digest_eq::<C>(TpmtHa::Sha256(&a), TpmtHa::Sha256(&c)));
+    // Digests of different algorithms never compare equal.
+    assert!(!digest_eq::<C>(
+        TpmtHa::Sha256(&a),
+        TpmtHa::Sha384(&[0x5Au8; 48])
+    ));
+}
+
 // ==========================================
-// Symmetric (AES-CFB), CMAC, ConstantTimeEq, Random
+// Symmetric ciphers and CMAC
 // ==========================================
 
-/// NIST SP 800-38A, Appendix F.3: the four-block plaintext of the CFB128 examples.
+/// NIST SP 800-38A, Appendix F: the four-block plaintext of the examples.
 const NIST_PLAINTEXT: [u8; 64] = hex!(
     "6bc1bee22e409f96e93d7e117393172a"
     "ae2d8a571e03ac9c9eb76fac45af8e51"
@@ -78,7 +189,7 @@ const NIST_PLAINTEXT: [u8; 64] = hex!(
     "f69f2445df4f9b17ad2b417be66c3710"
 );
 
-/// NIST SP 800-38A, Appendix F.3: the IV of the CFB128 examples.
+/// NIST SP 800-38A, Appendix F: the IV of the examples.
 const NIST_IV: [u8; 16] = hex!("000102030405060708090a0b0c0d0e0f");
 
 /// NIST SP 800-38A / SP 800-38B example keys.
@@ -102,134 +213,81 @@ const AES256_CFB_CIPHERTEXT: [u8; 64] = hex!(
     "75a385741ab9cef82031623d55b1e471"
 );
 
-/// Encrypts or decrypts `data` in place with `alg` in CFB mode, updating `iv`.
-fn aes_cfb(
-    provider: &RustCryptoProvider,
+/// Encrypts or decrypts `data` in place with `alg` and `mode`, updating `iv`.
+fn crypt(
     alg: AlgSym,
     key: &[u8],
+    mode: TpmiAlgCipherMode,
     iv: &mut [u8],
     dir: Direction,
     data: &mut [u8],
 ) -> Result<(), CryptoError> {
     let key = SymmetricKey::new(alg, key).expect("key length matches the algorithm");
-    let mode = ModeIv::new(TpmiAlgCipherMode::Cfb, iv).expect("IV length is valid for CFB");
-    encrypt_decrypt(provider, key, mode, dir, data)
+    let input = CipherInput::new(mode, iv, data).expect("valid IV and data lengths");
+    key.crypt::<C>(dir, input)
 }
 
 #[test]
-fn test_rust_crypto_provider_aes_cfb_known_answer() {
-    let provider = RustCryptoProvider;
+fn aes_cfb_known_answer() {
     let vectors: [(AlgSym, &[u8], &[u8; 64]); 2] = [
         (AlgSym::Aes128, &AES128_KEY, &AES128_CFB_CIPHERTEXT),
         (AlgSym::Aes256, &AES256_KEY, &AES256_CFB_CIPHERTEXT),
     ];
+    let cfb = TpmiAlgCipherMode::Cfb;
     for (alg, key, ciphertext) in vectors {
         // Encryption: the output IV is the last ciphertext block.
         let mut iv = NIST_IV;
         let mut data = NIST_PLAINTEXT;
-        aes_cfb(&provider, alg, key, &mut iv, Direction::Encrypt, &mut data).unwrap();
+        crypt(alg, key, cfb, &mut iv, Direction::Encrypt, &mut data).unwrap();
         assert_eq!(&data, ciphertext, "{alg:?} encryption");
         assert_eq!(iv[..], ciphertext[48..], "{alg:?} encryption IV out");
 
         // Decryption: the output IV is also the last ciphertext block.
         let mut iv = NIST_IV;
         let mut data = *ciphertext;
-        aes_cfb(&provider, alg, key, &mut iv, Direction::Decrypt, &mut data).unwrap();
+        crypt(alg, key, cfb, &mut iv, Direction::Decrypt, &mut data).unwrap();
         assert_eq!(data, NIST_PLAINTEXT, "{alg:?} decryption");
         assert_eq!(iv[..], ciphertext[48..], "{alg:?} decryption IV out");
     }
 }
 
 #[test]
-fn test_rust_crypto_provider_aes_cfb_encrypt_decrypt_wrappers() {
-    let provider = RustCryptoProvider;
-    let key = SymmetricKey::new(AlgSym::Aes128, &AES128_KEY).unwrap();
-
-    let mut iv = NIST_IV;
-    let mut data = NIST_PLAINTEXT;
-    let mode = ModeIv::new(TpmiAlgCipherMode::Cfb, &mut iv).unwrap();
-    symmetric::encrypt(&provider, key, mode, &mut data).unwrap();
-    assert_eq!(data, AES128_CFB_CIPHERTEXT);
-
-    let mut iv = NIST_IV;
-    let mode = ModeIv::new(TpmiAlgCipherMode::Cfb, &mut iv).unwrap();
-    symmetric::decrypt(&provider, key, mode, &mut data).unwrap();
-    assert_eq!(data, NIST_PLAINTEXT);
-}
-
-#[test]
-fn test_rust_crypto_provider_aes_cfb_iv_chaining() {
-    let provider = RustCryptoProvider;
-
-    // Encrypting block-aligned chunks while chaining the output IV gives the
-    // same ciphertext as a single call.
+fn aes_cfb_iv_chaining() {
+    let (alg, cfb) = (AlgSym::Aes128, TpmiAlgCipherMode::Cfb);
+    // Encrypting block-aligned chunks while chaining the output IV gives the same ciphertext as
+    // a single call.
     let mut iv = NIST_IV;
     let mut data = NIST_PLAINTEXT;
     let (first, second) = data.split_at_mut(32);
-    aes_cfb(
-        &provider,
-        AlgSym::Aes128,
-        &AES128_KEY,
-        &mut iv,
-        Direction::Encrypt,
-        first,
-    )
-    .unwrap();
+    crypt(alg, &AES128_KEY, cfb, &mut iv, Direction::Encrypt, first).unwrap();
     assert_eq!(iv[..], AES128_CFB_CIPHERTEXT[16..32]);
-    aes_cfb(
-        &provider,
-        AlgSym::Aes128,
-        &AES128_KEY,
-        &mut iv,
-        Direction::Encrypt,
-        second,
-    )
-    .unwrap();
+    crypt(alg, &AES128_KEY, cfb, &mut iv, Direction::Encrypt, second).unwrap();
     assert_eq!(data, AES128_CFB_CIPHERTEXT);
     assert_eq!(iv[..], AES128_CFB_CIPHERTEXT[48..]);
 
     // The same holds for decryption.
     let mut iv = NIST_IV;
     let (first, second) = data.split_at_mut(16);
-    aes_cfb(
-        &provider,
-        AlgSym::Aes128,
-        &AES128_KEY,
-        &mut iv,
-        Direction::Decrypt,
-        first,
-    )
-    .unwrap();
-    aes_cfb(
-        &provider,
-        AlgSym::Aes128,
-        &AES128_KEY,
-        &mut iv,
-        Direction::Decrypt,
-        second,
-    )
-    .unwrap();
+    crypt(alg, &AES128_KEY, cfb, &mut iv, Direction::Decrypt, first).unwrap();
+    crypt(alg, &AES128_KEY, cfb, &mut iv, Direction::Decrypt, second).unwrap();
     assert_eq!(data, NIST_PLAINTEXT);
     assert_eq!(iv[..], AES128_CFB_CIPHERTEXT[48..]);
 }
 
 #[test]
-fn test_rust_crypto_provider_aes_cfb_partial_block_iv() {
-    let provider = RustCryptoProvider;
-    // After a final partial block of `n` bytes, the output IV is those `n`
-    // ciphertext bytes followed by the rest of the previous chaining value
-    // (here the first ciphertext block).
+fn aes_cfb_partial_block_iv() {
+    let (alg, cfb) = (AlgSym::Aes128, TpmiAlgCipherMode::Cfb);
+    // After a final partial block of `n` bytes, the output IV is those `n` ciphertext bytes
+    // padded with zeros (TPM 2.0).
     let mut expected_iv = [0u8; 16];
     expected_iv[..4].copy_from_slice(&AES128_CFB_CIPHERTEXT[16..20]);
-    expected_iv[4..].copy_from_slice(&AES128_CFB_CIPHERTEXT[4..16]);
-    assert_eq!(expected_iv, hex!("c8a64537b72dad20333449f8e83cfb4a"));
 
     let mut iv = NIST_IV;
     let mut data: [u8; 20] = NIST_PLAINTEXT[..20].try_into().unwrap();
-    aes_cfb(
-        &provider,
-        AlgSym::Aes128,
+    crypt(
+        alg,
         &AES128_KEY,
+        cfb,
         &mut iv,
         Direction::Encrypt,
         &mut data,
@@ -239,10 +297,10 @@ fn test_rust_crypto_provider_aes_cfb_partial_block_iv() {
     assert_eq!(iv, expected_iv);
 
     let mut iv = NIST_IV;
-    aes_cfb(
-        &provider,
-        AlgSym::Aes128,
+    crypt(
+        alg,
         &AES128_KEY,
+        cfb,
         &mut iv,
         Direction::Decrypt,
         &mut data,
@@ -251,56 +309,58 @@ fn test_rust_crypto_provider_aes_cfb_partial_block_iv() {
     assert_eq!(data[..], NIST_PLAINTEXT[..20]);
     assert_eq!(iv, expected_iv);
 
-    // A partial first block keeps the tail of the input IV.
+    // The mode function itself leaves the rest of the previous chaining value.
+    let cipher = <RustCryptoCipher<aes::Aes128> as SymmetricState<16>>::init(&AES128_KEY).unwrap();
     let mut iv = NIST_IV;
     let mut data: [u8; 3] = NIST_PLAINTEXT[..3].try_into().unwrap();
-    aes_cfb(
-        &provider,
-        AlgSym::Aes128,
-        &AES128_KEY,
-        &mut iv,
-        Direction::Encrypt,
-        &mut data,
-    )
-    .unwrap();
+    SymmetricState::<16>::cfb(&cipher, Direction::Encrypt, &mut iv, &mut data).unwrap();
     assert_eq!(data[..], AES128_CFB_CIPHERTEXT[..3]);
     assert_eq!(iv[..3], AES128_CFB_CIPHERTEXT[..3]);
     assert_eq!(iv[3..], NIST_IV[3..]);
 
     // Empty data leaves the IV unchanged.
     let mut iv = NIST_IV;
-    aes_cfb(
-        &provider,
-        AlgSym::Aes128,
-        &AES128_KEY,
-        &mut iv,
-        Direction::Encrypt,
-        &mut [],
-    )
-    .unwrap();
+    crypt(alg, &AES128_KEY, cfb, &mut iv, Direction::Encrypt, &mut []).unwrap();
     assert_eq!(iv, NIST_IV);
 }
 
 /// The AES-256 modes other than CFB match the first block of NIST SP 800-38A F.1.5 (ECB), F.2.5
-/// (CBC), F.4.5 (OFB) and F.5.5 (CTR), with the TCG reference's `ivOut`; SM4 is unsupported and
-/// leaves the data and the IV untouched.
+/// (CBC), F.4.5 (OFB) and F.5.5 (CTR), with the TCG reference's `ivOut`.
 #[test]
-fn test_rust_crypto_provider_symmetric_modes() {
-    let provider = RustCryptoProvider;
-    let key = SymmetricKey::new(AlgSym::Aes256, &AES256_KEY).unwrap();
+fn aes_modes() {
+    let alg = AlgSym::Aes256;
     let pt: [u8; 16] = NIST_PLAINTEXT[..16].try_into().unwrap();
 
     let mut data = pt;
-    encrypt_decrypt(&provider, key, ModeIv::Ecb, Direction::Encrypt, &mut data).unwrap();
+    let ecb = TpmiAlgCipherMode::Ecb;
+    crypt(
+        alg,
+        &AES256_KEY,
+        ecb,
+        &mut [],
+        Direction::Encrypt,
+        &mut data,
+    )
+    .unwrap();
     assert_eq!(data, hex!("f3eed1bdb5d2a03c064b5a7e3db181f8"));
-    encrypt_decrypt(&provider, key, ModeIv::Ecb, Direction::Decrypt, &mut data).unwrap();
+    crypt(
+        alg,
+        &AES256_KEY,
+        ecb,
+        &mut [],
+        Direction::Decrypt,
+        &mut data,
+    )
+    .unwrap();
     assert_eq!(data, pt);
 
+    let cbc = TpmiAlgCipherMode::Cbc;
     let mut iv = NIST_IV;
-    encrypt_decrypt(
-        &provider,
-        key,
-        ModeIv::Cbc(&mut iv),
+    crypt(
+        alg,
+        &AES256_KEY,
+        cbc,
+        &mut iv,
         Direction::Encrypt,
         &mut data,
     )
@@ -308,10 +368,11 @@ fn test_rust_crypto_provider_symmetric_modes() {
     assert_eq!(data, hex!("f58c4c04d6e5f1ba779eabfb5f7bfbd6"));
     assert_eq!(iv, data);
     let mut iv = NIST_IV;
-    encrypt_decrypt(
-        &provider,
-        key,
-        ModeIv::Cbc(&mut iv),
+    crypt(
+        alg,
+        &AES256_KEY,
+        cbc,
+        &mut iv,
         Direction::Decrypt,
         &mut data,
     )
@@ -319,10 +380,12 @@ fn test_rust_crypto_provider_symmetric_modes() {
     assert_eq!(data, pt);
 
     let mut iv = NIST_IV;
-    encrypt_decrypt(
-        &provider,
-        key,
-        ModeIv::Ofb(&mut iv),
+    let ofb = TpmiAlgCipherMode::Ofb;
+    crypt(
+        alg,
+        &AES256_KEY,
+        ofb,
+        &mut iv,
         Direction::Encrypt,
         &mut data,
     )
@@ -333,10 +396,12 @@ fn test_rust_crypto_provider_symmetric_modes() {
 
     let mut data = pt;
     let mut iv = hex!("f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff");
-    encrypt_decrypt(
-        &provider,
-        key,
-        ModeIv::Ctr(&mut iv),
+    let ctr = TpmiAlgCipherMode::Ctr;
+    crypt(
+        alg,
+        &AES256_KEY,
+        ctr,
+        &mut iv,
         Direction::Encrypt,
         &mut data,
     )
@@ -344,173 +409,84 @@ fn test_rust_crypto_provider_symmetric_modes() {
     assert_eq!(data, hex!("601ec313775789a5b7a7f504bbf3d228"));
     // ivOut is the next counter block.
     assert_eq!(iv, hex!("f0f1f2f3f4f5f6f7f8f9fafbfcfdff00"));
+}
 
-    use tpm2::crypto::Symmetric;
-    let mut data = pt;
-    let mut iv = NIST_IV;
-    assert_eq!(
-        provider.sm4_128(
-            &AES128_KEY,
-            ModeIv::Cbc(&mut iv),
-            Direction::Encrypt,
-            &mut data
-        ),
-        Err(CryptoError::Unsupported)
+/// Camellia-128/192/256: the known answers of RFC 3713, Appendix A.
+#[test]
+fn camellia_known_answer() {
+    let pt = hex!("0123456789abcdeffedcba9876543210");
+    let key = hex!("0123456789abcdeffedcba98765432100011223344556677" "8899aabbccddeeff");
+    let ecb = |state: &dyn Fn(&mut [[u8; 16]], Direction), expected: [u8; 16]| {
+        let mut blocks = [pt];
+        state(&mut blocks, Direction::Encrypt);
+        assert_eq!(blocks[0], expected);
+        state(&mut blocks, Direction::Decrypt);
+        assert_eq!(blocks[0], pt);
+    };
+    let c128 = <RustCryptoCipher<camellia::Camellia128> as SymmetricState<16>>::init(&pt).unwrap();
+    ecb(
+        &|b, dir| SymmetricState::<16>::ecb(&c128, dir, b).unwrap(),
+        hex!("67673138549669730857065648eabe43"),
     );
-    assert_eq!((data, iv), (pt, NIST_IV));
+    let c192 = <RustCryptoCipher<camellia::Camellia192> as SymmetricState<24>>::init(
+        key[..24].try_into().unwrap(),
+    )
+    .unwrap();
+    ecb(
+        &|b, dir| SymmetricState::<24>::ecb(&c192, dir, b).unwrap(),
+        hex!("b4993401b3e996f84ee5cee7d79b09b9"),
+    );
+    let c256 = <RustCryptoCipher<camellia::Camellia256> as SymmetricState<32>>::init(&key).unwrap();
+    ecb(
+        &|b, dir| SymmetricState::<32>::ecb(&c256, dir, b).unwrap(),
+        hex!("9acc237dff16d76c20ef7c919e3a7509"),
+    );
 }
 
-/// A CMAC test vector: the cipher, its key, and the MACs of the first 0, 16,
-/// 40 and 64 bytes of [`NIST_PLAINTEXT`].
-type CmacVector = (AlgSym, &'static [u8], [[u8; 16]; 4]);
-
 #[test]
-fn test_rust_crypto_provider_cmac_known_answer() {
-    let provider = RustCryptoProvider;
+fn cmac_known_answer() {
+    use tpm2_crypto_rust::{RustCryptoCmacAes128, RustCryptoCmacAes256};
     // NIST SP 800-38B, Appendix D.1-D.3 (messages of 0, 16, 40 and 64 bytes).
-    let vectors: [CmacVector; 2] = [
-        (
-            AlgSym::Aes128,
-            &AES128_KEY,
-            [
-                hex!("bb1d6929e95937287fa37d129b756746"),
-                hex!("070a16b46b4d4144f79bdd9dd04a287c"),
-                hex!("dfa66747de9ae63030ca32611497c827"),
-                hex!("51f0bebf7e3b9d92fc49741779363cfe"),
-            ],
-        ),
-        (
-            AlgSym::Aes256,
-            &AES256_KEY,
-            [
-                hex!("028962f61b7bf89efc6b551f4667d983"),
-                hex!("28a7023f452e8f82bd4bf28d8c37c35c"),
-                hex!("aaf3d8f1de5640c232f5b169b9c911e6"),
-                hex!("e1992190549f6ed5696a2c056c315410"),
-            ],
-        ),
+    let aes128 = [
+        hex!("bb1d6929e95937287fa37d129b756746"),
+        hex!("070a16b46b4d4144f79bdd9dd04a287c"),
+        hex!("dfa66747de9ae63030ca32611497c827"),
+        hex!("51f0bebf7e3b9d92fc49741779363cfe"),
     ];
-    for (alg, key, macs) in vectors {
-        let key = SymmetricKey::new(alg, key).unwrap();
-        for (len, expected) in [0, 16, 40, 64].into_iter().zip(macs) {
-            let message = &NIST_PLAINTEXT[..len];
+    let aes256 = [
+        hex!("028962f61b7bf89efc6b551f4667d983"),
+        hex!("28a7023f452e8f82bd4bf28d8c37c35c"),
+        hex!("aaf3d8f1de5640c232f5b169b9c911e6"),
+        hex!("e1992190549f6ed5696a2c056c315410"),
+    ];
+    for (len, (mac128, mac256)) in [0, 16, 40, 64]
+        .into_iter()
+        .zip(aes128.into_iter().zip(aes256))
+    {
+        let message = &NIST_PLAINTEXT[..len];
+        // One-shot.
+        let mut mac = [0u8; 16];
+        RustCryptoCmacAes128::cmac(&AES128_KEY, &[message], &mut mac).unwrap();
+        assert_eq!(mac, mac128, "AES-128 CMAC of {len} bytes");
+        RustCryptoCmacAes256::cmac(&AES256_KEY, &[message], &mut mac).unwrap();
+        assert_eq!(mac, mac256, "AES-256 CMAC of {len} bytes");
 
-            // One-shot.
-            let mut mac = [0u8; 16];
-            cmac(&provider, key, message, &mut mac).unwrap();
-            assert_eq!(mac, expected, "{alg:?} CMAC of {len} bytes");
-
-            // Streaming, in uneven pieces.
-            let mut stream = CmacStream::new(&provider, key).unwrap();
-            for piece in message.chunks(7) {
-                stream.update(piece).unwrap();
-            }
-            let mut mac = [0u8; 16];
-            stream.finalize(&mut mac).unwrap();
-            assert_eq!(mac, expected, "{alg:?} streaming CMAC of {len} bytes");
+        // Streaming, in uneven pieces.
+        let mut state = <RustCryptoCmacAes128 as CmacState<16>>::init(&AES128_KEY).unwrap();
+        for piece in message.chunks(7) {
+            CmacState::<16>::update(&mut state, piece).unwrap();
         }
+        CmacState::<16>::finalize(&mut state, &mut mac).unwrap();
+        assert_eq!(mac, mac128, "AES-128 streaming CMAC of {len} bytes");
     }
-}
-
-#[test]
-fn test_rust_crypto_provider_cmac_unsupported() {
-    let provider = RustCryptoProvider;
-    let key16 = [0x11u8; 16];
-    use tpm2::crypto::Cmac;
-    assert!(matches!(
-        provider.sm4_128(&key16),
-        Err(CryptoError::Unsupported)
-    ));
-}
-
-#[test]
-fn test_rust_crypto_provider_hash_hmac_unsupported() {
-    let provider = RustCryptoProvider;
-    assert!(matches!(
-        Hash::sm3_256(&provider),
-        Err(CryptoError::Unsupported)
-    ));
-    assert!(matches!(
-        Hash::sha3_256(&provider),
-        Err(CryptoError::Unsupported)
-    ));
-    assert!(matches!(
-        Hash::sha3_384(&provider),
-        Err(CryptoError::Unsupported)
-    ));
-    assert!(matches!(
-        Hash::sha3_512(&provider),
-        Err(CryptoError::Unsupported)
-    ));
-    assert!(matches!(
-        Hmac::sm3_256(&provider, b"key"),
-        Err(CryptoError::Unsupported)
-    ));
-    assert!(matches!(
-        Hmac::sha3_256(&provider, b"key"),
-        Err(CryptoError::Unsupported)
-    ));
-    assert!(matches!(
-        Hmac::sha3_384(&provider, b"key"),
-        Err(CryptoError::Unsupported)
-    ));
-    assert!(matches!(
-        Hmac::sha3_512(&provider, b"key"),
-        Err(CryptoError::Unsupported)
-    ));
-}
-
-#[test]
-fn test_rust_crypto_provider_constant_time_eq() {
-    let provider = RustCryptoProvider;
-    assert!(provider.constant_time_eq(&[], &[]));
-
-    let a = [0x5Au8; 32];
-    assert!(provider.constant_time_eq(&a, &a.clone()));
-    for i in [0, 15, 31] {
-        let mut b = a;
-        b[i] ^= 0x01;
-        assert!(!provider.constant_time_eq(&a, &b), "difference at byte {i}");
-    }
-
-    let b = [0x5Au8; 32];
-    assert!(digest_eq(&provider, TpmtHa::Sha256(&a), TpmtHa::Sha256(&b)));
-    let mut c = b;
-    c[7] = 0;
-    assert!(!digest_eq(
-        &provider,
-        TpmtHa::Sha256(&a),
-        TpmtHa::Sha256(&c)
-    ));
-    // Digests of different algorithms never compare equal.
-    assert!(!digest_eq(
-        &provider,
-        TpmtHa::Sha256(&a),
-        TpmtHa::Sha384(&[0x5Au8; 48])
-    ));
-}
-
-#[test]
-fn test_rust_crypto_provider_random_defaults() {
-    let provider = RustCryptoProvider;
-    // There is no RNG factory: the engine uses `CryptoProvider::get_random`.
-    assert!(matches!(provider.rng(), Err(CryptoError::Unsupported)));
-    assert!(matches!(
-        provider.rng_seeded(b"seed"),
-        Err(CryptoError::Unsupported)
-    ));
-    // The OS entropy source cannot be stirred: the data is ignored.
-    assert_eq!(provider.stir_random(b"additional entropy"), Ok(()));
-    let mut buf = [0u8; 0];
-    assert_eq!(provider.get_random(&mut buf), Ok(()));
 }
 
 // ==========================================
 // ECC
 // ==========================================
 
-/// `2 * G` on each curve implemented with its own arithmetic or a RustCrypto
-/// crate, with the curve's coordinate size and the expected `x || y`.
+/// `2 * G` on each curve of the TPM profile, with the curve's coordinate size and the expected
+/// `x || y`.
 fn ecc_double_generator_vectors() -> [(TpmEccCurve, usize, Vec<u8>); 5] {
     [
         (
@@ -567,201 +543,190 @@ fn ecc_double_generator_vectors() -> [(TpmEccCurve, usize, Vec<u8>); 5] {
     ]
 }
 
-#[test]
-fn test_rust_crypto_provider_ecc_known_answer() {
-    let provider = RustCryptoProvider;
-    for (curve, n, expected) in ecc_double_generator_vectors() {
-        // 2 * G from the generator.
-        let mut out = [0u8; 132];
-        let len = provider
-            .point_multiply_generator(curve, &[2], &mut out)
-            .unwrap();
-        assert_eq!(len, Some(2 * n), "{curve:?}");
-        assert_eq!(out[..2 * n], expected[..], "{curve:?}");
-        assert_eq!(provider.validate_point(curve, &expected), Ok(true));
-
-        // 2 * G as 2 * (1 * G).
-        let mut g = [0u8; 132];
-        provider
-            .point_multiply_generator(curve, &[1], &mut g)
-            .unwrap()
-            .unwrap();
-        let mut out = [0u8; 132];
-        let len = provider
-            .point_multiply(curve, &[2], &g[..2 * n], &mut out)
-            .unwrap();
-        assert_eq!(len, Some(2 * n), "{curve:?}");
-        assert_eq!(out[..2 * n], expected[..], "{curve:?}");
+/// The point `x || y` as a `TPMS_ECC_POINT`.
+fn ecc_point(xy: &[u8], n: usize) -> TpmsEccPoint<'_> {
+    TpmsEccPoint {
+        x: Tpm2bEccParameter::new(&xy[..n]).unwrap(),
+        y: Tpm2bEccParameter::new(&xy[n..2 * n]).unwrap(),
     }
 }
 
 #[test]
-fn test_rust_crypto_provider_ecc_result_conventions() {
-    let provider = RustCryptoProvider;
+fn ecc_point_multiplication() {
     for (curve, n, two_g) in ecc_double_generator_vectors() {
-        let mut out = [0u8; 132];
-        // A zero scalar has no valid result.
+        let (mut x, mut y) = ([0u8; 66], [0u8; 66]);
+        // 2 * G from the generator.
+        let q = ecc_mul_generator::<C>(curve, &[2], &mut x, &mut y)
+            .unwrap()
+            .unwrap();
         assert_eq!(
-            provider.point_multiply_generator(curve, &[0], &mut out),
-            Ok(None),
+            (q.x.as_slice(), q.y.as_slice()),
+            (&two_g[..n], &two_g[n..]),
             "{curve:?}"
         );
-        assert_eq!(
-            provider.point_multiply(curve, &[0], &two_g, &mut out),
-            Ok(None),
-            "{curve:?}"
+        // 2 * G as 2 * (1 * G); 0 * G and 0 * P have no result.
+        let (mut gx, mut gy) = ([0u8; 66], [0u8; 66]);
+        let g = ecc_mul_generator::<C>(curve, &[1], &mut gx, &mut gy)
+            .unwrap()
+            .unwrap();
+        let g = EccPublicKey::<C>::load(curve, None, g).unwrap().unwrap();
+        let q = g.mul_point(&[2], &mut x, &mut y).unwrap().unwrap();
+        assert_eq!(q.x.as_slice(), &two_g[..n], "{curve:?}");
+        assert!(
+            ecc_mul_generator::<C>(curve, &[0], &mut x, &mut y)
+                .unwrap()
+                .is_none()
         );
+        assert!(g.mul_point(&[0], &mut x, &mut y).unwrap().is_none());
         // A point that is not on the curve is invalid.
         let mut off_curve = two_g.clone();
         off_curve[2 * n - 1] ^= 0x01;
-        assert_eq!(
-            provider.validate_point(curve, &off_curve),
-            Ok(false),
-            "{curve:?}"
-        );
-        assert_eq!(
-            provider.point_multiply(curve, &[3], &off_curve, &mut out),
-            Ok(None),
-            "{curve:?}"
-        );
-        // A point of the wrong length is invalid.
-        assert_eq!(
-            provider.validate_point(curve, &two_g[1..]),
-            Ok(false),
-            "{curve:?}"
-        );
-        // An output buffer that is too small is an internal error.
-        assert_eq!(
-            provider.point_multiply_generator(curve, &[2], &mut out[..2 * n - 1]),
-            Err(CryptoError::Internal),
+        assert!(
+            EccPublicKey::<C>::load(curve, None, ecc_point(&off_curve, n))
+                .unwrap()
+                .is_none(),
             "{curve:?}"
         );
     }
-
-    // ECDAA is only implemented on NIST P-256.
-    let mut k = [0u8; 48];
-    let mut s = [0u8; 48];
-    let res = provider.ecdaa_sign(
-        TpmEccCurve::NistP384,
-        &[1],
-        &[],
-        &[],
-        &[2],
-        &[0u8; 48],
-        &mut k,
-        &mut s,
-    );
-    assert_eq!(res, Err(CryptoError::Unsupported));
-
-    // Curves without an implementation are unsupported.
-    let mut out = [0u8; 64];
-    assert_eq!(
-        provider.point_multiply_generator(TpmEccCurve::None, &[2], &mut out),
-        Err(CryptoError::Unsupported)
-    );
-    assert_eq!(
-        provider.validate_point(TpmEccCurve::None, &[0u8; 64]),
-        Err(CryptoError::Unsupported)
-    );
 }
 
+/// ECDSA signatures and ECDH, through the dispatch enums.
 #[test]
-fn test_rust_crypto_provider_ecdaa_sign_p256() {
-    // ECDAA signing is implemented in tpm2-engine (it needs the scheme hash); the provider
-    // primitive reports that it is not supported instead of producing non-spec signatures.
-    let provider = RustCryptoProvider;
-    let digest = [0xA5u8; 32];
-    let mut k = [0u8; 32];
-    let mut s = [0u8; 32];
-    let res = provider.ecdaa_sign(
-        TpmEccCurve::NistP256,
-        &[7],
-        &[],
-        &[],
-        &[9],
-        &digest,
-        &mut k,
-        &mut s,
-    );
-    assert_eq!(res, Err(CryptoError::Unsupported));
-}
-
-#[test]
-fn test_rust_crypto_provider_ecdsa_result_conventions() {
-    let provider = RustCryptoProvider;
+fn ecc_keys() {
+    let mut rng = C::from_seed(b"ecc seed").unwrap();
     let digest = [0x42u8; 32];
-    for (curve, n) in [
-        (TpmEccCurve::NistP256, 32),
-        (TpmEccCurve::NistP384, 48),
-        (TpmEccCurve::NistP521, 66),
-    ] {
-        let mut public_key = [0u8; 132];
-        let mut private_key = [0u8; 66];
-        let (pub_len, priv_len) = provider
-            .ecc_generate_key(curve, &mut public_key, &mut private_key, Some(b"seed"))
-            .unwrap();
-        assert_eq!((pub_len, priv_len), (2 * n, n), "{curve:?}");
+    for (curve, n, _) in ecc_double_generator_vectors() {
+        let key = EccPrivateKey::<C>::generate(&mut rng, curve, None).unwrap();
+        let (mut x, mut y) = ([0u8; 66], [0u8; 66]);
+        let q = key.point(&mut x, &mut y).unwrap();
+        assert_eq!(q.x.as_slice().len(), n);
+        let public = EccPublicKey::<C>::load(curve, None, q).unwrap().unwrap();
 
-        let mut signature = [0u8; 132];
-        let sig_len = provider
-            .ecdsa_sign(
-                &private_key[..priv_len],
-                TpmtHa::Sha256(&digest),
-                &mut signature,
-            )
-            .unwrap();
-        assert_eq!(sig_len, Some(2 * n), "{curve:?}");
-        let signature = &mut signature[..2 * n];
+        let mut buf: SignatureBuffer = [0; _];
+        let scheme = TpmtSigScheme::Ecdsa(TpmiAlgHash::Sha256);
+        let signature = key.sign(&mut rng, scheme, &digest, &mut buf).unwrap();
+        assert_eq!(public.verify(&digest, signature), Ok(true), "{curve:?}");
         assert_eq!(
-            provider.ecdsa_verify(&public_key[..pub_len], TpmtHa::Sha256(&digest), signature),
-            Ok(true),
-            "{curve:?}"
-        );
-
-        // A corrupted signature or a mismatched digest does not verify.
-        assert_eq!(
-            provider.ecdsa_verify(
-                &public_key[..pub_len],
-                TpmtHa::Sha256(&[0x43u8; 32]),
-                signature
-            ),
-            Ok(false),
-            "{curve:?}"
-        );
-        signature[n] ^= 0x01;
-        assert_eq!(
-            provider.ecdsa_verify(&public_key[..pub_len], TpmtHa::Sha256(&digest), signature),
+            public.verify(&[0x43; 32], signature),
             Ok(false),
             "{curve:?}"
         );
 
-        // A signature buffer that is too small is an internal error.
-        let mut small = [0u8; 132];
-        assert_eq!(
-            provider.ecdsa_sign(
-                &private_key[..priv_len],
-                TpmtHa::Sha256(&digest),
-                &mut small[..2 * n - 1]
-            ),
-            Err(CryptoError::Internal),
-            "{curve:?}"
-        );
-        // A zero private key is invalid.
-        assert_eq!(
-            provider.ecdsa_sign(&[0u8; 66][..n], TpmtHa::Sha256(&digest), &mut small),
-            Ok(None),
-            "{curve:?}"
-        );
+        // ECDH is symmetric.
+        let other = EccPrivateKey::<C>::generate(&mut rng, curve, None).unwrap();
+        let (mut ox, mut oy) = ([0u8; 66], [0u8; 66]);
+        let other_public =
+            EccPublicKey::<C>::load(curve, None, other.point(&mut ox, &mut oy).unwrap())
+                .unwrap()
+                .unwrap();
+        let (mut z1x, mut z1y, mut z2x, mut z2y) = ([0u8; 66], [0u8; 66], [0u8; 66], [0u8; 66]);
+        let z1 = key
+            .ecdh(&other_public, &mut z1x, &mut z1y)
+            .unwrap()
+            .unwrap();
+        let z2 = other.ecdh(&public, &mut z2x, &mut z2y).unwrap().unwrap();
+        assert_eq!(z1, z2, "{curve:?}");
     }
-    // Keys of an unsupported size cannot sign.
-    let mut signature = [0u8; 132];
+}
+
+/// Key generation, loading and storing, ECDSA, ECDH and the point multiplications of the
+/// backend key type `K` of a curve with `COORD`-byte coordinates.
+fn check_ecc_key_type<K, const COORD: usize, const POINT: usize>()
+where
+    K: EccCurve<COORD, POINT, R>,
+{
+    let mut rng = C::from_seed(b"ecc key type").unwrap();
+    let key = K::generate(&mut rng, ()).unwrap();
+    let (mut d, mut q) = ([0u8; COORD], [0u8; POINT]);
+    key.store(&mut d).unwrap();
+    K::store_public(key.as_public(), &mut q).unwrap();
+    let (mut x, mut y) = ([0u8; COORD], [0u8; COORD]);
+    K::mul_generator(&d, &mut x, &mut y).unwrap().unwrap();
+    assert_eq!((&x[..], &y[..]), (&q[..COORD], &q[COORD..]));
+    let public = K::load_public((), &q).unwrap().unwrap();
+    let loaded = K::load(public, &d).unwrap().unwrap();
+    let public = K::load_public((), &q).unwrap().unwrap();
+    assert!(K::load(public, &[0; COORD]).unwrap().is_none());
+
+    let digest = [0x5a; 48];
+    let (mut r, mut s) = ([0u8; COORD], [0u8; COORD]);
+    loaded.sign(&mut rng, &digest, &mut r, &mut s).unwrap();
+    assert!(K::verify(key.as_public(), &digest, &r, &s).unwrap());
+    assert!(!K::verify(key.as_public(), &[0x5b; 48], &r, &s).unwrap());
+    let (mut zx, mut zy) = ([0u8; COORD], [0u8; COORD]);
+    key.ecdh(loaded.as_public(), &mut zx, &mut zy)
+        .unwrap()
+        .unwrap();
+    K::mul_point(key.as_public(), &d, &mut x, &mut y)
+        .unwrap()
+        .unwrap();
+    assert_eq!((zx, zy), (x, y));
+}
+
+/// The backend key types of all supported Weierstrass curves.
+#[test]
+fn ecc_key_types() {
+    use tpm2::crypto::backend::Ecc;
+    check_ecc_key_type::<<C as Ecc>::NistP192, 24, 48>();
+    check_ecc_key_type::<<C as Ecc>::NistP224, 28, 56>();
+    check_ecc_key_type::<<C as Ecc>::NistP256, 32, 64>();
+    check_ecc_key_type::<<C as Ecc>::NistP384, 48, 96>();
+    check_ecc_key_type::<<C as Ecc>::NistP521, 66, 132>();
+    check_ecc_key_type::<<C as Ecc>::BNP256, 32, 64>();
+    check_ecc_key_type::<<C as Ecc>::BNP638, 80, 160>();
+    check_ecc_key_type::<<C as Ecc>::SM2P256, 32, 64>();
+}
+
+/// The generic ECDSA of `tpm2-crypto-weierstrass` (on NIST P-256) and the `p256` crate verify
+/// each other's signatures.
+#[test]
+fn weierstrass_ecdsa_matches_p256() {
+    use p256::ecdsa::signature::hazmat::{PrehashSigner as _, PrehashVerifier as _};
+
+    /// NIST P-256 for the generic arithmetic.
+    struct P256Id;
+    impl tpm2_crypto_weierstrass::CurveId for P256Id {
+        fn params() -> &'static tpm2::crypto::EccCurveParams {
+            &tpm2::crypto::NIST_P256
+        }
+    }
+    const LIMBS: usize = 32 / core::mem::size_of::<usize>();
+    type Generic = tpm2_crypto_weierstrass::EcPrivateKey<P256Id, LIMBS, 32>;
+
+    let mut rng = C::from_seed(b"cross check").unwrap();
+    let key = <Generic as PrivateKey<64, 32, R>>::generate(&mut rng, ()).unwrap();
+    let (mut d, mut q) = ([0u8; 32], [0u8; 64]);
+    PrivateKey::<64, 32, R>::store(&key, &mut d).unwrap();
+    <Generic as PrivateKey<64, 32, R>>::store_public(
+        PrivateKey::<64, 32, R>::as_public(&key),
+        &mut q,
+    )
+    .unwrap();
+    let signing_key = p256::ecdsa::SigningKey::from_slice(&d).unwrap();
+    let verifying_key = p256::ecdsa::VerifyingKey::from(&signing_key);
+    let mut sec1 = [0x04; 65];
+    sec1[1..].copy_from_slice(&q);
     assert_eq!(
-        provider.ecdsa_sign(&[], TpmtHa::Sha256(&digest), &mut signature),
-        Ok(None)
+        verifying_key,
+        p256::ecdsa::VerifyingKey::from_sec1_bytes(&sec1).unwrap()
     );
-    assert_eq!(
-        provider.ecdsa_sign(&[1u8; 67], TpmtHa::Sha256(&digest), &mut signature),
-        Ok(None)
+
+    let digest = [0x17u8; 32];
+    let (mut r, mut s) = ([0u8; 32], [0u8; 32]);
+    EccCurve::<32, 64, R>::sign(&key, &mut rng, &digest, &mut r, &mut s).unwrap();
+    let signature = p256::ecdsa::Signature::from_scalars(r, s).unwrap();
+    assert!(verifying_key.verify_prehash(&digest, &signature).is_ok());
+
+    let signature: p256::ecdsa::Signature = signing_key.sign_prehash(&digest).unwrap();
+    let (r, s) = signature.split_bytes();
+    assert!(
+        <Generic as EccCurve<32, 64, R>>::verify(
+            PrivateKey::<64, 32, R>::as_public(&key),
+            &digest,
+            &r.into(),
+            &s.into()
+        )
+        .unwrap()
     );
 }
 
@@ -769,327 +734,607 @@ fn test_rust_crypto_provider_ecdsa_result_conventions() {
 // RSA
 // ==========================================
 
+type Rsa1024 = RustCryptoRsa1024;
+
+/// Generates a deterministic RSA-1024 key and returns it with its modulus.
+fn rsa1024_key() -> (Rsa1024, [u8; 128]) {
+    let key = <Rsa1024 as PrivateKey<128, 64, R, u32>>::generate(
+        &mut C::from_seed(b"rsa seed").unwrap(),
+        65537,
+    )
+    .unwrap();
+    let mut n = [0u8; 128];
+    <Rsa1024 as PrivateKey<128, 64, R, u32>>::store_public(
+        PrivateKey::<128, 64, R, u32>::as_public(&key),
+        &mut n,
+    )
+    .unwrap();
+    (key, n)
+}
+
 #[test]
-fn test_rust_crypto_provider_rsa_result_conventions() {
-    let provider = RustCryptoProvider;
-    let mut public_key = [0u8; 512];
-    let mut private_key = [0u8; 2048];
-    let (pub_len, priv_len) = provider
-        .rsa_generate_key(
-            TpmiRsaKeyBits(1024),
-            &mut public_key,
-            &mut private_key,
-            Some(b"rsa seed"),
-        )
+fn rsa_keys() {
+    let (key, n) = rsa1024_key();
+    assert_eq!(rsa1024_key().1, n);
+    assert!(n[0] & 0x80 != 0 && n[127] & 1 == 1);
+    let public = <Rsa1024 as PrivateKey<128, 64, R, u32>>::load_public(65537, &n)
+        .unwrap()
         .unwrap();
-    assert_eq!(pub_len, 128);
-    let public_key = &public_key[..pub_len];
-    let private_key = &private_key[..priv_len];
+    assert_eq!(<Rsa1024 as RsaKey<128, 64, R>>::exponent(&public), 65537);
 
-    // RSAES-PKCS1-v1_5 round trip; a message too large for the key is
-    // rejected.
-    let mut ciphertext = [0u8; 128];
-    let len = provider
-        .rsaes_encrypt(public_key, 0, b"secret", &mut ciphertext)
-        .unwrap();
-    assert_eq!(len, Some(128));
-    let mut plaintext = [0u8; 128];
-    let len = provider
-        .rsaes_decrypt(private_key, &ciphertext, &mut plaintext)
-        .unwrap();
-    assert_eq!(len, Some(6));
-    assert_eq!(&plaintext[..6], b"secret");
-    assert_eq!(
-        provider.rsaes_encrypt(public_key, 0, &[0x01; 118], &mut ciphertext),
-        Ok(None)
-    );
-    let mut corrupted = ciphertext;
-    corrupted[5] ^= 0x01;
-    assert_eq!(
-        provider.rsaes_decrypt(private_key, &corrupted, &mut plaintext),
-        Ok(None)
-    );
+    // The CRT form: p > q, p * q = n, dP, dQ and qInv.
+    let mut crt = [[0u8; 64]; 5];
+    RsaKey::<128, 64, R>::store_crt(&key, &mut crt).unwrap();
+    let [p, q, dp, dq, qinv] = crt.map(|v| rsa::BigUint::from_bytes_be(&v));
+    let one = rsa::BigUint::from(1u32);
+    let e = rsa::BigUint::from(65537u32);
+    assert!(p > q);
+    assert_eq!(&p * &q, rsa::BigUint::from_bytes_be(&n));
+    assert_eq!((&dp * &e) % (&p - &one), one);
+    assert_eq!((&dq * &e) % (&q - &one), one);
+    assert_eq!((&qinv * &q) % &p, one);
 
-    // OAEP round trip with a label; a wrong label, an empty label, a corrupted
-    // ciphertext, a non-UTF-8 label, or a message too large for the key are
-    // rejected.
-    let label = b"LABEL\0";
-    let len = provider
-        .oaep_encrypt(
-            TpmiAlgHash::Sha256,
-            public_key,
-            0,
-            b"secret",
-            label,
-            &mut ciphertext,
-        )
-        .unwrap();
-    assert_eq!(len, Some(128));
-    let len = provider
-        .oaep_decrypt(
-            TpmiAlgHash::Sha256,
-            private_key,
-            &ciphertext,
-            label,
-            &mut plaintext,
-        )
-        .unwrap();
-    assert_eq!(len, Some(6));
-    assert_eq!(&plaintext[..6], b"secret");
-    for bad_label in [&b"OTHER\0"[..], &[][..]] {
-        assert_eq!(
-            provider.oaep_decrypt(
-                TpmiAlgHash::Sha256,
-                private_key,
-                &ciphertext,
-                bad_label,
-                &mut plaintext
-            ),
-            Ok(None)
+    // Loading either prime gives the same key, which stores the prime it was loaded with.
+    let mut stored = [0u8; 64];
+    for prime in [crt[0], crt[1]] {
+        let public = <Rsa1024 as PrivateKey<128, 64, R, u32>>::load_public(65537, &n)
+            .unwrap()
+            .unwrap();
+        let loaded = <Rsa1024 as PrivateKey<128, 64, R, u32>>::load(public, &prime)
+            .unwrap()
+            .unwrap();
+        PrivateKey::<128, 64, R, u32>::store(&loaded, &mut stored).unwrap();
+        assert_eq!(stored, prime);
+        let mut loaded_crt = [[0u8; 64]; 5];
+        RsaKey::<128, 64, R>::store_crt(&loaded, &mut loaded_crt).unwrap();
+        assert_eq!(loaded_crt, crt);
+    }
+    // Primes that do not factor the modulus are rejected.
+    for bad in [[0u8; 64], [0xff; 64], {
+        let mut one = [0u8; 64];
+        one[63] = 1;
+        one
+    }] {
+        let public = <Rsa1024 as PrivateKey<128, 64, R, u32>>::load_public(65537, &n)
+            .unwrap()
+            .unwrap();
+        assert!(
+            <Rsa1024 as PrivateKey<128, 64, R, u32>>::load(public, &bad)
+                .unwrap()
+                .is_none()
         );
     }
-    let mut corrupted = ciphertext;
-    corrupted[10] ^= 0xFF;
-    assert_eq!(
-        provider.oaep_decrypt(
-            TpmiAlgHash::Sha256,
-            private_key,
-            &corrupted,
-            label,
-            &mut plaintext
-        ),
-        Ok(None)
+    // An even modulus or one without its top bit set is invalid.
+    let mut even = n;
+    even[127] ^= 1;
+    assert!(
+        <Rsa1024 as PrivateKey<128, 64, R, u32>>::load_public(65537, &even)
+            .unwrap()
+            .is_none()
     );
-    assert_eq!(
-        provider.oaep_decrypt(
-            TpmiAlgHash::Sha256,
-            private_key,
-            &ciphertext,
-            &[0xFF, 0xFE],
-            &mut plaintext
-        ),
-        Ok(None)
-    );
-    assert_eq!(
-        provider.oaep_encrypt(
-            TpmiAlgHash::Sha256,
-            public_key,
-            0,
-            &[0x01; 63],
-            &[],
-            &mut ciphertext
-        ),
-        Ok(None)
-    );
-
-    // Raw RSA round trip; an input that is not smaller than the modulus is
-    // rejected.
-    let len = provider
-        .rsa_null_encrypt(public_key, 0, b"raw", &mut ciphertext)
-        .unwrap();
-    assert_eq!(len, Some(128));
-    let len = provider
-        .rsa_null_decrypt(private_key, &ciphertext, &mut plaintext)
-        .unwrap();
-    assert_eq!(len, Some(128));
-    assert_eq!(&plaintext[125..128], b"raw");
-    assert_eq!(
-        provider.rsa_null_encrypt(public_key, 0, public_key, &mut ciphertext),
-        Ok(None)
-    );
-    assert_eq!(
-        provider.rsa_null_encrypt(public_key, 0, b"raw", &mut ciphertext[..127]),
-        Err(CryptoError::Internal)
-    );
-
-    // RSASSA and RSAPSS sign and verify; a corrupted signature does not
-    // verify, and a key too small for the digest and its padding cannot sign.
-    let digest = [0x5Au8; 32];
-    let mut signature = [0u8; 128];
-    for pss in [false, true] {
-        let sig_len = if pss {
-            provider.rsapss_sign(private_key, TpmtHa::Sha256(&digest), &mut signature)
-        } else {
-            provider.rsassa_sign(private_key, TpmtHa::Sha256(&digest), &mut signature)
-        }
-        .unwrap();
-        assert_eq!(sig_len, Some(128));
-        let verify = |signature: &[u8]| {
-            if pss {
-                provider.rsapss_verify(public_key, 0, TpmtHa::Sha256(&digest), signature)
-            } else {
-                provider.rsassa_verify(public_key, 0, TpmtHa::Sha256(&digest), signature)
-            }
-        };
-        assert_eq!(verify(&signature), Ok(true));
-        let mut corrupted = signature;
-        corrupted[0] ^= 0x01;
-        assert_eq!(verify(&corrupted), Ok(false));
-        assert_eq!(verify(&signature[..127]), Ok(false));
-    }
-    #[cfg(feature = "sha512")]
-    assert_eq!(
-        provider.rsapss_sign(private_key, TpmtHa::Sha512(&[0x5A; 64]), &mut signature),
-        Ok(None)
-    );
-    assert_eq!(
-        provider.rsassa_sign(private_key, TpmtHa::Sha256(&digest), &mut signature[..127]),
-        Err(CryptoError::Internal)
-    );
-    assert_eq!(
-        provider.rsassa_sign(b"not a key", TpmtHa::Sha256(&digest), &mut signature),
-        Ok(None)
-    );
-    assert_eq!(
-        provider.rsassa_verify(&[], 0, TpmtHa::Sha256(&digest), &signature),
-        Ok(false)
-    );
-
-    // Key import round trip through prime P; inconsistent components are
-    // rejected.
-    let mut prime_p = [0u8; 64];
-    let p_len = provider
-        .rsa_private_key_to_prime_p(private_key, &mut prime_p)
-        .unwrap()
-        .unwrap();
-    let mut imported = [0u8; 2048];
-    let imported_len = provider
-        .rsa_import_private_key(public_key, &prime_p[..p_len], 65537, &mut imported)
-        .unwrap()
-        .unwrap();
-    let imported = &imported[..imported_len];
-    let mut imported_p = [0u8; 64];
-    assert_eq!(
-        provider.rsa_private_key_to_prime_p(imported, &mut imported_p),
-        Ok(Some(p_len))
-    );
-    assert_eq!(imported_p[..p_len], prime_p[..p_len]);
-    // RSASSA is deterministic, so the imported key gives the same signature.
-    let mut expected = [0u8; 128];
-    provider
-        .rsassa_sign(private_key, TpmtHa::Sha256(&digest), &mut expected)
-        .unwrap();
-    assert_eq!(
-        provider.rsassa_sign(imported, TpmtHa::Sha256(&digest), &mut signature),
-        Ok(Some(128))
-    );
-    assert_eq!(signature, expected);
-    let mut imported = [0u8; 2048];
-    assert_eq!(
-        provider.rsa_import_private_key(public_key, &prime_p[..p_len], 0, &mut imported),
-        Ok(None)
-    );
-    assert_eq!(
-        provider.rsa_import_private_key(public_key, &[1], 65537, &mut imported),
-        Ok(None)
-    );
-    assert_eq!(
-        provider.rsa_import_private_key(public_key, &prime_p[..p_len], 65537, &mut imported[..1]),
-        Err(CryptoError::Internal)
-    );
-    assert_eq!(
-        provider.rsa_private_key_to_prime_p(b"not a key", &mut prime_p),
-        Ok(None)
+    let mut short = n;
+    short[0] = 0x7f;
+    assert!(
+        <Rsa1024 as PrivateKey<128, 64, R, u32>>::load_public(65537, &short)
+            .unwrap()
+            .is_none()
     );
 }
 
-/// RSA public-key operations use the key's public exponent: `0` selects the default 65537, and a
-/// key with another exponent (here 3) encrypts and verifies with that exponent only.
 #[test]
-fn test_rust_crypto_provider_rsa_public_exponent() {
-    use rsa::traits::PublicKeyParts as _;
+fn rsa_encryption() {
+    let (key, n) = rsa1024_key();
+    let mut rng = C::from_entropy().unwrap();
+    let public = PrivateKey::<128, 64, R, u32>::as_public(&key);
+    let rsa_key = key.key();
+    let (mut ct, mut pt) = ([0u8; 128], [0u8; 128]);
 
-    let provider = RustCryptoProvider;
-    let key =
-        rsa::RsaPrivateKey::new_with_exp(&mut rand_core::OsRng, 1024, &rsa::BigUint::from(3u32))
-            .unwrap();
-    let n = key.n().to_bytes_be();
-    assert_eq!(n.len(), 128);
+    // Raw RSA round trip; an input that is not smaller than the modulus is rejected.
+    let mut m = [0u8; 128];
+    m[125..].copy_from_slice(b"raw");
+    assert_eq!(
+        <Rsa1024 as RsaKey<128, 64, R>>::raw_encrypt(public, &m, &mut ct),
+        Ok(Some(()))
+    );
+    assert_eq!(key.raw_decrypt(&mut rng, &ct, &mut pt), Ok(Some(())));
+    assert_eq!(pt, m);
+    assert_eq!(
+        <Rsa1024 as RsaKey<128, 64, R>>::raw_encrypt(public, &n, &mut ct),
+        Ok(None)
+    );
+    assert_eq!(key.raw_decrypt(&mut rng, &[0xff; 128], &mut pt), Ok(None));
 
-    // Raw RSA: `m^e mod n` with the given exponent; 0 is the same as 65537.
-    let m = b"raw message";
-    let raw = |exponent: u32| {
-        let mut ciphertext = [0u8; 128];
+    // RSAES-PKCS1-v1_5 round trip, also with the `rsa` crate; a message too large for the key
+    // and a corrupted ciphertext are rejected.
+    assert_eq!(
+        <Rsa1024 as RsaKey<128, 64, R>>::rsaes_encrypt(public, &mut rng, b"secret", &mut ct),
+        Ok(Some(()))
+    );
+    assert_eq!(key.rsaes_decrypt(&mut rng, &ct, &mut pt), Ok(Some(6)));
+    assert_eq!(&pt[..6], b"secret");
+    assert_eq!(
+        rsa_key.decrypt(rsa::Pkcs1v15Encrypt, &ct).unwrap(),
+        b"secret"
+    );
+    assert_eq!(
+        <Rsa1024 as RsaKey<128, 64, R>>::rsaes_encrypt(public, &mut rng, &[1; 118], &mut ct),
+        Ok(None)
+    );
+    let mut corrupted = ct;
+    corrupted[5] ^= 0x01;
+    assert_eq!(key.rsaes_decrypt(&mut rng, &corrupted, &mut pt), Ok(None));
+
+    // OAEP round trip with a label (with its terminating zero), compatible with the `rsa` crate;
+    // a wrong or empty label and a corrupted ciphertext are rejected, and labels need not be
+    // UTF-8.
+    let label = b"LABEL\0";
+    let sha256 = TpmiAlgHash::Sha256;
+    assert_eq!(
+        <Rsa1024 as RsaKey<128, 64, R>>::oaep_encrypt(
+            public, &mut rng, sha256, label, b"secret", &mut ct
+        ),
+        Ok(Some(()))
+    );
+    assert_eq!(
+        key.oaep_decrypt(&mut rng, sha256, label, &ct, &mut pt),
+        Ok(Some(6))
+    );
+    assert_eq!(&pt[..6], b"secret");
+    let oaep = || rsa::Oaep::new_with_label::<sha2::Sha256, _>("LABEL\0");
+    assert_eq!(rsa_key.decrypt(oaep(), &ct).unwrap(), b"secret");
+    let theirs = rsa_key
+        .to_public_key()
+        .encrypt(&mut rand_core::OsRng, oaep(), b"theirs")
+        .unwrap();
+    assert_eq!(
+        key.oaep_decrypt(
+            &mut rng,
+            sha256,
+            label,
+            theirs.as_slice().try_into().unwrap(),
+            &mut pt
+        ),
+        Ok(Some(6))
+    );
+    assert_eq!(&pt[..6], b"theirs");
+    for bad_label in [&b"OTHER\0"[..], &[][..]] {
         assert_eq!(
-            provider.rsa_null_encrypt(&n, exponent, m, &mut ciphertext),
-            Ok(Some(128))
+            key.oaep_decrypt(&mut rng, sha256, bad_label, &ct, &mut pt),
+            Ok(None)
         );
-        ciphertext
-    };
-    let expected = |e: u32| {
-        let c = rsa::BigUint::from_bytes_be(m).modpow(&rsa::BigUint::from(e), key.n());
-        let mut out = [0u8; 128];
-        let c = c.to_bytes_be();
-        out[128 - c.len()..].copy_from_slice(&c);
-        out
-    };
-    assert_eq!(raw(3), expected(3));
-    assert_eq!(raw(0), expected(65537));
-    assert_eq!(raw(65537), expected(65537));
-    assert_ne!(raw(3), raw(0));
-
-    // RSAES-PKCS1-v1_5 and OAEP ciphertexts made with the key's exponent decrypt with its
-    // private key; with the default exponent they do not.
-    let mut ciphertext = [0u8; 128];
+    }
+    let mut corrupted = ct;
+    corrupted[10] ^= 0xff;
     assert_eq!(
-        provider.rsaes_encrypt(&n, 3, b"secret", &mut ciphertext),
-        Ok(Some(128))
+        key.oaep_decrypt(&mut rng, sha256, label, &corrupted, &mut pt),
+        Ok(None)
+    );
+    let binary = [0xff, 0xfe, 0x00];
+    assert_eq!(
+        <Rsa1024 as RsaKey<128, 64, R>>::oaep_encrypt(
+            public, &mut rng, sha256, &binary, b"bin", &mut ct
+        ),
+        Ok(Some(()))
     );
     assert_eq!(
-        key.decrypt(rsa::Pkcs1v15Encrypt, &ciphertext).unwrap(),
-        b"secret"
+        key.oaep_decrypt(&mut rng, sha256, &binary, &ct, &mut pt),
+        Ok(Some(3))
     );
     assert_eq!(
-        provider.rsaes_encrypt(&n, 0, b"secret", &mut ciphertext),
-        Ok(Some(128))
-    );
-    assert!(key.decrypt(rsa::Pkcs1v15Encrypt, &ciphertext).is_err());
-    assert_eq!(
-        provider.oaep_encrypt(TpmiAlgHash::Sha256, &n, 3, b"secret", b"", &mut ciphertext),
-        Ok(Some(128))
-    );
-    assert_eq!(
-        key.decrypt(rsa::Oaep::new::<sha2::Sha256>(), &ciphertext)
-            .unwrap(),
-        b"secret"
-    );
-
-    // Signatures of the key verify with its exponent only.
-    let digest = [0x5Au8; 32];
-    let signature = key
-        .sign(rsa::Pkcs1v15Sign::new::<sha2::Sha256>(), &digest)
-        .unwrap();
-    assert_eq!(
-        provider.rsassa_verify(&n, 3, TpmtHa::Sha256(&digest), &signature),
-        Ok(true)
-    );
-    assert_eq!(
-        provider.rsassa_verify(&n, 0, TpmtHa::Sha256(&digest), &signature),
-        Ok(false)
-    );
-    let signature = key
-        .sign_with_rng(
-            &mut rand_core::OsRng,
-            rsa::Pss::new::<sha2::Sha256>(),
-            &digest,
-        )
-        .unwrap();
-    assert_eq!(
-        provider.rsapss_verify(&n, 3, TpmtHa::Sha256(&digest), &signature),
-        Ok(true)
-    );
-    assert_eq!(
-        provider.rsapss_verify(&n, 0, TpmtHa::Sha256(&digest), &signature),
-        Ok(false)
-    );
-
-    // An even exponent is not a valid RSA public exponent.
-    assert_eq!(
-        provider.rsa_null_encrypt(&n, 4, m, &mut ciphertext),
+        <Rsa1024 as RsaKey<128, 64, R>>::oaep_encrypt(
+            public,
+            &mut rng,
+            sha256,
+            &[],
+            &[1; 63],
+            &mut ct
+        ),
         Ok(None)
     );
     assert_eq!(
-        provider.rsassa_verify(&n, 4, TpmtHa::Sha256(&digest), &signature),
+        <Rsa1024 as RsaKey<128, 64, R>>::oaep_encrypt(
+            public,
+            &mut rng,
+            sha256,
+            &[],
+            &[1; 62],
+            &mut ct
+        ),
+        Ok(Some(()))
+    );
+    assert_eq!(
+        key.oaep_decrypt(&mut rng, sha256, &[], &ct, &mut pt),
+        Ok(Some(62))
+    );
+    // SHA-1 OAEP works as well.
+    assert_eq!(
+        <Rsa1024 as RsaKey<128, 64, R>>::oaep_encrypt(
+            public,
+            &mut rng,
+            TpmiAlgHash::Sha1,
+            &[],
+            b"sha1",
+            &mut ct
+        ),
+        Ok(Some(()))
+    );
+    assert_eq!(
+        rsa_key
+            .decrypt(rsa::Oaep::new::<sha1::Sha1>(), &ct)
+            .unwrap(),
+        b"sha1"
+    );
+}
+
+#[test]
+fn rsa_signatures() {
+    let (key, _) = rsa1024_key();
+    let mut rng = C::from_entropy().unwrap();
+    let public = PrivateKey::<128, 64, R, u32>::as_public(&key);
+    let rsa_public = public.key();
+    let digest = [0x5Au8; 32];
+    let mut sig = [0u8; 128];
+
+    // RSASSA: deterministic, compatible with the `rsa` crate.
+    key.rsassa_sign(&mut rng, TpmtHa::Sha256(&digest), &mut sig)
+        .unwrap();
+    assert_eq!(
+        <Rsa1024 as RsaKey<128, 64, R>>::rsassa_verify(public, TpmtHa::Sha256(&digest), &sig),
+        Ok(true)
+    );
+    assert_eq!(
+        sig.to_vec(),
+        key.key()
+            .sign(rsa::Pkcs1v15Sign::new::<sha2::Sha256>(), &digest)
+            .unwrap()
+    );
+    let mut corrupted = sig;
+    corrupted[0] ^= 0x01;
+    assert_eq!(
+        <Rsa1024 as RsaKey<128, 64, R>>::rsassa_verify(public, TpmtHa::Sha256(&digest), &corrupted),
         Ok(false)
     );
+    assert_eq!(
+        <Rsa1024 as RsaKey<128, 64, R>>::rsassa_verify(public, TpmtHa::Sha256(&[0; 32]), &sig),
+        Ok(false)
+    );
+
+    // RSAPSS with the digest size as salt length, compatible with the `rsa` crate; signatures
+    // with any salt length verify.
+    key.rsapss_sign(&mut rng, TpmtHa::Sha256(&digest), &mut sig)
+        .unwrap();
+    assert_eq!(
+        <Rsa1024 as RsaKey<128, 64, R>>::rsapss_verify(public, TpmtHa::Sha256(&digest), &sig),
+        Ok(true)
+    );
+    assert!(
+        rsa_public
+            .verify(rsa::Pss::new::<sha2::Sha256>(), &digest, &sig)
+            .is_ok()
+    );
+    for salt in [0, 1, 20, 94] {
+        let theirs = key
+            .key()
+            .sign_with_rng(
+                &mut rand_core::OsRng,
+                rsa::Pss::new_with_salt::<sha2::Sha256>(salt),
+                &digest,
+            )
+            .unwrap();
+        let theirs: [u8; 128] = theirs.try_into().unwrap();
+        assert_eq!(
+            <Rsa1024 as RsaKey<128, 64, R>>::rsapss_verify(
+                public,
+                TpmtHa::Sha256(&digest),
+                &theirs
+            ),
+            Ok(true),
+            "salt {salt}"
+        );
+    }
+    let mut corrupted = sig;
+    corrupted[127] ^= 0x01;
+    assert_eq!(
+        <Rsa1024 as RsaKey<128, 64, R>>::rsapss_verify(public, TpmtHa::Sha256(&digest), &corrupted),
+        Ok(false)
+    );
+    assert_eq!(
+        <Rsa1024 as RsaKey<128, 64, R>>::rsapss_verify(
+            public,
+            TpmtHa::Sha256(&digest),
+            &[0xff; 128]
+        ),
+        Ok(false)
+    );
+
+    // RSA-1024 with SHA-512 PSS: the salt is shortened to 62 bytes.
+    #[cfg(feature = "sha512")]
+    {
+        let digest = [0x5Au8; 64];
+        key.rsapss_sign(&mut rng, TpmtHa::Sha512(&digest), &mut sig)
+            .unwrap();
+        assert_eq!(
+            <Rsa1024 as RsaKey<128, 64, R>>::rsapss_verify(public, TpmtHa::Sha512(&digest), &sig),
+            Ok(true)
+        );
+        assert!(
+            rsa_public
+                .verify(rsa::Pss::new_with_salt::<sha2::Sha512>(62), &digest, &sig)
+                .is_ok()
+        );
+    }
+}
+
+/// RSA public-key operations use the key's public exponent (here 3).
+#[test]
+fn rsa_public_exponent() {
+    use rsa::traits::PublicKeyParts as _;
+    let key =
+        <Rsa1024 as PrivateKey<128, 64, R, u32>>::generate(&mut C::from_seed(b"e3").unwrap(), 3)
+            .unwrap();
+    let public = PrivateKey::<128, 64, R, u32>::as_public(&key);
+    assert_eq!(<Rsa1024 as RsaKey<128, 64, R>>::exponent(public), 3);
+    let mut m = [0u8; 128];
+    m[100..].fill(0x33);
+    let mut ct = [0u8; 128];
+    <Rsa1024 as RsaKey<128, 64, R>>::raw_encrypt(public, &m, &mut ct)
+        .unwrap()
+        .unwrap();
+    let expected =
+        rsa::BigUint::from_bytes_be(&m).modpow(&rsa::BigUint::from(3u32), public.key().n());
+    assert_eq!(rsa::BigUint::from_bytes_be(&ct), expected);
+}
+
+/// RSA-2048 through the dispatch enums.
+#[test]
+fn rsa_dispatch() {
+    use tpm2::crypto::{RsaEncryptScheme, RsaPrivateKey, RsaPublicKey};
+    let _: Option<RustCryptoRsa2048> = None;
+    let mut rng = C::from_seed(b"rsa 2048").unwrap();
+    let key = RsaPrivateKey::<C>::generate(&mut rng, tpm2::TpmiRsaKeyBits::Rsa2048, 0).unwrap();
+    assert_eq!(key.exponent(), 65537);
+    let mut n_buf = [0u8; 512];
+    let n = key.modulus(&mut n_buf).unwrap();
+    let public = RsaPublicKey::<C>::load(tpm2::TpmiRsaKeyBits::Rsa2048, 0, n)
+        .unwrap()
+        .unwrap();
+    let scheme = RsaEncryptScheme::Oaep {
+        hash: TpmiAlgHash::Sha256,
+        label: Some(c"DUPLICATE"),
+    };
+    let mut ct_buf = [0u8; 512];
+    let ct = public
+        .encrypt(&mut rng, scheme, b"seed", &mut ct_buf)
+        .unwrap()
+        .unwrap();
+    let mut pt_buf = [0u8; 512];
+    let pt = key
+        .decrypt(&mut rng, scheme, ct.as_slice(), &mut pt_buf)
+        .unwrap()
+        .unwrap();
+    assert_eq!(pt.as_slice(), b"seed");
+
+    let mut buf: SignatureBuffer = [0; _];
+    let digest = [7u8; 32];
+    let signature = key
+        .sign(
+            &mut rng,
+            TpmtSigScheme::Rsassa(TpmiAlgHash::Sha256),
+            &digest,
+            &mut buf,
+        )
+        .unwrap();
+    assert_eq!(public.verify(&digest, signature), Ok(true));
+    let mut prime_buf = [0u8; 256];
+    let p = key.prime_p(&mut prime_buf).unwrap();
+    let mut n_buf2 = [0u8; 512];
+    let reloaded = RsaPrivateKey::<C>::load(
+        RsaPublicKey::<C>::load(
+            tpm2::TpmiRsaKeyBits::Rsa2048,
+            0,
+            key.modulus(&mut n_buf2).unwrap(),
+        )
+        .unwrap()
+        .unwrap(),
+        p,
+    )
+    .unwrap()
+    .unwrap();
+    let mut crt_buf = [0u8; 1280];
+    let mut crt_buf2 = [0u8; 1280];
+    assert_eq!(
+        key.crt(&mut crt_buf).unwrap().as_slice(),
+        reloaded.crt(&mut crt_buf2).unwrap().as_slice()
+    );
+}
+
+// ==========================================
+// ML-KEM and ML-DSA
+// ==========================================
+
+#[test]
+fn mlkem() {
+    type K = RustCryptoMlkem768;
+    let seed = [0x11u8; 64];
+    let key = <K as MlkemKey<1184, 1088, R>>::expand(&seed).unwrap();
+    let mut ek = [0u8; 1184];
+    <K as PrivateKey<1184, 64, R>>::store_public(
+        PrivateKey::<1184, 64, R>::as_public(&key),
+        &mut ek,
+    )
+    .unwrap();
+    let mut stored = [0u8; 64];
+    PrivateKey::<1184, 64, R>::store(&key, &mut stored).unwrap();
+    assert_eq!(stored, seed);
+
+    // Encapsulation with explicit randomness is deterministic and decapsulates.
+    let public = <K as PrivateKey<1184, 64, R>>::load_public((), &ek)
+        .unwrap()
+        .unwrap();
+    let (mut ct, mut ss, mut ss2) = ([0u8; 1088], [0u8; 32], [0u8; 32]);
+    <K as MlkemKey<1184, 1088, R>>::encapsulate_internal(&public, &[0x22; 32], &mut ct, &mut ss)
+        .unwrap();
+    let (mut ct2, mut ss3) = ([0u8; 1088], [0u8; 32]);
+    <K as MlkemKey<1184, 1088, R>>::encapsulate_internal(&public, &[0x22; 32], &mut ct2, &mut ss3)
+        .unwrap();
+    assert_eq!((ct, ss), (ct2, ss3));
+    MlkemKey::<1184, 1088, R>::decapsulate(&key, &ct, &mut ss2).unwrap();
+    assert_eq!(ss, ss2);
+    // Implicit rejection: a corrupted ciphertext gives another secret.
+    ct[0] ^= 1;
+    MlkemKey::<1184, 1088, R>::decapsulate(&key, &ct, &mut ss2).unwrap();
+    assert_ne!(ss, ss2);
+
+    // Randomized encapsulation and key generation.
+    let mut rng = C::from_entropy().unwrap();
+    <K as MlkemKey<1184, 1088, R>>::encapsulate(&public, &mut rng, &mut ct, &mut ss).unwrap();
+    MlkemKey::<1184, 1088, R>::decapsulate(&key, &ct, &mut ss2).unwrap();
+    assert_eq!(ss, ss2);
+    let generated = <K as PrivateKey<1184, 64, R>>::generate(&mut rng, ()).unwrap();
+    let mut ek2 = [0u8; 1184];
+    <K as PrivateKey<1184, 64, R>>::store_public(
+        PrivateKey::<1184, 64, R>::as_public(&generated),
+        &mut ek2,
+    )
+    .unwrap();
+    assert_ne!(ek, ek2);
+
+    // The seed must match the public key.
+    assert!(
+        <K as PrivateKey<1184, 64, R>>::load(
+            <K as PrivateKey<1184, 64, R>>::load_public((), &ek)
+                .unwrap()
+                .unwrap(),
+            &seed
+        )
+        .unwrap()
+        .is_some()
+    );
+    assert!(
+        <K as PrivateKey<1184, 64, R>>::load(
+            <K as PrivateKey<1184, 64, R>>::load_public((), &ek)
+                .unwrap()
+                .unwrap(),
+            &[0; 64]
+        )
+        .unwrap()
+        .is_none()
+    );
+    // An encapsulation key with coefficients `>= q` fails the modulus check.
+    assert!(
+        <K as PrivateKey<1184, 64, R>>::load_public((), &[0xff; 1184])
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn mldsa() {
+    type K = RustCryptoMldsa65;
+    type Vk = ml_dsa::VerifyingKey<ml_dsa::MlDsa65>;
+    let seed = [0x33u8; 32];
+    let key = <K as MldsaKey<1952, 3309, R>>::expand(&seed).unwrap();
+    let mut pk = [0u8; 1952];
+    <K as PrivateKey<1952, 32, R>>::store_public(
+        PrivateKey::<1952, 32, R>::as_public(&key),
+        &mut pk,
+    )
+    .unwrap();
+    let public = <K as PrivateKey<1952, 32, R>>::load_public((), &pk)
+        .unwrap()
+        .unwrap();
+    let vk = Vk::decode(&pk.as_slice().try_into().unwrap());
+    let decode = |sig: &[u8; 3309]| {
+        ml_dsa::Signature::<ml_dsa::MlDsa65>::decode(&sig.as_slice().try_into().unwrap()).unwrap()
+    };
+    let mut rng = C::from_entropy().unwrap();
+    let mut sig = [0u8; 3309];
+
+    // Pure ML-DSA with a context, compatible with `ml-dsa`.
+    let msg: [&[u8]; 2] = [b"hello ", b"world"];
+    key.sign_message(&mut rng, b"ctx", &msg, &mut sig).unwrap();
+    assert!(<K as MldsaKey<1952, 3309, R>>::verify_message(&public, b"ctx", &msg, &sig).unwrap());
+    assert!(vk.verify_with_context(b"hello world", b"ctx", &decode(&sig)));
+    assert!(
+        !<K as MldsaKey<1952, 3309, R>>::verify_message(&public, b"other", &msg, &sig).unwrap()
+    );
+    assert!(
+        !<K as MldsaKey<1952, 3309, R>>::verify_message(&public, &[0; 256], &msg, &sig).unwrap()
+    );
+    let theirs = ml_dsa::ExpandedSigningKey::<ml_dsa::MlDsa65>::from_seed(&seed.into())
+        .sign_deterministic(b"hello world", b"")
+        .unwrap();
+    assert!(
+        <K as MldsaKey<1952, 3309, R>>::verify_message(
+            &public,
+            b"",
+            &[b"hello world"],
+            &theirs.encode().into()
+        )
+        .unwrap()
+    );
+
+    // External mu: deterministic with explicit randomness.
+    let mu = [0x44u8; 64];
+    MldsaKey::<1952, 3309, R>::sign_mu_internal(&key, &[0; 32], &mu, &mut sig).unwrap();
+    assert!(<K as MldsaKey<1952, 3309, R>>::verify_mu(&public, &mu, &sig).unwrap());
+    assert!(vk.verify_mu(&mu.into(), &decode(&sig)));
+    let mut sig2 = [0u8; 3309];
+    MldsaKey::<1952, 3309, R>::sign_mu_internal(&key, &[0; 32], &mu, &mut sig2).unwrap();
+    assert_eq!(sig, sig2);
+    key.sign_mu(&mut rng, &mu, &mut sig2).unwrap();
+    assert!(<K as MldsaKey<1952, 3309, R>>::verify_mu(&public, &mu, &sig2).unwrap());
+    assert!(!<K as MldsaKey<1952, 3309, R>>::verify_mu(&public, &[0; 64], &sig2).unwrap());
+    // A malformed signature does not verify.
+    assert!(!<K as MldsaKey<1952, 3309, R>>::verify_mu(&public, &mu, &[0xff; 3309]).unwrap());
+
+    // HashML-DSA, domain-separated from pure ML-DSA.
+    let digest = [0x55u8; 32];
+    key.sign_prehash(&mut rng, b"", TpmtHa::Sha256(&digest), &mut sig)
+        .unwrap();
+    assert!(
+        <K as MldsaKey<1952, 3309, R>>::verify_prehash(&public, b"", TpmtHa::Sha256(&digest), &sig)
+            .unwrap()
+    );
+    assert!(
+        !<K as MldsaKey<1952, 3309, R>>::verify_prehash(
+            &public,
+            b"",
+            TpmtHa::Sha256(&[0; 32]),
+            &sig
+        )
+        .unwrap()
+    );
+    assert!(
+        !<K as MldsaKey<1952, 3309, R>>::verify_message(&public, b"", &[&digest], &sig).unwrap()
+    );
+    assert_eq!(
+        key.sign_prehash(&mut rng, b"", TpmtHa::Sha1(&[0; 20]), &mut sig),
+        Err(CryptoError::Unsupported)
+    );
+
+    // The seed must match the public key.
+    assert!(
+        <K as PrivateKey<1952, 32, R>>::load(
+            <K as PrivateKey<1952, 32, R>>::load_public((), &pk)
+                .unwrap()
+                .unwrap(),
+            &seed
+        )
+        .unwrap()
+        .is_some()
+    );
+    assert!(
+        <K as PrivateKey<1952, 32, R>>::load(
+            <K as PrivateKey<1952, 32, R>>::load_public((), &pk)
+                .unwrap()
+                .unwrap(),
+            &[0; 32]
+        )
+        .unwrap()
+        .is_none()
+    );
+    let mut stored = [0u8; 32];
+    PrivateKey::<1952, 32, R>::store(&key, &mut stored).unwrap();
+    assert_eq!(stored, seed);
 }

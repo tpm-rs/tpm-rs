@@ -69,9 +69,9 @@
 
 #![forbid(unsafe_code)]
 
-use testing::_common::{self, CLIENT_CRYPTO};
+use testing::_common::{self, ClientCrypto};
 use testing::differential::server::handle_counts;
-use tpm2::crypto::{Direction, HashStream, HmacStream};
+use tpm2::crypto::{Direction, HashContext, HmacContext};
 use tpm2::{Alg, TpmCc, TpmiAlgCipherMode, TpmiAlgHash, TpmiAlgSymMode, TpmtSymDefObject};
 
 /// Wire constants used by the engine (TPM 2.0 Library Part 2).
@@ -684,7 +684,7 @@ fn parse_response(
 
 /// Hashes the concatenation of `parts` with `alg` (client crypto).
 fn digest(alg: TpmiAlgHash, parts: &[&[u8]]) -> Vec<u8> {
-    let mut state = HashStream::new(CLIENT_CRYPTO, alg).expect("client hash");
+    let mut state = HashContext::<ClientCrypto>::new(alg).expect("client hash");
     for part in parts {
         state.update(part).expect("client hash update");
     }
@@ -698,7 +698,7 @@ fn digest(alg: TpmiAlgHash, parts: &[&[u8]]) -> Vec<u8> {
 
 /// HMACs the concatenation of `parts` under `key` with `alg` (client crypto).
 fn hmac(alg: TpmiAlgHash, key: &[u8], parts: &[&[u8]]) -> Vec<u8> {
-    let mut state = HmacStream::new(CLIENT_CRYPTO, alg, key).expect("client hmac");
+    let mut state = HmacContext::<ClientCrypto>::new(alg, key).expect("client hmac");
     for part in parts {
         state.update(part).expect("client hmac update");
     }
@@ -720,16 +720,7 @@ fn kdfa(
     bits: u32,
 ) -> Vec<u8> {
     let mut out = vec![0u8; bits.div_ceil(8) as usize];
-    _common::kdfa_by_alg(
-        CLIENT_CRYPTO,
-        alg,
-        key,
-        label,
-        context_u,
-        context_v,
-        bits,
-        &mut out,
-    );
+    _common::kdfa_by_alg(alg, key, label, context_u, context_v, bits, &mut out);
     out
 }
 
@@ -824,7 +815,7 @@ fn apply_param_cipher(
             );
             let (sym_key, iv) = material.split_at(key_bits as usize / 8);
             let mut iv = iv.to_vec();
-            _common::sym_encrypt_decrypt(CLIENT_CRYPTO, def, sym_key, &mut iv, dir, data).is_ok()
+            _common::sym_encrypt_decrypt(def, sym_key, &mut iv, dir, data).is_ok()
         }
     }
 }

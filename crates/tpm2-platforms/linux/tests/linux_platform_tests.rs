@@ -27,8 +27,8 @@ fn test_linux_rng_reseed_is_ignored() {
     // The OS entropy source cannot be stirred: reseeding succeeds and the RNG
     // keeps producing random bytes.
     let mut rng = LinuxRng::new();
-    assert_eq!(rng.reseed(b"additional entropy"), Ok(()));
-    assert_eq!(rng.reseed(&[]), Ok(()));
+    assert_eq!(rng.stir_bytes(b"additional entropy"), Ok(()));
+    assert_eq!(rng.stir_bytes(&[]), Ok(()));
     let mut buf1 = [0u8; 16];
     let mut buf2 = [0u8; 16];
     assert_eq!(rng.fill_bytes(&mut buf1), Ok(()));

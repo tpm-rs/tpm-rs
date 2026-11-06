@@ -120,7 +120,7 @@ fn primary_keys_are_deterministic_per_hierarchy() {
         let first = primary_encapsulation_key(&mut sim, Handle::RH_OWNER, template);
         assert_eq!(
             first.len(),
-            parameter_set.public_key_bytes(),
+            parameter_set.pub_key_bytes(),
             "{parameter_set:?}"
         );
         let second = primary_encapsulation_key(&mut sim, Handle::RH_OWNER, template);
@@ -160,7 +160,7 @@ fn ordinary_keys_create_and_load() {
         let (private, public) = create_child(&mut sim, srk, template, b"");
         let (_, other_public) = create_child(&mut sim, srk, template, b"");
         let (_, key) = mlkem_public_key(&public.0);
-        assert_eq!(key.len(), parameter_set.public_key_bytes());
+        assert_eq!(key.len(), parameter_set.pub_key_bytes());
         assert_ne!(key, mlkem_public_key(&other_public.0).1);
         let (handle, name) = load_child(&mut sim, srk, private, public);
         let read = read_public(&mut sim, handle).unwrap();

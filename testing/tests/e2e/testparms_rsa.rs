@@ -17,7 +17,7 @@ fn accepts_valid_rsa() {
     let rsa_parms = TpmtPublicParms::Rsa(TpmsRsaParms {
         symmetric: None,
         scheme: None,
-        key_bits: TpmiRsaKeyBits(2048),
+        key_bits: TpmiRsaKeyBits::Rsa2048,
         exponent: 0,
     });
 
@@ -34,7 +34,7 @@ fn accepts_any_rsa_exponent() {
     let rsa_parms = TpmtPublicParms::Rsa(TpmsRsaParms {
         symmetric: None,
         scheme: None,
-        key_bits: TpmiRsaKeyBits(2048),
+        key_bits: TpmiRsaKeyBits::Rsa2048,
         exponent: 3, // Unusable for key creation, but it unmarshals
     });
 
@@ -47,15 +47,18 @@ fn accepts_any_rsa_exponent() {
 fn rejects_rsa_key_bits() {
     let mut sim = Tpm::new();
 
-    // Invalid RSA key bits
+    // Invalid RSA key bits (999, not a `TPMI_RSA_KEY_BITS` value, so patched into the
+    // marshaled parameters: keyBits follows the type and the two NULL selectors).
     let rsa_parms = TpmtPublicParms::Rsa(TpmsRsaParms {
         symmetric: None,
         scheme: None,
-        key_bits: TpmiRsaKeyBits(999),
+        key_bits: TpmiRsaKeyBits::Rsa2048,
         exponent: 0,
     });
 
-    let res = execute_test_parms(&mut sim, rsa_parms);
+    let res = execute_test_parms_corrupted(&mut sim, rsa_parms, |buf| {
+        buf[6..8].copy_from_slice(&999u16.to_be_bytes());
+    });
     assert_eq!(res, Err(TpmRc::VALUE.with(Position::parameter(1)).get()));
 }
 
@@ -67,7 +70,7 @@ fn rejects_rsa_scheme_hash() {
     let rsa_parms = TpmtPublicParms::Rsa(TpmsRsaParms {
         symmetric: None,
         scheme: Some(TpmtRsaScheme::Rsassa(TpmiAlgHash::Sha256)),
-        key_bits: TpmiRsaKeyBits(2048),
+        key_bits: TpmiRsaKeyBits::Rsa2048,
         exponent: 0,
     });
 
@@ -89,7 +92,7 @@ fn rejects_rsa_symmetric_key_bits() {
             mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
         }),
         scheme: None,
-        key_bits: TpmiRsaKeyBits(2048),
+        key_bits: TpmiRsaKeyBits::Rsa2048,
         exponent: 0,
     });
 
@@ -108,7 +111,7 @@ fn rejects_rsa_with_ecdsa_scheme() {
     let rsa_parms = TpmtPublicParms::Rsa(TpmsRsaParms {
         symmetric: None,
         scheme: Some(TpmtRsaScheme::Rsassa(TpmiAlgHash::Sha256)),
-        key_bits: TpmiRsaKeyBits(2048),
+        key_bits: TpmiRsaKeyBits::Rsa2048,
         exponent: 0,
     });
 
@@ -126,7 +129,7 @@ fn rejects_rsa_xor_symmetric() {
     let rsa_parms = TpmtPublicParms::Rsa(TpmsRsaParms {
         symmetric: None,
         scheme: None,
-        key_bits: TpmiRsaKeyBits(2048),
+        key_bits: TpmiRsaKeyBits::Rsa2048,
         exponent: 0,
     });
 

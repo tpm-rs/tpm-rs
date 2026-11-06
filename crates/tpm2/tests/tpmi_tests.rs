@@ -12,6 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Without RSA or ECC, some interface types have no values, so the loops over them are
+// unreachable.
+#![cfg_attr(
+    not(all(feature = "rsa", feature = "ecc")),
+    allow(unused_variables, unreachable_code)
+)]
+
 use tpm2::errors::UnmarshalError;
 use tpm2::*;
 
@@ -34,7 +41,7 @@ fn test_tpmi_rsa_key_bits_unmarshal_valid() {
 
         let mut slice: &[u8] = &buf;
         let unmarshalled = TpmiRsaKeyBits::unmarshal(&mut slice).unwrap();
-        assert_eq!(unmarshalled, TpmiRsaKeyBits(bits));
+        assert_eq!(Some(unmarshalled), TpmiRsaKeyBits::new(bits));
         assert_eq!(u16::from(unmarshalled), bits);
         assert_eq!(slice, &[0xAA, 0xBB]);
     }
@@ -57,9 +64,11 @@ fn test_feature_dependent_max_sizes_and_selectors() {
         TPM2_MAX_RSA_KEY_BYTES as usize,
         TpmiRsaKeyBits::MAX_PUB_KEY_BYTES
     );
+    // Ed448 keys are 57 bytes (RFC 8032), one more than its 448-bit field.
+    #[cfg(not(all(feature = "curve448", feature = "eddsa")))]
     assert_eq!(
         TpmEccCurve::MAX_ECC_KEY_BYTES,
-        TpmEccCurve::MAX_ECC_KEY_BITS.div_ceil(8)
+        usize::from(TpmEccCurve::MAX_ECC_KEY_BITS.div_ceil(8))
     );
     assert_eq!(
         <tags::EccParameter as tags::Tpm2bTag>::CAP,
@@ -75,7 +84,7 @@ fn test_feature_dependent_max_sizes_and_selectors() {
         TpmiRsaKeyBits::MAX_PUB_KEY_BYTES
     );
 
-    #[cfg(all(feature = "ecc_curve_nist_p521", not(feature = "ecc_curve_bn_p638")))]
+    #[cfg(all(feature = "nist_p521", not(feature = "bn_p638")))]
     {
         assert_eq!(TpmEccCurve::MAX_ECC_KEY_BITS, 521);
         assert_eq!(TpmEccCurve::MAX_ECC_KEY_BYTES, 66);
@@ -187,10 +196,14 @@ fn test_tpms_rsa_parms_unmarshal_invalid_key_bits() {
 #[test]
 fn test_tpmi_alg_cipher_mode_unmarshal_valid() {
     let valid_modes = [
+        #[cfg(feature = "ctr")]
         (0x0040u16, TpmiAlgCipherMode::Ctr),
+        #[cfg(feature = "ofb")]
         (0x0041u16, TpmiAlgCipherMode::Ofb),
+        #[cfg(feature = "cbc")]
         (0x0042u16, TpmiAlgCipherMode::Cbc),
         (0x0043u16, TpmiAlgCipherMode::Cfb),
+        #[cfg(feature = "ecb")]
         (0x0044u16, TpmiAlgCipherMode::Ecb),
     ];
     for (alg_id, expected) in valid_modes {
@@ -393,7 +406,7 @@ fn test_tpmi_dh_object_validation() {
 #[test]
 fn test_tpmi_ecc_key_exchange_valid() {
     let valid: &[(u16, TpmiEccKeyExchange)] = &[
-        #[cfg(feature = "ecdh")]
+        #[cfg(feature = "ecc")]
         (0x0019u16, TpmiEccKeyExchange::Ecdh),
         #[cfg(feature = "sm2")]
         (0x001Bu16, TpmiEccKeyExchange::Sm2),
@@ -415,7 +428,7 @@ fn test_tpmi_ecc_key_exchange_valid() {
         assert_eq!(res_opt, Some(expected));
     }
 
-    #[cfg(not(feature = "ecdh"))]
+    #[cfg(not(feature = "ecc"))]
     assert_eq!(
         TpmiEccKeyExchange::try_from(Alg::ECDH),
         Err(UnmarshalError::SCHEME)
@@ -613,7 +626,7 @@ fn test_tpmi_alg_sig_scheme() {
         (Alg::ECSCHNORR, TpmiAlgSigScheme::Ecschnorr),
         #[cfg(feature = "eddsa")]
         (Alg::EDDSA, TpmiAlgSigScheme::Eddsa),
-        #[cfg(feature = "eddsa")]
+        #[cfg(feature = "hash_eddsa")]
         (Alg::HASH_EDDSA, TpmiAlgSigScheme::HashEddsa),
         (Alg::HMAC, TpmiAlgSigScheme::Hmac),
     ];
@@ -832,7 +845,6 @@ fn test_tpmi_dh_sh_handle_range_upper_bounds() {
 #[test]
 fn test_default_hash_and_ha_and_structure_defaults() {
     let expected_hash = TpmiAlgHash::DEFAULT_HASH;
-    assert_eq!(TpmiAlgHash::default(), expected_hash);
 
     let default_ha = TpmtHa::DEFAULT_HA;
     assert_eq!(TpmtHa::default(), default_ha);

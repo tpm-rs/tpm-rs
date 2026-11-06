@@ -5,12 +5,15 @@
 //! encodings, on the reference's own C code linked by [`crate::reference_rng`]: they draw exactly
 //! the random values the C reference TPMs draw, in the same order, from the same `RAND_STATE`
 //! (the TPM's DRBG, or the DRBG seeded from a hierarchy's Primary Seed for Primary Objects). The
-//! raw RSA operations on the padded blocks use the crypto provider, which holds the private keys.
+//! raw RSA operations on the padded blocks use the crypto backend.
 
 use tpm2::Marshal;
-use tpm2::crypto::{CryptoProvider, Rng};
+use tpm2::crypto::{Crypto, Rng, RsaPublicKey};
 use tpm2::errors::{Position, TpmRc};
-use tpm2::{TpmEccCurve, TpmaObject, TpmiAlgHash, TpmtKeyedHashScheme, TpmtPublic};
+use tpm2::{
+    Alg, Tpm2bPublicKeyRsa, TpmEccCurve, TpmaObject, TpmiAlgHash, TpmiRsaKeyBits, TpmsRsaParms,
+    TpmtKeyedHashScheme, TpmtPublic,
+};
 
 use crate::engine::DrbgState;
 use crate::handler::CommandHandler;
@@ -30,7 +33,7 @@ pub(crate) struct PrimaryCreation<'p> {
     pub endorsement: bool,
 }
 
-impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
+impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     CommandHandler<'a, 'b, C, S, T, R>
 {
     /// `CryptEccSign()` with the TPM's DRBG for the scheme `scheme` (ECDSA, SM2 or EC-Schnorr)
@@ -94,8 +97,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     /// Generates the key (RSA, ECC, or a TPM-generated SYMCIPHER/KEYEDHASH key when no data is
     /// supplied or `sensitiveDataOrigin` is SET), mixes in the endorsement hierarchy proofs for
     /// endorsement Primary Objects, draws the `seedValue` (one `nameAlg` digest) and computes the
-    /// public `unique` field. Writes the private key (the crypto provider's format for RSA) to
-    /// `private_key` and the `seedValue` to `seed`, and returns `(seed length, key length)`.
+    /// public `unique` field. Writes the private key (the prime p of an RSA key, as
+    /// [`crate::handler::rsa_private_prime`] normalizes it) to `private_key` and the `seedValue` to `seed`, and returns `(seed length, key length)`.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn reference_create_object(
         &mut self,
@@ -157,32 +160,32 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         // DRBG (`None`); the pairwise test of an ECC signing key always draws from the TPM's DRBG.
         let (key_len, seed_len) = {
             let engine = &mut *self.context;
-            let crypto = &*engine.platform.crypto;
             let mut rng = RefRng {
                 drbg: Some(&mut engine.state.drbg_state),
                 entropy: Some(&mut *engine.platform.rng),
             };
             let key_len = match parms_and_id {
                 OwnedPublicParmsAndId::Rsa(parms, unique) => {
-                    let n_len = usize::from(parms.key_bits.0) / 8;
+                    let n_len = usize::from(parms.key_bits.as_u16()) / 8;
                     let mut n = [0u8; 512];
                     let mut p = [0u8; 256];
                     let n = n.get_mut(..n_len).ok_or(TpmRc::FAILURE)?;
                     let p = p.get_mut(..n_len / 2).ok_or(TpmRc::FAILURE)?;
-                    let exponent = rsa::generate_key(
+                    rsa::generate_key(
                         &mut rng,
                         seeded.as_mut(),
-                        parms.key_bits.0,
+                        parms.key_bits.as_u16(),
                         parms.exponent,
                         sign,
                         n,
                         p,
                     )?;
                     *unique = OwnedTpm2b::from_bytes(n).map_err(|_| TpmRc::FAILURE)?;
-                    crypto
-                        .rsa_import_private_key(n, p, exponent, private_key)
+                    let key = crate::handler::rsa_private_key::<C>(parms, n, p)
                         .map_err(|_| TpmRc::FAILURE)?
-                        .ok_or(TpmRc::FAILURE)?
+                        .ok_or(TpmRc::FAILURE)?;
+                    crate::handler::rsa_private_prime(&key, private_key)
+                        .map_err(|_| TpmRc::FAILURE)?
                 }
                 OwnedPublicParmsAndId::Ecc(parms, point) => {
                     let mut q = [0u8; 2 * TpmEccCurve::MAX_ECC_KEY_BYTES];
@@ -207,18 +210,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 // `CryptoMlkem_GenerateKey()`/`CryptoMldsa_GenerateKey()`: the seed is drawn from
                 // the DRBG, and the public key derived from it.
                 OwnedPublicParmsAndId::Mlkem(parms, unique) => {
-                    let mut seed = [0u8; tpm2::crypto::MLKEM_SEED_SIZE];
+                    let mut seed = [0u8; tpm2::TpmiMlkemParms::PRIV_KEY_BYTES];
                     drbg::fill(&mut rng, seeded.as_mut(), &mut seed)?;
-                    let mut public_key = [0u8; tpm2::TPM2_MAX_MLKEM_PUB_SIZE];
-                    let len = tpm2::crypto::Mlkem::mlkem_generate_key(
-                        crypto,
-                        parms.parameter_set,
-                        &seed,
-                        &mut public_key,
-                    )
-                    .map_err(|_| TpmRc::PARMS.to_rc())?;
-                    *unique =
-                        OwnedTpm2b::from_bytes(&public_key[..len]).map_err(|_| TpmRc::FAILURE)?;
+                    *unique = mlkem_public_key::<C, _>(parms.parameter_set, &seed)?;
                     private_key
                         .get_mut(..seed.len())
                         .ok_or(TpmRc::FAILURE)?
@@ -233,18 +227,9 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                     tpm2::TpmsHashMldsaParms { parameter_set, .. },
                     unique,
                 ) => {
-                    let mut seed = [0u8; tpm2::crypto::MLDSA_SEED_SIZE];
+                    let mut seed = [0u8; tpm2::TpmiMldsaParms::PRIV_KEY_BYTES];
                     drbg::fill(&mut rng, seeded.as_mut(), &mut seed)?;
-                    let mut public_key = [0u8; tpm2::TPM2_MAX_MLDSA_PUB_SIZE];
-                    let len = tpm2::crypto::Mldsa::mldsa_generate_key(
-                        crypto,
-                        *parameter_set,
-                        &seed,
-                        &mut public_key,
-                    )
-                    .map_err(|_| TpmRc::PARMS.to_rc())?;
-                    *unique =
-                        OwnedTpm2b::from_bytes(&public_key[..len]).map_err(|_| TpmRc::FAILURE)?;
+                    *unique = mldsa_public_key::<C, _>(*parameter_set, &seed)?;
                     private_key
                         .get_mut(..seed.len())
                         .ok_or(TpmRc::FAILURE)?
@@ -312,8 +297,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
     /// RSA encryption with the reference code's OAEP (`hash_alg` `Some`) or RSAES-PKCS1-v1_5
     /// (`None`) encoding drawn from the TPM's DRBG, followed by the raw public-key operation of
-    /// the crypto provider with the key's `modulus` and public `exponent` (`0` for the default
-    /// 65537). Returns `Ok(None)` if the provider rejects the key.
+    /// the crypto backend with the key's `modulus` (whose size is the key size) and public
+    /// `exponent` (`0` for the default 65537). Returns `Ok(None)` if the backend rejects the key.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn reference_rsa_encrypt(
         &mut self,
@@ -331,27 +316,114 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             Some(hash) => rsa::oaep_encode(&mut rng, hash, label, message, padded)?,
             None => rsa::rsaes_pkcs1v15_encode(&mut rng, message, padded)?,
         }
-        self.crypto()
-            .rsa_null_encrypt(modulus, exponent, padded, out)
-            .map_err(|_| TpmRc::FAILURE)
+        let public = u16::try_from(modulus.len() * 8)
+            .ok()
+            .and_then(TpmiRsaKeyBits::new)
+            .zip(Tpm2bPublicKeyRsa::new(modulus))
+            .map(|(bits, modulus)| RsaPublicKey::<C>::load(bits, exponent, modulus))
+            .transpose()
+            .map_err(|_| TpmRc::FAILURE)?
+            .flatten();
+        let Some(public) = public else {
+            return Ok(None);
+        };
+        crate::rsa::rsa_encrypt::<C>(
+            &mut self.context.crypto_rng,
+            &public,
+            Alg::NULL,
+            Alg::NULL,
+            &[],
+            padded,
+            out,
+        )
+        .map_err(|_| TpmRc::FAILURE)
     }
 
     /// An RSASSA-PSS signature with the reference code's salt (drawn from the TPM's DRBG) and
-    /// the raw private-key operation of the crypto provider. Returns `Ok(None)` if the provider
-    /// rejects the key.
+    /// the raw private-key operation of the crypto backend, with the RSA key of the parameters
+    /// `parms`, the public `modulus` and the private `prime` (as
+    /// [`crate::handler::rsa_private_key`] loads it). Returns `Ok(None)` if the backend rejects
+    /// the key.
     pub(crate) fn reference_rsa_pss_sign(
         &mut self,
         hash_alg: TpmiAlgHash,
-        private_key: &[u8],
-        modulus_len: usize,
+        parms: &TpmsRsaParms,
+        modulus: &[u8],
+        prime: &[u8],
         digest: &[u8],
         out: &mut [u8],
     ) -> Result<Option<usize>, TpmRc> {
         let mut encoded = [0u8; 512];
-        let encoded = encoded.get_mut(..modulus_len).ok_or(TpmRc::FAILURE)?;
+        let encoded = encoded.get_mut(..modulus.len()).ok_or(TpmRc::FAILURE)?;
         rsa::pss_encode(&mut self.context.ref_rng(), hash_alg, digest, encoded)?;
-        self.crypto()
-            .rsa_null_decrypt(private_key, encoded, out)
-            .map_err(|_| TpmRc::FAILURE)
+        let Some(key) = crate::handler::rsa_private_key::<C>(parms, modulus, prime)
+            .map_err(|_| TpmRc::FAILURE)?
+        else {
+            return Ok(None);
+        };
+        crate::rsa::rsa_decrypt::<C>(
+            &mut self.context.crypto_rng,
+            &key,
+            Alg::NULL,
+            Alg::NULL,
+            &[],
+            encoded,
+            out,
+        )
+        .map_err(|_| TpmRc::FAILURE)
     }
+}
+
+/// The public key of the ML-KEM key with the parameter set `parms` and the seed `seed`
+/// ([`tpm2::crypto::MlkemPrivateKey::expand`]; `TPM_RC_PARMS` if the backend cannot derive it).
+#[cfg(feature = "mlkem")]
+fn mlkem_public_key<C: Crypto, const N: usize>(
+    parms: tpm2::TpmiMlkemParms,
+    seed: &[u8],
+) -> Result<OwnedTpm2b<N>, TpmRc> {
+    let seed = tpm2::Tpm2bPrivateKeyMlkem::new(seed).ok_or(TpmRc::FAILURE)?;
+    let key = tpm2::crypto::MlkemPrivateKey::<C>::expand(parms, seed)
+        .ok()
+        .flatten()
+        .ok_or(TpmRc::PARMS.to_rc())?;
+    let mut buf = [0u8; tpm2::TpmiMlkemParms::MAX_PUB_KEY_BYTES];
+    let public = key.public(&mut buf).map_err(|_| TpmRc::PARMS.to_rc())?;
+    OwnedTpm2b::from_bytes(public.as_slice()).map_err(|_| TpmRc::FAILURE)
+}
+
+/// Without the `mlkem` feature, ML-KEM keys are not implemented.
+#[cfg(not(feature = "mlkem"))]
+#[allow(clippy::extra_unused_type_parameters)] // The signature of the `mlkem` build.
+fn mlkem_public_key<C: Crypto, const N: usize>(
+    _parms: tpm2::TpmiMlkemParms,
+    _seed: &[u8],
+) -> Result<OwnedTpm2b<N>, TpmRc> {
+    Err(TpmRc::PARMS.to_rc())
+}
+
+/// The public key of the ML-DSA key with the parameter set `parms` and the seed `seed`
+/// ([`tpm2::crypto::MldsaPrivateKey::expand`]; `TPM_RC_PARMS` if the backend cannot derive it).
+#[cfg(feature = "mldsa")]
+fn mldsa_public_key<C: Crypto, const N: usize>(
+    parms: tpm2::TpmiMldsaParms,
+    seed: &[u8],
+) -> Result<OwnedTpm2b<N>, TpmRc> {
+    let seed = tpm2::Tpm2bPrivateKeyMldsa::new(seed).ok_or(TpmRc::FAILURE)?;
+    let key = tpm2::crypto::MldsaPrivateKey::<C>::expand(parms, seed)
+        .ok()
+        .flatten()
+        .ok_or(TpmRc::PARMS.to_rc())?;
+    let mut buf = [0u8; tpm2::TpmiMldsaParms::MAX_PUB_KEY_BYTES];
+    let public = key.public(&mut buf).map_err(|_| TpmRc::PARMS.to_rc())?;
+    OwnedTpm2b::from_bytes(public.as_slice()).map_err(|_| TpmRc::FAILURE)
+}
+
+/// Without the `mldsa` feature, ML-DSA keys are not implemented.
+#[cfg(not(feature = "mldsa"))]
+#[allow(clippy::extra_unused_type_parameters)] // The signature of the `mldsa` build.
+fn mldsa_public_key<C: Crypto, const N: usize>(
+    _parms: tpm2::TpmiMldsaParms,
+    _seed: &[u8],
+) -> Result<OwnedTpm2b<N>, TpmRc> {
+    Err(TpmRc::PARMS.to_rc())
 }

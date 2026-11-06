@@ -176,7 +176,7 @@ impl StreamingHashState {
 
     /// Returns the block size in bytes for the algorithm (`64` for SHA-1/256, `128` for SHA-384/512).
     pub const fn block_size(&self) -> usize {
-        self.alg.block_size() as usize
+        self.alg.block_size()
     }
 
     /// Returns the digest size in bytes for the algorithm.

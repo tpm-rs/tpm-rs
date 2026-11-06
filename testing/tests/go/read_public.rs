@@ -82,7 +82,8 @@ fn test_read_public_key() {
         primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
 
     let create_rsp = execute_with_password_sessions(&mut sim, &create_cmd, 1, &[])
@@ -124,7 +125,8 @@ fn read_public_with_hmac_session_setup(sim: &mut Tpm) -> (Handle, Tpm2bName<'sta
             data: Tpm2bSensitiveData::default(),
         }),
         in_public: tpm2::Tpm2b(ecc_srk_template()),
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     let create_rsp =
         execute_with_password_sessions(sim, &create_cmd, 1, &[]).expect("CreatePrimary failed");

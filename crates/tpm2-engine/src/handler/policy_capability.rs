@@ -4,7 +4,7 @@ use crate::req_resp::RequestThenResponse;
 use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
 use tpm2::commands::{GetCapability, PolicyCapability};
-use tpm2::crypto::{CryptoProvider, Rng};
+use tpm2::crypto::{Crypto, Rng};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Marshal, TpmCap, TpmCc, TpmEo, TpmSe, TpmsCapabilityData, Unmarshal};
 
@@ -27,7 +27,7 @@ const MAX_PROPERTY_SIZE: usize = {
 /// A property of a capability as its marshaled property structure (operand A).
 type PropertyData = ([u8; MAX_PROPERTY_SIZE], usize);
 
-impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
+impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     CommandHandler<'a, 'b, C, S, T, R>
 {
     /// Handles the [TpmCc::PolicyCapability] (`0x19B`) command.
@@ -217,6 +217,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         }
 
         /// The marshaled `value` as property data.
+        #[cfg(feature = "sec-channel")]
         fn marshaled<M: Marshal<MaxBuffer = [u8; N]>, const N: usize>(value: &M) -> PropertyData {
             let mut buf = [0u8; N];
             let len = value.marshal(&mut buf);

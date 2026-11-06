@@ -12,8 +12,7 @@ use tpm2::Marshal;
 #[allow(unused_imports)]
 use tpm2::TpmCc;
 use tpm2::commands::{Duplicate, responses};
-use tpm2::crypto::asymmetric::KeyParams;
-use tpm2::crypto::{CryptoProvider, Direction, Rng};
+use tpm2::crypto::{Crypto, Direction, Rng};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
     Tpm2bData, Tpm2bDigest, Tpm2bEccParameter, Tpm2bEncryptedSecret, Tpm2bPrivate,
@@ -21,7 +20,7 @@ use tpm2::{
     TpmuSensitiveComposite,
 };
 
-impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
+impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     CommandHandler<'a, 'b, C, S, T, R>
 {
     /// Handles the [TpmCc::Duplicate] (`0x14B`) command.
@@ -133,7 +132,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         // 3. Resolve the new parent key public key modulus/parameters
         let mut parent_pub_modulus = [0u8; 512];
         let mut parent_pub_modulus_len = 0;
-        let mut parent_pub_exponent = 0;
+        let mut parent_rsa_parms = None;
         let mut parent_ecc_curve = None;
         let mut parent_ecc_pub_point = [0u8; 256];
         let mut parent_ecc_px_len = 0;
@@ -161,7 +160,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             // Parent must be an asymmetric key
             match &obj.public.parms_and_id {
                 OwnedPublicParmsAndId::Rsa(parms, unique) => {
-                    parent_pub_exponent = parms.exponent;
+                    parent_rsa_parms = Some(*parms);
                     parent_pub_modulus_len = unique.get_size() as usize;
                     parent_pub_modulus[..parent_pub_modulus_len]
                         .copy_from_slice(unique.get_buffer());
@@ -210,24 +209,16 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         };
 
         // Reconstruct TpmtSensitive for target object
-        let mut prime_p = [0u8; 256];
         let sensitive_comp = match target_obj.public.parms_and_id {
             OwnedPublicParmsAndId::Ecc(_, _) => TpmuSensitiveComposite::Ecc(
                 Tpm2bEccParameter::from_bytes(&target_obj.private[..target_obj.private_len])
                     .unwrap(),
             ),
-            OwnedPublicParmsAndId::Rsa(_, _) => {
-                let prime_p_len = crypto_len(
-                    self.crypto().rsa_private_key_to_prime_p(
-                        &target_obj.private[..target_obj.private_len],
-                        &mut prime_p,
-                    ),
-                    TpmRc::FAILURE,
-                )?;
-                TpmuSensitiveComposite::Rsa(
-                    Tpm2bPrivateKeyRsa::from_bytes(&prime_p[..prime_p_len]).unwrap(),
-                )
-            }
+            // The private value of an RSA object is its prime `p`.
+            OwnedPublicParmsAndId::Rsa(_, _) => TpmuSensitiveComposite::Rsa(
+                Tpm2bPrivateKeyRsa::from_bytes(target_obj.private_bytes())
+                    .map_err(|_| TpmRc::FAILURE)?,
+            ),
             OwnedPublicParmsAndId::KeyedHash(_, _) => TpmuSensitiveComposite::KeyedHash(
                 Tpm2bSensitiveData::from_bytes(&target_obj.private[..target_obj.private_len])
                     .unwrap(),
@@ -401,16 +392,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 self.do_self_test(Alg::ECDH)?;
                 let mut eph_pub = [0u8; 256];
                 let mut eph_priv = [0u8; 128];
-                let (_pub_len, priv_len) = self
-                    .crypto()
-                    .generate_key(
-                        Alg::ECDH,
-                        Some(KeyParams::Ecc(curve)),
-                        &mut eph_pub,
-                        &mut eph_priv,
-                        None,
-                    )
-                    .map_err(|_| TpmRc::FAILURE)?;
+                let priv_len = self.new_ecc_key_pair(curve, &mut eph_priv, &mut eph_pub)?;
 
                 // 2. Perform ECDH point multiplication
                 let mut ecdh_point = [0u8; 256];
@@ -445,17 +427,19 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 let digest_size = parent_name_alg.digest_size();
                 let total_bits = (digest_size * 8) as u32;
 
-                tpm2::crypto::kdf::kdfe_bits(
-                    &self.crypto(),
-                    parent_name_alg,
-                    &ecdh_point[..param_size],
-                    b"DUPLICATE",
-                    &eph_pub[..param_size],
-                    &parent_ecc_pub_point[param_size - parent_ecc_px_len..param_size],
-                    total_bits,
-                    &mut seed,
-                )
-                .map_err(|_| TpmRc::FAILURE)?;
+                self.crypto()
+                    .kdfe_bits(
+                        parent_name_alg,
+                        &ecdh_point[..param_size],
+                        b"DUPLICATE",
+                        (
+                            &eph_pub[..param_size],
+                            &parent_ecc_pub_point[param_size - parent_ecc_px_len..param_size],
+                        ),
+                        total_bits,
+                        &mut seed,
+                    )
+                    .map_err(|_| TpmRc::FAILURE)?;
                 seed_len = digest_size;
             } else {
                 // Generate a random seed of the parent's nameAlg digest size
@@ -466,18 +450,22 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 self.do_self_test(Alg::OAEP)?;
 
                 // RSA seed encryption
-                let encrypted_seed_len = crypto_len(
-                    self.crypto().encrypt(
+                let encrypted = match crate::handler::rsa_public_key::<C>(
+                    &parent_rsa_parms.ok_or(TpmRc::FAILURE)?,
+                    &parent_pub_modulus[..parent_pub_modulus_len],
+                ) {
+                    Ok(Some(key)) => crate::rsa::rsa_encrypt::<C>(
+                        &mut self.context.crypto_rng,
+                        &key,
                         Alg::OAEP,
                         Alg::from(parent_name_alg),
-                        &parent_pub_modulus[..parent_pub_modulus_len],
-                        parent_pub_exponent,
+                        b"DUPLICATE\0",
                         &seed[..digest_size],
                         &mut encrypted_seed,
-                        b"DUPLICATE\0",
                     ),
-                    TpmRc::FAILURE,
-                )?;
+                    other => other.map(|_| None),
+                };
+                let encrypted_seed_len = crypto_len(encrypted, TpmRc::FAILURE)?;
                 // `OaepEncode()` hashes the label with the nameAlg.
                 self.do_self_test(Alg::from(parent_name_alg))?;
                 out_sym_seed =

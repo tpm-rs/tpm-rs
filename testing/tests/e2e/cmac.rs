@@ -274,7 +274,7 @@ fn mac_of_aes256_key_matches_sp800_38b() {
 #[cfg(all(feature = "cmac", feature = "camellia128"))]
 #[test]
 fn mac_of_camellia_key_matches_client_cmac() {
-    use tpm2::crypto::{Cmac, Finalize, Update};
+    use tpm2::crypto::{Block, CmacContext, SymmetricKey};
     let mut sim = Tpm::new();
     let key_bytes = [0x5au8; 16];
     let key = load_sym_key(
@@ -285,9 +285,10 @@ fn mac_of_camellia_key_matches_client_cmac() {
         &key_bytes,
     );
     for len in [0, 1, 15, 16, 17, 32, 40, 64] {
-        let mut ctx = Cmac::camellia128(crate::_common::CLIENT_CRYPTO, &key_bytes).unwrap();
+        let client_key = SymmetricKey::new(AlgSym::Camellia128, &key_bytes).unwrap();
+        let mut ctx = CmacContext::<crate::_common::ClientCrypto>::new(client_key).unwrap();
         ctx.update(&MESSAGE[..len]).unwrap();
-        let mut expected = [0u8; 16];
+        let mut expected: Block = [0u8; 16];
         ctx.finalize(&mut expected).unwrap();
         assert_eq!(
             mac(&mut sim, key, &MESSAGE[..len], None).unwrap(),

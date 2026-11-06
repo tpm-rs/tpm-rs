@@ -1,172 +1,444 @@
 //! ML-KEM (FIPS 203) and ML-DSA (FIPS 204).
 //!
 //! BoringSSL implements ML-KEM-768/1024 and ML-DSA-44/65/87 ([`crate::bssl`]); the rest falls
-//! back to the RustCrypto implementation of [`tpm2_crypto_rust::pqc`] (`ml-kem`, `ml-dsa`):
-//!   - ML-KEM-512, which BoringSSL does not implement, and
+//! back to the RustCrypto implementation of `tpm2-crypto-rust` (`ml-kem`, `ml-dsa`):
+//!   - ML-KEM-512, which BoringSSL does not implement,
 //!   - ML-DSA signing: BoringSSL's public API draws the signing randomness `rnd` itself (its
 //!     derandomized signing is internal to its C++ `BCM_*` module), and the TPM supplies `rnd`
-//!     from its DRBG.
-use tpm2::crypto::{
-    CryptoError, MLDSA_MU_SIZE, MLDSA_RND_SIZE, MLDSA_SEED_SIZE, MLKEM_ENTROPY_SIZE,
-    MLKEM_SEED_SIZE, MLKEM_SHARED_SECRET_SIZE,
-};
-use tpm2::{TpmiMldsaParms, TpmiMlkemParms};
+//!     from its DRBG, and
+//!   - HashML-DSA (signing and verification): BoringSSL implements only pure ML-DSA and
+//!     external-`mu` operations.
+use tpm2::TpmtHa;
+use tpm2::crypto::backend::{Mldsa, MldsaKey, Mlkem, MlkemKey, PrivateKey};
+use tpm2::crypto::{CryptoError, Random};
+use tpm2_crypto_rust::RustCryptoProvider;
 
-use crate::bssl::{mldsa44, mldsa65, mldsa87, mlkem768, mlkem1024};
-use crate::{BsslCryptoProvider, output, verified};
+use crate::bssl::{cleanse, mldsa44, mldsa65, mldsa87, mlkem768, mlkem1024};
+use crate::{BsslCryptoProvider, BsslRng, output, random_array, verified};
 
-/// Returns the first `N` bytes of `out` as an array, or [`CryptoError::Internal`] if `out` is
-/// shorter.
-fn output_array<const N: usize>(out: &mut [u8]) -> Result<&mut [u8; N], CryptoError> {
-    out.get_mut(..N)
-        .and_then(|out| out.try_into().ok())
-        .ok_or(CryptoError::Internal)
+/// The RNG of the RustCrypto fallback.
+type RustRng = <RustCryptoProvider as Random>::Rng;
+
+/// A validated encoded public key of `PUB` bytes (an ML-KEM encapsulation key or an ML-DSA
+/// verification key) of the BoringSSL parameter set `P`.
+pub struct BsslPqcPublicKey<P, const PUB: usize> {
+    key: [u8; PUB],
+    params: core::marker::PhantomData<fn() -> P>,
+}
+
+impl<P, const PUB: usize> BsslPqcPublicKey<P, PUB> {
+    fn new(key: [u8; PUB]) -> Self {
+        Self {
+            key,
+            params: core::marker::PhantomData,
+        }
+    }
+}
+
+/// Defines the ML-KEM key type `$name` of the BoringSSL binding module `$module`.
+macro_rules! bssl_mlkem {
+    ($(#[$m:meta])* $name:ident, $public:ident, $module:ident, $pub_size:literal, $ct_size:literal) => {
+        $(#[$m])*
+        ///
+        /// The private key is the 64-byte seed `d || z` (cleansed on drop) with its encapsulation
+        /// key.
+        pub struct $name {
+            seed: [u8; 64],
+            public: $public,
+        }
+
+        #[doc = concat!("A validated encapsulation key of [`", stringify!($name), "`].")]
+        pub type $public = BsslPqcPublicKey<$name, $pub_size>;
+
+        impl Drop for $name {
+            fn drop(&mut self) {
+                cleanse(&mut self.seed);
+            }
+        }
+
+        impl PrivateKey<$pub_size, 64, BsslRng> for $name {
+            type PublicKey = $public;
+
+            fn generate(rng: &mut BsslRng, _: ()) -> Result<Self, CryptoError> {
+                let mut seed = random_array::<64>(rng);
+                let key = Self::expand(&seed);
+                cleanse(&mut seed);
+                key
+            }
+
+            fn load(public: $public, private: &[u8; 64]) -> Result<Option<Self>, CryptoError> {
+                let key = Self::expand(private)?;
+                Ok((key.public.key == public.key).then_some(key))
+            }
+
+            fn store(&self, out: &mut [u8; 64]) -> Result<(), CryptoError> {
+                *out = self.seed;
+                Ok(())
+            }
+
+            fn as_public(&self) -> &$public {
+                &self.public
+            }
+
+            fn load_public(_: (), public: &[u8; $pub_size]) -> Result<Option<$public>, CryptoError> {
+                Ok(output($module::check_public_key(public))?.map(|()| BsslPqcPublicKey::new(*public)))
+            }
+
+            fn store_public(public: &$public, out: &mut [u8; $pub_size]) -> Result<(), CryptoError> {
+                *out = public.key;
+                Ok(())
+            }
+        }
+
+        impl MlkemKey<$pub_size, $ct_size, BsslRng> for $name {
+            fn encapsulate(
+                public: &$public,
+                rng: &mut BsslRng,
+                out_ct: &mut [u8; $ct_size],
+                out_ss: &mut [u8; 32],
+            ) -> Result<(), CryptoError> {
+                let mut m = random_array::<32>(rng);
+                let result = Self::encapsulate_internal(public, &m, out_ct, out_ss);
+                cleanse(&mut m);
+                result
+            }
+
+            fn decapsulate(&self, ct: &[u8; $ct_size], out_ss: &mut [u8; 32]) -> Result<(), CryptoError> {
+                $module::decapsulate(&self.seed, ct, out_ss).map_err(Into::into)
+            }
+
+            fn expand(seed: &[u8; 64]) -> Result<Self, CryptoError> {
+                let mut public = [0u8; $pub_size];
+                $module::public_key_from_seed(seed, &mut public)?;
+                Ok(Self {
+                    seed: *seed,
+                    public: BsslPqcPublicKey::new(public),
+                })
+            }
+
+            /// Encapsulates with `EVP_KEM_encap_external_entropy_for_testing`, BoringSSL's only
+            /// public derandomized encapsulation (the TPM draws `m` from its DRBG, as the TCG
+            /// reference does).
+            fn encapsulate_internal(
+                public: &$public,
+                m: &[u8; 32],
+                out_ct: &mut [u8; $ct_size],
+                out_ss: &mut [u8; 32],
+            ) -> Result<(), CryptoError> {
+                // The key was validated by `load_public`.
+                $module::encapsulate(&public.key, m, out_ct, out_ss).map_err(Into::into)
+            }
+        }
+    };
+}
+
+bssl_mlkem!(
+    /// ML-KEM-768 keys for `BsslCryptoProvider` (BoringSSL `MLKEM768_*`).
+    BsslMlkem768,
+    BsslMlkem768PublicKey,
+    mlkem768,
+    1184,
+    1088
+);
+bssl_mlkem!(
+    /// ML-KEM-1024 keys for `BsslCryptoProvider` (BoringSSL `MLKEM1024_*`).
+    BsslMlkem1024,
+    BsslMlkem1024PublicKey,
+    mlkem1024,
+    1568,
+    1568
+);
+
+/// The ML-KEM-512 key of the RustCrypto fallback.
+type RustMlkem512 = <RustCryptoProvider as Mlkem>::Mlkem512;
+
+/// ML-KEM-512 keys for `BsslCryptoProvider`, which BoringSSL does not implement: a wrapper of the
+/// RustCrypto `ml-kem` key of `tpm2-crypto-rust`, whose randomness (the seed `d || z` of
+/// generated keys and `m` of encapsulations) comes from the `BsslCryptoProvider` RNG.
+pub struct BsslMlkem512(RustMlkem512);
+
+impl PrivateKey<800, 64, BsslRng> for BsslMlkem512 {
+    type PublicKey = <RustMlkem512 as PrivateKey<800, 64, RustRng>>::PublicKey;
+
+    fn generate(rng: &mut BsslRng, _: ()) -> Result<Self, CryptoError> {
+        let mut seed = random_array::<64>(rng);
+        let key = Self::expand(&seed);
+        cleanse(&mut seed);
+        key
+    }
+
+    fn load(public: Self::PublicKey, private: &[u8; 64]) -> Result<Option<Self>, CryptoError> {
+        Ok(<RustMlkem512 as PrivateKey<800, 64, RustRng>>::load(public, private)?.map(Self))
+    }
+
+    fn store(&self, out: &mut [u8; 64]) -> Result<(), CryptoError> {
+        <RustMlkem512 as PrivateKey<800, 64, RustRng>>::store(&self.0, out)
+    }
+
+    fn as_public(&self) -> &Self::PublicKey {
+        <RustMlkem512 as PrivateKey<800, 64, RustRng>>::as_public(&self.0)
+    }
+
+    fn load_public(_: (), public: &[u8; 800]) -> Result<Option<Self::PublicKey>, CryptoError> {
+        <RustMlkem512 as PrivateKey<800, 64, RustRng>>::load_public((), public)
+    }
+
+    fn store_public(public: &Self::PublicKey, out: &mut [u8; 800]) -> Result<(), CryptoError> {
+        <RustMlkem512 as PrivateKey<800, 64, RustRng>>::store_public(public, out)
+    }
+}
+
+impl MlkemKey<800, 768, BsslRng> for BsslMlkem512 {
+    fn encapsulate(
+        public: &Self::PublicKey,
+        rng: &mut BsslRng,
+        out_ct: &mut [u8; 768],
+        out_ss: &mut [u8; 32],
+    ) -> Result<(), CryptoError> {
+        let mut m = random_array::<32>(rng);
+        let result = Self::encapsulate_internal(public, &m, out_ct, out_ss);
+        cleanse(&mut m);
+        result
+    }
+
+    fn decapsulate(&self, ct: &[u8; 768], out_ss: &mut [u8; 32]) -> Result<(), CryptoError> {
+        <RustMlkem512 as MlkemKey<800, 768, RustRng>>::decapsulate(&self.0, ct, out_ss)
+    }
+
+    fn expand(seed: &[u8; 64]) -> Result<Self, CryptoError> {
+        <RustMlkem512 as MlkemKey<800, 768, RustRng>>::expand(seed).map(Self)
+    }
+
+    fn encapsulate_internal(
+        public: &Self::PublicKey,
+        m: &[u8; 32],
+        out_ct: &mut [u8; 768],
+        out_ss: &mut [u8; 32],
+    ) -> Result<(), CryptoError> {
+        <RustMlkem512 as MlkemKey<800, 768, RustRng>>::encapsulate_internal(
+            public, m, out_ct, out_ss,
+        )
+    }
 }
 
 /// ML-KEM-768/1024 with BoringSSL; ML-KEM-512 with RustCrypto `ml-kem`.
-impl tpm2::crypto::Mlkem for BsslCryptoProvider {
-    fn mlkem_generate_key(
-        &self,
-        param_set: TpmiMlkemParms,
-        seed: &[u8; MLKEM_SEED_SIZE],
-        public_key_out: &mut [u8],
-    ) -> Result<usize, CryptoError> {
-        match param_set {
-            TpmiMlkemParms::Mlkem512 => {
-                return tpm2_crypto_rust::pqc::mlkem_generate_key(param_set, seed, public_key_out);
-            }
-            TpmiMlkemParms::Mlkem768 => {
-                mlkem768::public_key_from_seed(seed, output_array(public_key_out)?)?
-            }
-            TpmiMlkemParms::Mlkem1024 => {
-                mlkem1024::public_key_from_seed(seed, output_array(public_key_out)?)?
-            }
-        }
-        Ok(param_set.public_key_bytes())
-    }
-
-    fn mlkem_encapsulate(
-        &self,
-        param_set: TpmiMlkemParms,
-        public_key: &[u8],
-        entropy: &[u8; MLKEM_ENTROPY_SIZE],
-        ciphertext_out: &mut [u8],
-        shared_secret_out: &mut [u8; MLKEM_SHARED_SECRET_SIZE],
-    ) -> Result<Option<usize>, CryptoError> {
-        let len = param_set.ciphertext_bytes();
-        let result = match param_set {
-            TpmiMlkemParms::Mlkem512 => {
-                return tpm2_crypto_rust::pqc::mlkem_encapsulate(
-                    param_set,
-                    public_key,
-                    entropy,
-                    ciphertext_out,
-                    shared_secret_out,
-                );
-            }
-            // BoringSSL's key parsing checks the size, but the TPM's size check comes first.
-            _ if public_key.len() != param_set.public_key_bytes() => return Ok(None),
-            TpmiMlkemParms::Mlkem768 => mlkem768::encapsulate(
-                public_key,
-                entropy,
-                output_array(ciphertext_out)?,
-                shared_secret_out,
-            ),
-            TpmiMlkemParms::Mlkem1024 => mlkem1024::encapsulate(
-                public_key,
-                entropy,
-                output_array(ciphertext_out)?,
-                shared_secret_out,
-            ),
-        };
-        Ok(output(result)?.map(|()| len))
-    }
-
-    fn mlkem_decapsulate(
-        &self,
-        param_set: TpmiMlkemParms,
-        seed: &[u8; MLKEM_SEED_SIZE],
-        ciphertext: &[u8],
-        shared_secret_out: &mut [u8; MLKEM_SHARED_SECRET_SIZE],
-    ) -> Result<bool, CryptoError> {
-        match param_set {
-            TpmiMlkemParms::Mlkem512 => {
-                return tpm2_crypto_rust::pqc::mlkem_decapsulate(
-                    param_set,
-                    seed,
-                    ciphertext,
-                    shared_secret_out,
-                );
-            }
-            TpmiMlkemParms::Mlkem768 => {
-                let Ok(ciphertext) = ciphertext.try_into() else {
-                    return Ok(false);
-                };
-                mlkem768::decapsulate(seed, ciphertext, shared_secret_out)?;
-            }
-            TpmiMlkemParms::Mlkem1024 => {
-                let Ok(ciphertext) = ciphertext.try_into() else {
-                    return Ok(false);
-                };
-                mlkem1024::decapsulate(seed, ciphertext, shared_secret_out)?;
-            }
-        }
-        Ok(true)
-    }
+impl Mlkem for BsslCryptoProvider {
+    type Mlkem512 = BsslMlkem512;
+    type Mlkem768 = BsslMlkem768;
+    type Mlkem1024 = BsslMlkem1024;
 }
 
-/// ML-DSA-44/65/87: key generation and verification with BoringSSL, signing with RustCrypto
-/// `ml-dsa` (with the TPM's `rnd`).
-impl tpm2::crypto::Mldsa for BsslCryptoProvider {
-    fn mldsa_generate_key(
-        &self,
-        param_set: TpmiMldsaParms,
-        seed: &[u8; MLDSA_SEED_SIZE],
-        public_key_out: &mut [u8],
-    ) -> Result<usize, CryptoError> {
-        match param_set {
-            TpmiMldsaParms::Mldsa44 => {
-                mldsa44::public_key_from_seed(seed, output_array(public_key_out)?)?
-            }
-            TpmiMldsaParms::Mldsa65 => {
-                mldsa65::public_key_from_seed(seed, output_array(public_key_out)?)?
-            }
-            TpmiMldsaParms::Mldsa87 => {
-                mldsa87::public_key_from_seed(seed, output_array(public_key_out)?)?
+/// Defines the ML-DSA key type `$name` of the BoringSSL binding module `$module`, with the
+/// RustCrypto key `$rust` (of `tpm2-crypto-rust`) for signing and HashML-DSA.
+macro_rules! bssl_mldsa {
+    (
+        $(#[$m:meta])* $name:ident, $public:ident, $module:ident, $rust:ident,
+        $pub_size:literal, $sig_size:literal
+    ) => {
+        $(#[$m])*
+        ///
+        /// The private key is the 32-byte seed `xi` (cleansed on drop) with its verification key.
+        pub struct $name {
+            seed: [u8; 32],
+            public: $public,
+        }
+
+        #[doc = concat!("A validated verification key of [`", stringify!($name), "`].")]
+        pub type $public = BsslPqcPublicKey<$name, $pub_size>;
+
+        impl Drop for $name {
+            fn drop(&mut self) {
+                cleanse(&mut self.seed);
             }
         }
-        Ok(param_set.public_key_bytes())
-    }
 
-    /// Falls back to RustCrypto `ml-dsa` ([`tpm2_crypto_rust::pqc::mldsa_sign_mu`]): BoringSSL
-    /// has no public signing with a caller-supplied `rnd`.
-    fn mldsa_sign_mu(
-        &self,
-        param_set: TpmiMldsaParms,
-        seed: &[u8; MLDSA_SEED_SIZE],
-        mu: &[u8; MLDSA_MU_SIZE],
-        rnd: &[u8; MLDSA_RND_SIZE],
-        signature_out: &mut [u8],
-    ) -> Result<Option<usize>, CryptoError> {
-        tpm2_crypto_rust::pqc::mldsa_sign_mu(param_set, seed, mu, rnd, signature_out)
-    }
-
-    fn mldsa_verify_mu(
-        &self,
-        param_set: TpmiMldsaParms,
-        public_key: &[u8],
-        mu: &[u8; MLDSA_MU_SIZE],
-        signature: &[u8],
-    ) -> Result<bool, CryptoError> {
-        if public_key.len() != param_set.public_key_bytes()
-            || signature.len() != param_set.signature_bytes()
-        {
-            return Ok(false);
+        impl $name {
+            /// Expands the RustCrypto key of the seed, for signing.
+            fn rust_key(&self) -> Result<<RustCryptoProvider as Mldsa>::$rust, CryptoError> {
+                <<RustCryptoProvider as Mldsa>::$rust as MldsaKey<$pub_size, $sig_size, RustRng>>::expand(
+                    &self.seed,
+                )
+            }
         }
-        verified(match param_set {
-            TpmiMldsaParms::Mldsa44 => mldsa44::verify_mu(public_key, mu, signature),
-            TpmiMldsaParms::Mldsa65 => mldsa65::verify_mu(public_key, mu, signature),
-            TpmiMldsaParms::Mldsa87 => mldsa87::verify_mu(public_key, mu, signature),
-        })
-    }
+
+        impl PrivateKey<$pub_size, 32, BsslRng> for $name {
+            type PublicKey = $public;
+
+            fn generate(rng: &mut BsslRng, _: ()) -> Result<Self, CryptoError> {
+                let mut seed = random_array::<32>(rng);
+                let key = Self::expand(&seed);
+                cleanse(&mut seed);
+                key
+            }
+
+            fn load(public: $public, private: &[u8; 32]) -> Result<Option<Self>, CryptoError> {
+                let key = Self::expand(private)?;
+                Ok((key.public.key == public.key).then_some(key))
+            }
+
+            fn store(&self, out: &mut [u8; 32]) -> Result<(), CryptoError> {
+                *out = self.seed;
+                Ok(())
+            }
+
+            fn as_public(&self) -> &$public {
+                &self.public
+            }
+
+            fn load_public(_: (), public: &[u8; $pub_size]) -> Result<Option<$public>, CryptoError> {
+                Ok(output($module::check_public_key(public))?.map(|()| BsslPqcPublicKey::new(*public)))
+            }
+
+            fn store_public(public: &$public, out: &mut [u8; $pub_size]) -> Result<(), CryptoError> {
+                *out = public.key;
+                Ok(())
+            }
+        }
+
+        impl MldsaKey<$pub_size, $sig_size, BsslRng> for $name {
+            /// Computes `mu` with BoringSSL and signs it as [`sign_mu`](Self::sign_mu).
+            fn sign_message(
+                &self,
+                rng: &mut BsslRng,
+                context: &[u8],
+                msg: &[&[u8]],
+                out_sig: &mut [u8; $sig_size],
+            ) -> Result<(), CryptoError> {
+                let mut mu = [0u8; 64];
+                $module::mu(&self.public.key, context, msg, &mut mu)?;
+                self.sign_mu(rng, &mu, out_sig)
+            }
+
+            fn verify_message(
+                public: &$public,
+                context: &[u8],
+                msg: &[&[u8]],
+                sig: &[u8; $sig_size],
+            ) -> Result<bool, CryptoError> {
+                let mut mu = [0u8; 64];
+                if output($module::mu(&public.key, context, msg, &mut mu))?.is_none() {
+                    return Ok(false);
+                }
+                Self::verify_mu(public, &mu, sig)
+            }
+
+            fn sign_mu(
+                &self,
+                rng: &mut BsslRng,
+                mu: &[u8; 64],
+                out_sig: &mut [u8; $sig_size],
+            ) -> Result<(), CryptoError> {
+                let mut rnd = random_array::<32>(rng);
+                let result = self.sign_mu_internal(&rnd, mu, out_sig);
+                cleanse(&mut rnd);
+                result
+            }
+
+            fn verify_mu(
+                public: &$public,
+                mu: &[u8; 64],
+                sig: &[u8; $sig_size],
+            ) -> Result<bool, CryptoError> {
+                verified($module::verify_mu(&public.key, mu, sig))
+            }
+
+            /// Falls back to RustCrypto `ml-dsa`, with its RNG seeded from `rng`.
+            fn sign_prehash(
+                &self,
+                rng: &mut BsslRng,
+                context: &[u8],
+                digest: TpmtHa<'_>,
+                out_sig: &mut [u8; $sig_size],
+            ) -> Result<(), CryptoError> {
+                let mut seed = random_array::<32>(rng);
+                let rust_rng = RustCryptoProvider::from_seed(&seed);
+                cleanse(&mut seed);
+                <<RustCryptoProvider as Mldsa>::$rust as MldsaKey<$pub_size, $sig_size, RustRng>>::sign_prehash(
+                    &self.rust_key()?,
+                    &mut rust_rng?,
+                    context,
+                    digest,
+                    out_sig,
+                )
+            }
+
+            /// Falls back to RustCrypto `ml-dsa`.
+            fn verify_prehash(
+                public: &$public,
+                context: &[u8],
+                digest: TpmtHa<'_>,
+                sig: &[u8; $sig_size],
+            ) -> Result<bool, CryptoError> {
+                type Rust = <RustCryptoProvider as Mldsa>::$rust;
+                let Some(public) = <Rust as PrivateKey<$pub_size, 32, RustRng>>::load_public((), &public.key)? else {
+                    return Ok(false);
+                };
+                <Rust as MldsaKey<$pub_size, $sig_size, RustRng>>::verify_prehash(&public, context, digest, sig)
+            }
+
+            fn expand(seed: &[u8; 32]) -> Result<Self, CryptoError> {
+                let mut public = [0u8; $pub_size];
+                $module::public_key_from_seed(seed, &mut public)?;
+                Ok(Self {
+                    seed: *seed,
+                    public: BsslPqcPublicKey::new(public),
+                })
+            }
+
+            /// Falls back to RustCrypto `ml-dsa`: BoringSSL has no public signing with a
+            /// caller-supplied `rnd`.
+            fn sign_mu_internal(
+                &self,
+                rnd: &[u8; 32],
+                mu: &[u8; 64],
+                out_sig: &mut [u8; $sig_size],
+            ) -> Result<(), CryptoError> {
+                <<RustCryptoProvider as Mldsa>::$rust as MldsaKey<$pub_size, $sig_size, RustRng>>::sign_mu_internal(
+                    &self.rust_key()?,
+                    rnd,
+                    mu,
+                    out_sig,
+                )
+            }
+        }
+    };
+}
+
+bssl_mldsa!(
+    /// ML-DSA-44 keys for `BsslCryptoProvider` (BoringSSL `MLDSA44_*`; signing with RustCrypto
+    /// `ml-dsa`).
+    BsslMldsa44,
+    BsslMldsa44PublicKey,
+    mldsa44,
+    Mldsa44,
+    1312,
+    2420
+);
+bssl_mldsa!(
+    /// ML-DSA-65 keys for `BsslCryptoProvider` (BoringSSL `MLDSA65_*`; signing with RustCrypto
+    /// `ml-dsa`).
+    BsslMldsa65,
+    BsslMldsa65PublicKey,
+    mldsa65,
+    Mldsa65,
+    1952,
+    3309
+);
+bssl_mldsa!(
+    /// ML-DSA-87 keys for `BsslCryptoProvider` (BoringSSL `MLDSA87_*`; signing with RustCrypto
+    /// `ml-dsa`).
+    BsslMldsa87,
+    BsslMldsa87PublicKey,
+    mldsa87,
+    Mldsa87,
+    2592,
+    4627
+);
+
+/// ML-DSA-44/65/87: key generation, `mu` and verification with BoringSSL, signing and
+/// HashML-DSA with RustCrypto `ml-dsa` (with the TPM's `rnd`).
+impl Mldsa for BsslCryptoProvider {
+    type Mldsa44 = BsslMldsa44;
+    type Mldsa65 = BsslMldsa65;
+    type Mldsa87 = BsslMldsa87;
 }

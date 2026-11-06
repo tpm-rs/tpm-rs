@@ -9,13 +9,13 @@ use tpm2::TpmCc;
 use tpm2::Unmarshal;
 use tpm2::commands::ActivateCredential;
 use tpm2::commands::responses;
-use tpm2::crypto::{CryptoProvider, Direction, Rng};
+use tpm2::crypto::{Crypto, Direction, Rng};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
     Tpm2bDigest, TpmaObject, TpmiAlgCipherMode, TpmiAlgHash, TpmiAlgSymMode, TpmtSymDefObject,
 };
 
-impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
+impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     CommandHandler<'a, 'b, C, S, T, R>
 {
     /// Handles the [TpmCc::ActivateCredential] (`0x147`) command.

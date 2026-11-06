@@ -62,7 +62,8 @@ fn test_context_save_kdfa_bug() {
         primary_handle: Handle::RH_OWNER,
         in_sensitive,
         in_public,
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     let create_resp =
         execute_command(&mut tpm, &create, &[password_auth(b"")]).expect("CreatePrimary failed");
@@ -94,8 +95,7 @@ fn test_context_save_kdfa_bug() {
     let proof = &tpm.state.sh_proof[..tpm.state.sh_proof_size as usize];
     // CONTEXT_INTEGRITY_HASH_ALG: the strongest implemented hash (Part 1, "Context Integrity
     // Protection"), or SHA-256 with `context-hash-sha256`.
-    let mut hmac = tpm2::crypto::HmacStream::new(
-        &*tpm.platform.crypto,
+    let mut hmac = tpm2::crypto::HmacContext::<TestCryptoProvider>::new(
         common::context_integrity_hash_alg(),
         proof,
     )

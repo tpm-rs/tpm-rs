@@ -9,11 +9,11 @@
 #![allow(deprecated)] // TPM2_EncryptDecrypt is deprecated upstream but still implemented.
 
 use crate::_common::{
-    CLIENT_CRYPTO, execute_with_password_sessions, get_bound_unique, leak_bytes, load_with_private,
+    ClientCrypto, execute_with_password_sessions, get_bound_unique, leak_bytes, load_with_private,
 };
 use testing::tpm::Tpm;
 use tpm2::commands::{EncryptDecrypt, EncryptDecrypt2};
-use tpm2::crypto::{ModeIv, SymmetricKey};
+use tpm2::crypto::{CipherInput, Direction, SymmetricKey};
 use tpm2::{
     AlgSym, Handle, PublicParmsAndId, Tpm2bDigest, Tpm2bIv, Tpm2bMaxBuffer, Tpm2bSymKey,
     TpmaObject, TpmiAlgCipherMode, TpmiAlgHash, TpmiAlgSymMode, TpmtPublic, TpmtSymDefObject,
@@ -65,13 +65,11 @@ fn lengths(mode: TpmiAlgCipherMode) -> &'static [usize] {
 fn encrypt_block(alg: AlgSym, key: &[u8], block: &[u8; BLOCK]) -> [u8; BLOCK] {
     let mut iv = *block;
     let mut out = [0u8; BLOCK];
-    tpm2::crypto::encrypt(
-        CLIENT_CRYPTO,
-        SymmetricKey::new(alg, key).unwrap(),
-        ModeIv::Cfb(&mut iv),
-        &mut out,
-    )
-    .unwrap();
+    let input = CipherInput::new(TpmiAlgCipherMode::Cfb, &mut iv, &mut out).unwrap();
+    SymmetricKey::new(alg, key)
+        .unwrap()
+        .crypt::<ClientCrypto>(Direction::Encrypt, input)
+        .unwrap();
     out
 }
 

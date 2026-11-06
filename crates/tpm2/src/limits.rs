@@ -64,12 +64,22 @@ pub const MAX_CONTEXT_SIZE: usize = 5120;
 /// wire in plaintext; plaintext [`Tpm2bSensitive`] buffers always carry the
 /// compact single-prime or seed form.
 ///
-/// By default, sized to fit the 5-prime CRT representation.
-pub const PRIVATE_VENDOR_SPECIFIC_BYTES: usize = TpmiRsaKeyBits::MAX_PRIV_KEY_BYTES;
+/// By default, sized to fit the 5-prime CRT representation of the largest
+/// enabled RSA key ([`RSA_PRIVATE_SIZE`]). This is `0` (no expanded format) if
+/// the `rsa` feature is disabled.
+pub const PRIVATE_VENDOR_SPECIFIC_BYTES: usize = RSA_PRIVATE_SIZE;
+/// Implementation-defined maximum size of a [`Tpm2bPrivateKeyRsa`]
+/// (`RSA_PRIVATE_SIZE`).
+///
+/// TPM 2.0 Part 2 allows either `MAX_RSA_KEY_BYTES / 2` (a single prime) or
+/// `(MAX_RSA_KEY_BYTES * 5) / 2` (the five CRT components `p`, `q`, `dP`, `dQ`
+/// and `qInv`, for keys with *fixedTPM* parents). This crate uses the larger
+/// size, like the TCG reference implementation (`CRT_FORMAT_RSA == YES`): five
+/// times [`TpmiRsaKeyBits::MAX_PRIV_KEY_BYTES`] (`0` without the `rsa` feature).
+pub const RSA_PRIVATE_SIZE: usize = TpmiRsaKeyBits::MAX_PRIV_KEY_BYTES * 5;
 
 const _: () = assert!(MAX_2B_BUFFER_SIZE >= 1024);
 const _: () = assert!(TpmsCapabilityData::MAX_SIZE >= MAX_CAP_BUFFER);
-const _: () = assert!(2 + PRIVATE_VENDOR_SPECIFIC_BYTES >= TpmuSensitiveComposite::MAX_SIZE);
 
 /// Specifies the maximum capacity (`CAP`) in bytes for a [`Tpm2bSized`] buffer.
 pub trait Tag {
@@ -150,70 +160,59 @@ pub struct PublicKeyRsa;
 impl Tag for PublicKeyRsa {
     const CAP: usize = TpmiRsaKeyBits::MAX_PUB_KEY_BYTES;
 }
-/// Sized to the maximum supported RSA prime factor ([`TpmiRsaKeyBits::MAX_PRIV_KEY_BYTES`]).
+/// Sized to [`RSA_PRIVATE_SIZE`]: the five CRT components of the largest supported RSA key
+/// (five times [`TpmiRsaKeyBits::MAX_PRIV_KEY_BYTES`]).
 pub struct PrivateKeyRsa;
 impl Tag for PrivateKeyRsa {
-    const CAP: usize = TpmiRsaKeyBits::MAX_PRIV_KEY_BYTES;
+    const CAP: usize = RSA_PRIVATE_SIZE;
 }
 /// Sized to the maximum supported ECC coordinate length ([`TpmEccCurve::MAX_ECC_KEY_BYTES`]).
 pub struct EccParameter;
 impl Tag for EccParameter {
     const CAP: usize = TpmEccCurve::MAX_ECC_KEY_BYTES;
 }
-/// Sized to twice the maximum ECC parameter size (`2 * MAX_ECC_KEY_BYTES`) for EdDSA signatures.
+/// Sized to the maximum supported EdDSA signature length (`2 * TpmEccCurve::MAX_ECC_KEY_BYTES`),
+/// or 0 without the `eddsa` Cargo feature.
 pub struct SignatureEddsa;
 impl Tag for SignatureEddsa {
-    const CAP: usize = 2 * (crate::constants::TPM2_MAX_ECC_KEY_BYTES as usize);
+    const CAP: usize = if cfg!(feature = "eddsa") {
+        2 * TpmEccCurve::MAX_ECC_KEY_BYTES
+    } else {
+        0
+    };
 }
-/// Sized to the maximum ML-KEM public key size (`MAX_MLKEM_PUB_SIZE` = 1568 bytes),
-/// or 0 without the `mlkem` Cargo feature.
+/// Sized to the maximum supported ML-KEM public key length
+/// ([`TpmiMlkemParms::MAX_PUB_KEY_BYTES`], `MAX_MLKEM_PUB_SIZE`), or 0 without the `mlkem` Cargo
+/// feature.
 pub struct PublicKeyMlkem;
 impl Tag for PublicKeyMlkem {
-    const CAP: usize = if cfg!(feature = "mlkem") {
-        crate::constants::TPM2_MAX_MLKEM_PUB_SIZE
-    } else {
-        0
-    };
+    const CAP: usize = TpmiMlkemParms::MAX_PUB_KEY_BYTES;
 }
-/// Sized to the maximum ML-KEM private seed size (`MAX_MLKEM_PRIV_SIZE` = 64 bytes),
-/// or 0 without the `mlkem` Cargo feature.
+/// Sized to the ML-KEM private seed size (`MAX_MLKEM_PRIV_SIZE` = 64 bytes), or 0 without the
+/// `mlkem` Cargo feature.
 pub struct PrivateKeyMlkem;
 impl Tag for PrivateKeyMlkem {
-    const CAP: usize = if cfg!(feature = "mlkem") {
-        crate::constants::TPM2_MAX_MLKEM_PRIV_SIZE
-    } else {
-        0
-    };
+    const CAP: usize = if cfg!(feature = "mlkem") { 64 } else { 0 };
 }
-/// Sized to the maximum ML-DSA public key size (`MAX_MLDSA_PUB_SIZE` = 2592 bytes),
-/// or 0 without the `mldsa` Cargo feature.
+/// Sized to the maximum supported ML-DSA public key length
+/// ([`TpmiMldsaParms::MAX_PUB_KEY_BYTES`], `MAX_MLDSA_PUB_SIZE`), or 0 without the `mldsa` Cargo
+/// feature.
 pub struct PublicKeyMldsa;
 impl Tag for PublicKeyMldsa {
-    const CAP: usize = if cfg!(feature = "mldsa") {
-        crate::constants::TPM2_MAX_MLDSA_PUB_SIZE
-    } else {
-        0
-    };
+    const CAP: usize = TpmiMldsaParms::MAX_PUB_KEY_BYTES;
 }
-/// Sized to the maximum ML-DSA private seed size (`MAX_MLDSA_PRIV_SIZE` = 32 bytes),
-/// or 0 without the `mldsa` Cargo feature.
+/// Sized to the ML-DSA private seed size (`MAX_MLDSA_PRIV_SIZE` = 32 bytes), or 0 without the
+/// `mldsa` Cargo feature.
 pub struct PrivateKeyMldsa;
 impl Tag for PrivateKeyMldsa {
-    const CAP: usize = if cfg!(feature = "mldsa") {
-        crate::constants::TPM2_MAX_MLDSA_PRIV_SIZE
-    } else {
-        0
-    };
+    const CAP: usize = if cfg!(feature = "mldsa") { 32 } else { 0 };
 }
-/// Sized to the maximum ML-DSA signature size (`MAX_MLDSA_SIG_SIZE` = 4627 bytes),
-/// or 0 without the `mldsa` Cargo feature.
+/// Sized to the maximum supported ML-DSA signature length
+/// ([`TpmiMldsaParms::MAX_SIG_BYTES`], `MAX_MLDSA_SIG_SIZE`), or 0 without the `mldsa` Cargo
+/// feature.
 pub struct SignatureMldsa;
 impl Tag for SignatureMldsa {
-    const CAP: usize = if cfg!(feature = "mldsa") {
-        crate::constants::TPM2_MAX_MLDSA_SIG_SIZE
-    } else {
-        0
-    };
+    const CAP: usize = TpmiMldsaParms::MAX_SIG_BYTES;
 }
 /// Sized to the largest supported asymmetric encrypted secret ([`TpmtPublicParms::MAX_ENCRYPTED_SECRET_BYTES`]).
 pub struct EncryptedSecret;
@@ -228,6 +227,7 @@ impl Tag for EncryptedSecret {
 /// "\[type\]parameters | TPMU_PUBLIC_PARMS", "\[type\]unique | TPMU_PUBLIC_ID"), where the size of
 /// each union is the size of its largest member (the largest `parameters` and the largest
 /// `unique` may belong to different types, so this may exceed [`TpmtPublic::MAX_SIZE`]).
+/// `TPMU_PUBLIC_ID` includes the `derive` member (`TPMS_DERIVE`, used by `TPM2_CreateLoaded`).
 pub struct Template;
 impl Tag for Template {
     const CAP: usize = Alg::MAX_SIZE
@@ -235,7 +235,7 @@ impl Tag for Template {
         + TpmaObject::MAX_SIZE
         + Tpm2bDigest::MAX_SIZE
         + (TpmuPublicParms::MAX_SIZE - Alg::MAX_SIZE)
-        + TpmuPublicId::MAX_SIZE;
+        + max!(TpmuPublicId::MAX_SIZE, TpmsDerive::MAX_SIZE);
 }
 const _: () = assert!(Template::CAP >= TpmtPublic::MAX_SIZE);
 /// Sized to hold an encrypted sensitive area.
@@ -244,13 +244,17 @@ const _: () = assert!(Template::CAP >= TpmtPublic::MAX_SIZE);
 /// - `integrityOuter`: An outer [`Tpm2bDigest`] HMAC for integrity
 /// - `integrityInner`: An inner [`Tpm2bDigest`] HMAC or IV
 /// - `sensitive`: An encrypted [`Tpm2bSensitive`] whose union member may be
-///   sized up to [`PRIVATE_VENDOR_SPECIFIC_BYTES`]
+///   replaced by a vendor-specific format of up to
+///   [`PRIVATE_VENDOR_SPECIFIC_BYTES`]
 #[doc(alias = "_PRIVATE")]
 pub struct Private;
 impl Tag for Private {
     const CAP: usize = Tpm2bDigest::MAX_SIZE * 2 + Tpm2bSensitive::MAX_SIZE
         - TpmuSensitiveComposite::MAX_SIZE
-        + (2 + PRIVATE_VENDOR_SPECIFIC_BYTES);
+        + max!(
+            TpmuSensitiveComposite::MAX_SIZE,
+            2 + PRIVATE_VENDOR_SPECIFIC_BYTES
+        );
 }
 /// Sized to hold an encrypted credential object.
 ///

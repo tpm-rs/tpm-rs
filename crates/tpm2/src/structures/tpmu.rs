@@ -1,14 +1,11 @@
-use crate::{
-    errors::UnmarshalError,
-    marshal::{marshal_helper, max},
-    *,
-};
+use crate::{errors::UnmarshalError, marshal::marshal_helper, *};
 
 /// `TPMU_ATTEST` union structure defined in TPM 2.0 Part 2: Structures, Section 10.4.23 (Table 142).
 ///
 /// Union of attestation structures (`TPMS_CERTIFY_INFO`, `TPMS_CREATION_INFO`, `TPMS_QUOTE_INFO`,
 /// `TPMS_COMMAND_AUDIT_INFO`, `TPMS_SESSION_AUDIT_INFO`, `TPMS_TIME_ATTEST_INFO`, `TPMS_NV_CERTIFY_INFO`,
 /// `TPMS_NV_DIGEST_CERTIFY_INFO`), selected by a `TPMI_ST_ATTEST` structure tag inside `TPMS_ATTEST`.
+#[doc(alias = "TPMU_ATTEST")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(u16)]
 pub enum TpmuAttest<'a> {
@@ -39,7 +36,7 @@ impl TpmuAttest<'_> {
 }
 
 impl Marshal for TpmuAttest<'_> {
-    const MAX_SIZE: usize = max(&[
+    const MAX_SIZE: usize = max!(
         TpmsCertifyInfo::MAX_SIZE,
         TpmsCreationInfo::MAX_SIZE,
         TpmsQuoteInfo::MAX_SIZE,
@@ -48,7 +45,7 @@ impl Marshal for TpmuAttest<'_> {
         TpmsTimeAttestInfo::MAX_SIZE,
         TpmsNvCertifyInfo::MAX_SIZE,
         TpmsNvDigestCertifyInfo::MAX_SIZE,
-    ]);
+    );
     type MaxBuffer = [u8; TpmuAttest::MAX_SIZE];
 
     fn marshal(&self, dst: &mut [u8; TpmuAttest::MAX_SIZE]) -> usize {
@@ -118,14 +115,14 @@ impl TpmuSensitiveComposite<'_> {
 }
 
 impl Marshal for TpmuSensitiveComposite<'_> {
-    const MAX_SIZE: usize = max(&[
+    const MAX_SIZE: usize = max!(
         Tpm2bPrivateKeyRsa::MAX_SIZE,
         Tpm2bEccParameter::MAX_SIZE,
         Tpm2bSensitiveData::MAX_SIZE,
         Tpm2bSymKey::MAX_SIZE,
         Tpm2bPrivateKeyMldsa::MAX_SIZE,
         Tpm2bPrivateKeyMlkem::MAX_SIZE,
-    ]);
+    );
     type MaxBuffer = [u8; TpmuSensitiveComposite::MAX_SIZE];
 
     fn marshal(&self, dst: &mut [u8; TpmuSensitiveComposite::MAX_SIZE]) -> usize {
@@ -181,6 +178,7 @@ impl<'a> TpmuSensitiveComposite<'a> {
 }
 
 /// `TPMU_PUBLIC_PARMS` union defined in TPM 2.0 Part 2: Structures, Section 12.2.3.7 (Table 209).
+#[doc(alias = "TPMU_PUBLIC_PARMS")]
 pub type TpmuPublicParms = TpmtPublicParms;
 
 /// `TPMU_PUBLIC_ID` union defined in TPM 2.0 Part 2: Structures, Section 12.2.3.2 (Table 204).
@@ -220,13 +218,13 @@ impl<'a> TpmuPublicId<'a> {
 }
 
 impl Marshal for TpmuPublicId<'_> {
-    const MAX_SIZE: usize = max(&[
+    const MAX_SIZE: usize = max!(
         Tpm2bDigest::MAX_SIZE,
         Tpm2bPublicKeyRsa::MAX_SIZE,
         TpmsEccPoint::MAX_SIZE,
         Tpm2bPublicKeyMldsa::MAX_SIZE,
         Tpm2bPublicKeyMlkem::MAX_SIZE,
-    ]);
+    );
     type MaxBuffer = [u8; TpmuPublicId::MAX_SIZE];
 
     fn marshal(&self, dst: &mut [u8; TpmuPublicId::MAX_SIZE]) -> usize {
@@ -241,6 +239,12 @@ impl Marshal for TpmuPublicId<'_> {
 }
 
 /// Internal union representing public object parameters (`TPMU_PUBLIC_PARMS`) and unique identifier (`TPMU_PUBLIC_ID`).
+///
+/// We use this custom type in [`TpmtPublic`] to enforce at the type level that
+/// the parameters (i.e. `TPMU_PUBLIC_PARMS`) and unique identifier (i.e.
+/// `TPMU_PUBLIC_ID`) use the same algorithm.
+#[doc(alias = "TPMU_PUBLIC_PARMS")]
+#[doc(alias = "TPMU_PUBLIC_ID")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(u16)]
 pub enum PublicParmsAndId<'a> {
@@ -355,16 +359,15 @@ impl<'a> PublicParmsAndId<'a> {
 }
 
 impl Marshal for PublicParmsAndId<'_> {
-    const MAX_SIZE: usize = max(&[
-        <Option<TpmtKeyedHashScheme>>::MAX_SIZE
-            + max(&[Tpm2bDigest::MAX_SIZE, TpmsDerive::MAX_SIZE]),
-        TpmtSymDefObject::MAX_SIZE + max(&[Tpm2bDigest::MAX_SIZE, TpmsDerive::MAX_SIZE]),
-        TpmsRsaParms::MAX_SIZE + max(&[Tpm2bPublicKeyRsa::MAX_SIZE, TpmsDerive::MAX_SIZE]),
-        TpmsEccParms::MAX_SIZE + max(&[TpmsEccPoint::MAX_SIZE, TpmsDerive::MAX_SIZE]),
-        TpmsMldsaParms::MAX_SIZE + max(&[Tpm2bPublicKeyMldsa::MAX_SIZE, TpmsDerive::MAX_SIZE]),
-        TpmsHashMldsaParms::MAX_SIZE + max(&[Tpm2bPublicKeyMldsa::MAX_SIZE, TpmsDerive::MAX_SIZE]),
-        TpmsMlkemParms::MAX_SIZE + max(&[Tpm2bPublicKeyMlkem::MAX_SIZE, TpmsDerive::MAX_SIZE]),
-    ]);
+    const MAX_SIZE: usize = max!(
+        <Option<TpmtKeyedHashScheme>>::MAX_SIZE + max!(Tpm2bDigest::MAX_SIZE, TpmsDerive::MAX_SIZE),
+        TpmtSymDefObject::MAX_SIZE + max!(Tpm2bDigest::MAX_SIZE, TpmsDerive::MAX_SIZE),
+        TpmsRsaParms::MAX_SIZE + max!(Tpm2bPublicKeyRsa::MAX_SIZE, TpmsDerive::MAX_SIZE),
+        TpmsEccParms::MAX_SIZE + max!(TpmsEccPoint::MAX_SIZE, TpmsDerive::MAX_SIZE),
+        TpmsMldsaParms::MAX_SIZE + max!(Tpm2bPublicKeyMldsa::MAX_SIZE, TpmsDerive::MAX_SIZE),
+        TpmsHashMldsaParms::MAX_SIZE + max!(Tpm2bPublicKeyMldsa::MAX_SIZE, TpmsDerive::MAX_SIZE),
+        TpmsMlkemParms::MAX_SIZE + max!(Tpm2bPublicKeyMlkem::MAX_SIZE, TpmsDerive::MAX_SIZE),
+    );
     type MaxBuffer = [u8; PublicParmsAndId::MAX_SIZE];
 
     fn marshal(&self, dst: &mut [u8; PublicParmsAndId::MAX_SIZE]) -> usize {
@@ -398,12 +401,6 @@ impl Marshal for PublicParmsAndId<'_> {
                 marshal_helper(id, dst, count)
             }
         }
-    }
-}
-
-impl Default for PublicParmsAndId<'_> {
-    fn default() -> Self {
-        Self::KeyedHash(None, Default::default())
     }
 }
 
@@ -473,7 +470,7 @@ impl Default for TpmuNvPublic2<'_> {
 }
 
 impl Marshal for TpmuNvPublic2<'_> {
-    const MAX_SIZE: usize = max(&[TpmsNvPublic::MAX_SIZE, TpmsNvPublicExpAttr::MAX_SIZE]);
+    const MAX_SIZE: usize = max!(TpmsNvPublic::MAX_SIZE, TpmsNvPublicExpAttr::MAX_SIZE);
     type MaxBuffer = [u8; TpmuNvPublic2::MAX_SIZE];
 
     fn marshal(&self, dst: &mut [u8; TpmuNvPublic2::MAX_SIZE]) -> usize {

@@ -65,7 +65,7 @@ fn restore_into<S: tpm2_engine::storage::NvStorage>(
     storage: &mut S,
     now_ms: u64,
 ) -> Result<(), DeserializeError> {
-    persistence::try_deserialize(persisted, state, storage, now_ms, &TestCryptoProvider)
+    persistence::try_deserialize::<TestCryptoProvider, _>(persisted, state, storage, now_ms)
 }
 
 /// The payload of the NV item `handle` of `persisted`.
@@ -122,7 +122,9 @@ fn create_storage_primary(tpm: &mut RealCryptoEngine<'_>, owner_auth: &'static [
                 tpm2::TpmsEccPoint::default(),
             ),
         }),
-        ..Default::default()
+        in_sensitive: Default::default(),
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     execute_command(tpm, &create, &[password_auth(owner_auth)])
         .expect("CreatePrimary")
@@ -601,12 +603,11 @@ fn global_state_to_persisted_and_back_round_trip() {
 
     let mut restored_storage_2 = Box::new(RamStorageMock::<NV_STORAGE_SIZE>::new());
     let mut restored_state_2 = Box::<GlobalState>::default();
-    persistence::deserialize(
+    persistence::deserialize::<TestCryptoProvider, _>(
         &re_persisted,
         &mut restored_state_2,
         &mut *restored_storage_2,
         50,
-        &TestCryptoProvider,
     );
     assert_eq!(restored_storage.as_slice(), restored_storage_2.as_slice());
     // The restored storage holds the same NV header and items as the original one.

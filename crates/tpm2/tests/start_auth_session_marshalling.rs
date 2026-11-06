@@ -181,6 +181,7 @@ fn hmac_session_without_symmetric_round_trips() {
 
 /// Client-side: a policy StartAuthSession with a 256-byte salt, AES-256-CFB and SHA-384 round-trips authHash.
 #[test]
+#[cfg(all(feature = "aes256", feature = "sha384"))]
 fn policy_aes256_sha384_command_round_trips() {
     let cmd = StartAuthSession {
         tpm_key: Handle::RH_NULL,

@@ -57,7 +57,8 @@ fn derive_structure_round_trips_through_seal() {
         primary_handle: Handle::RH_OWNER,
         in_sensitive: unmarshaled,
         in_public,
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     let create_rsp = execute_with_password_sessions(&mut sim, &create, 1, &[])
         .expect("CreatePrimary of sealed data object failed");

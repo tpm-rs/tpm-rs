@@ -12,14 +12,14 @@ use tpm2::Marshal;
 use tpm2::TpmCc;
 use tpm2::TpmaObject;
 use tpm2::commands::ContextSave;
-use tpm2::crypto::{CryptoProvider, Direction, Rng};
+use tpm2::crypto::{Crypto, Direction, Rng};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
     AlgSym, Handle, TPM2_MAX_CONTEXT_SIZE, TpmHt, TpmiAlgCipherMode, TpmiAlgHash, TpmiAlgSymMode,
     TpmtSymDefObject,
 };
 
-impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
+impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     CommandHandler<'a, 'b, C, S, T, R>
 {
     /// Handles the [TpmCc::ContextSave] (`0x112`) command.
@@ -192,11 +192,11 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     /// of a transient object into a raw buffer for saving.
     ///
     /// The private key of an RSA object is saved in its compact prime-only form (the prime `P`
-    /// of [`tpm2::crypto::Asymmetric::rsa_private_key_to_prime_p`], at most half the modulus)
-    /// instead of the crypto provider's format, and rebuilt from the prime and the public area
-    /// by `TPM2_ContextLoad`, so that the context of the largest RSA key of the profile fits
-    /// `MAX_CONTEXT_SIZE` (see [`MAX_SAVED_PRIVATE_SIZE`]). Every other private value is saved as
-    /// it is.
+    /// that [`TransientObject::private`] holds, [`tpm2::crypto::RsaPrivateKey::prime_p`], at
+    /// most half the modulus), and the key is rebuilt from the prime and the public area (which
+    /// validates the prime) by `TPM2_ContextLoad`, so that the context of the largest RSA key of
+    /// the profile fits `MAX_CONTEXT_SIZE` (see [`MAX_SAVED_PRIVATE_SIZE`]). Every other private
+    /// value is saved as it is.
     fn serialize_transient_object(
         &self,
         obj: &TransientObject,
@@ -233,20 +233,8 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 .unwrap(),
         );
 
-        let mut prime = [0u8; MAX_SAVED_PRIVATE_SIZE];
-        let private = if saves_rsa_prime(obj) {
-            let len = match self
-                .crypto()
-                .rsa_private_key_to_prime_p(&obj.private[..obj.private_len], &mut prime)
-            {
-                Ok(Some(len)) => len,
-                // Every loaded RSA private key is valid.
-                Ok(None) | Err(_) => return Err(TpmRc::FAILURE),
-            };
-            &prime[..len]
-        } else {
-            &obj.private[..obj.private_len]
-        };
+        // The private value of an RSA object is already its prime.
+        let private = obj.private_bytes();
         if private.len() > MAX_SAVED_PRIVATE_SIZE {
             return Err(TpmRc::FAILURE);
         }
@@ -612,34 +600,14 @@ const CONTEXT_INTEGRITY_SIZE: usize = if cfg!(any(
     crate::handler::TICKET_DIGEST_SIZE
 };
 
-/// Whether the saved context of `obj` holds its RSA private key in the prime-only form (see
-/// `serialize_transient_object`): an RSA object with a private key.
-pub(crate) fn saves_rsa_prime(obj: &TransientObject) -> bool {
-    obj.public.algorithm() == tpm2::Alg::RSA && !obj.public_only && obj.private_len > 0
-}
-
 /// The largest private value in a saved object context: the members of
 /// `TPMU_SENSITIVE_COMPOSITE` in their compact form (TPM 2.0 Part 2, Table "Definition of
 /// TPMU_SENSITIVE_COMPOSITE Union"): an RSA prime (`MAX_RSA_KEY_BYTES` / 2, the RSA private key is
 /// saved as its prime), an ECC private scalar (`TPM2B_ECC_PARAMETER`), the data of a keyed-hash
-/// object (`TPM2B_SENSITIVE_DATA`) or a symmetric key (`TPM2B_SYM_KEY`).
-pub(crate) const MAX_SAVED_PRIVATE_SIZE: usize = {
-    let rsa_prime = tpm2::TpmiRsaKeyBits::MAX_PUB_KEY_BYTES / 2;
-    let mut max = rsa_prime;
-    let others = [
-        tpm2::Tpm2bEccParameter::CAP,
-        tpm2::Tpm2bSensitiveData::CAP,
-        tpm2::Tpm2bSymKey::CAP,
-    ];
-    let mut i = 0;
-    while i < others.len() {
-        if others[i] > max {
-            max = others[i];
-        }
-        i += 1;
-    }
-    max
-};
+/// object (`TPM2B_SENSITIVE_DATA`), a symmetric key (`TPM2B_SYM_KEY`) or the seed of an ML-KEM or
+/// ML-DSA key: the private value of a loaded object as it is
+/// ([`crate::handler::MAX_PRIVATE_KEY_SIZE`]).
+pub(crate) const MAX_SAVED_PRIVATE_SIZE: usize = crate::handler::MAX_PRIVATE_KEY_SIZE;
 
 /// Upper bound of `serialize_transient_object`: every field at its capacity. The
 /// public area is bounded by the profile's `sizeof(TPMT_PUBLIC)` (every loaded public area passed
@@ -659,7 +627,7 @@ const MAX_TRANSIENT_OBJECT_ENTITY_SIZE: usize = 4 // handle
 // The private value of an ML-KEM or ML-DSA object is its seed (an ML-KEM seed `d || z` is the
 // larger one).
 #[cfg(any(feature = "mlkem", feature = "mldsa"))]
-const _: () = assert!(tpm2::crypto::MLKEM_SEED_SIZE <= MAX_SAVED_PRIVATE_SIZE);
+const _: () = assert!(tpm2::TpmiMlkemParms::PRIV_KEY_BYTES <= MAX_SAVED_PRIVATE_SIZE);
 
 /// The largest sequence type of `serialize_sequence`: an HMAC sequence (hash and key), a CMAC
 /// sequence or a signing/verification sequence ([`crate::SignatureSequence::serialize`]).

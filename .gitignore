@@ -15,3 +15,5 @@ __pycache__
 /.agents
 /_agents/*
 !/_agents/skills/
+*.patch
+boringssl-build/

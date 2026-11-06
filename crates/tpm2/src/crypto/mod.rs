@@ -1,225 +1,307 @@
-//! Cryptography Interfaces for TPM implementations and clients
+//! Cryptographic Dispatch Functions
 //!
-//! ## Error handling
+//! This module contains dispatch functions (and enums) used by TPM
+//! implementations and clients to call into [`Crypto`] backends. These
+//! functions select an algorithm at runtime (e.g. via
+//! [`TpmiAlgHash`](crate::TpmiAlgHash)) and dispatch to the corresponding
+//! algorithm's implementation.
 //!
-//! Every fallible operation returns [`CryptoError`], which only distinguishes
-//! unsupported algorithms/modes/key sizes ([`CryptoError::Unsupported`]) from
-//! internal failures that put the TPM into failure mode
-//! ([`CryptoError::Internal`]). Semantic failures caused by the inputs (a bad
-//! signature, an invalid ECC point, a point at infinity, bad padding or
-//! ciphertext, a message too large for a key, an invalid key, ...) are not
-//! errors: they are reported in the `Ok` value:
-//!   - Verification and validation return `Ok(false)`.
-//!   - Operations producing output (signing, encryption, decryption, key
-//!     import, ECC point multiplication) return `Ok(None)`.
+//! Users should generally use `C: Crypto` bounds for code that is generic
+//! over cryptographic backends.
 //!
-//! ## Module organization
+//! ## One-shot functions
 //!
-//! All items are re-exported at the top level of this module (e.g.
-//! [`crypto::kdfa`](kdfa)). The [`asymmetric`](mod@asymmetric),
-//! [`cmac`](mod@cmac), [`ecc`](mod@ecc), [`kdf`](mod@kdf), [`pqc`](mod@pqc),
-//! [`rng`](mod@rng), and [`symmetric`](mod@symmetric) submodules are also public, so that paths
-//! like `tpm2::crypto::kdf::kdfa` and `tpm2::crypto::asymmetric::KeyParams`
-//! keep working.
-pub mod asymmetric;
-pub mod cmac;
-pub mod ecc;
-pub mod ecc_params;
+//! Most use-cases can use the simple "one-shot" functions for:
+//! - Hashing: [`hash`](hash::hash)
+//! - HMACs: [`hmac`](hmac::hmac)
+//! - KDFs: [`kdfa`], [`kdfa_xor`], [`kdfe`] (and the tpm-rs extensions
+//!   [`kdfa_bits`] and [`kdfe_bits`])
+//! - Encryption and Decryption: [`SymmetricKey::crypt`]
+//! - CMACs: [`SymmetricKey::cmac`]
+//! - Random bytes: [`Random::rand_bytes`]
+//!
+//! ## Stateful `enum`s and RNG
+//!
+//! When cryptographic context must persist across commands, this module also
+//! provides stateful dispatch enums with methods that use/mutate the state:
+//! - Hashing: [`HashContext`]
+//! - HMACs: [`HmacContext`]
+//! - Encryption and Decryption: [`SymmetricContext`]
+//! - CMACs: [`CmacContext`]
+//! - Random number generation: [`Rng`] (created via [`Random::from_entropy`] or
+//!   [`Random::from_seed`])
+//! - RSA: [`RsaPublicKey`] (`encrypt`, `verify`) and [`RsaPrivateKey`]
+//!   (`decrypt`, `sign`)
+//! - ECC: [`EccPublicKey`] (`verify`, `verify_message`) and [`EccPrivateKey`]
+//!   (`ecdh`, `sign`, `sign_message`)
+//! - ML-DSA: [`MldsaPublicKey`] (`verify`, `verify_message`) and
+//!   [`MldsaPrivateKey`] (`sign_mu`, `sign_prehash`, `sign_message`)
+//! - ML-KEM: [`MlkemPublicKey`] (`encapsulate`) and [`MlkemPrivateKey`]
+//!   (`decapsulate`)
+//!
+//! For stack usage and code size guidance, see the
+//! [backend optimization notes](backend#optimization-notes).
+
+#[cfg(feature = "cmac")]
+mod cmac;
+#[cfg(feature = "ecc")]
+mod ecc;
 mod hash;
 mod hmac;
-pub mod kdf;
-pub mod pqc;
-pub mod rng;
-pub mod symmetric;
-pub use {
-    asymmetric::*, cmac::*, ecc::*, ecc_params::*, hash::*, hmac::*, kdf::*, pqc::*, rng::*,
-    symmetric::*,
-};
+#[cfg(feature = "mldsa")]
+mod mldsa;
+#[cfg(feature = "mlkem")]
+mod mlkem;
+mod rng;
+#[cfg(feature = "rsa")]
+mod rsa;
+#[cfg(any(feature = "rsa", feature = "ecc", feature = "mldsa"))]
+mod signing;
+mod symmetric;
 
-/// Common error type for all cryptographic traits.
+pub mod backend;
+pub mod ecc_params;
+#[cfg(feature = "cmac")]
+pub use cmac::*;
+#[cfg(feature = "ecc")]
+pub use ecc::*;
+#[cfg(feature = "mldsa")]
+pub use mldsa::*;
+#[cfg(feature = "mlkem")]
+pub use mlkem::*;
+#[cfg(feature = "rsa")]
+pub use rsa::*;
+#[cfg(any(feature = "rsa", feature = "ecc", feature = "mldsa"))]
+pub use signing::*;
+pub use {ecc_params::*, hash::*, hmac::*, rng::*, symmetric::*};
+
+/// Common error type for all cryptographic operations.
 ///
 /// We intentionally don't allow cryptography backends to provide rich error
 /// information, as we can't do anything other than enter failure mode when we
 /// receive [`CryptoError::Internal`].
+///
+/// `CryptoError` is not used to reject invalid caller input that a TPM should
+/// report with a normal response code. Such checks return an [`Option`] or
+/// [`bool`] instead (e.g. [`SymmetricKey::new`], an off-curve ECC point, invalid
+/// RSA padding, or a failed signature verification).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CryptoError {
-    /// The requested algorithm, mode, or key size is unsupported.
+    /// The requested algorithm, mode, scheme, exponent, or key size is
+    /// unsupported.
     Unsupported,
     /// An internal error, which puts the TPM into failure mode.
     Internal,
 }
 
-/// Selects between encryption and decryption operations.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Direction {
-    Encrypt,
-    Decrypt,
-}
-
-/// Constant-time equality comparison for fixed-length byte arrays.
-pub trait ConstantTimeEq {
-    fn constant_time_eq<const N: usize>(&self, a: &[u8; N], b: &[u8; N]) -> bool;
-}
-
-/// Feeds incremental input bytes into an active cryptographic stream context.
-pub trait Update {
-    fn update(&mut self, data: &[u8]) -> Result<(), CryptoError>;
-}
-/// Consumes a cryptographic stream context and writes the fixed-length output.
-///
-/// Other traits and functions wrap this to return TPM structs. For example,
-/// [`HashStream::finalize`] wraps this to return a [TpmtHa](crate::TpmtHa).
-pub trait Finalize<const N: usize> {
-    fn finalize(self, out: &mut [u8; N]) -> Result<(), CryptoError>;
-}
-
-impl Update for ! {
-    fn update(&mut self, _: &[u8]) -> Result<(), CryptoError> {
-        match *self {}
-    }
-}
-impl<const N: usize> Finalize<N> for ! {
-    fn finalize(self, _: &mut [u8; N]) -> Result<(), CryptoError> {
-        match self {}
+impl core::fmt::Display for CryptoError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Unsupported => {
+                write!(f, "unsupported cryptographic algorithm, mode, or key size")
+            }
+            Self::Internal => write!(f, "internal cryptographic error"),
+        }
     }
 }
 
-/// The core cryptography provider factory.
+impl core::error::Error for CryptoError {}
+
+/// A complete cryptography backend.
 ///
-/// This acts as the entire Hardware Abstraction Layer mapping: a TPM engine is
-/// generic over a single `CryptoProvider`, which bundles every cryptographic
-/// interface of this module. Backends implement it explicitly (there is no
-/// blanket implementation), after implementing each of the super-traits.
-///
-/// ## The provider CSPRNG
-///
-/// Besides the super-traits, a provider supplies the cryptographically secure
-/// random number generator used by the TPM engine for nonces, seeds, proofs,
-/// and symmetric keys ([`CryptoProvider::get_random`]), which can be stirred
-/// with additional data ([`CryptoProvider::stir_random`], used by
-/// `TPM2_StirRandom`). It is shared (`&self`): a provider has a single random
-/// stream, used by every caller.
-///
-/// This generator is distinct from:
-///   - the platform RNG ([`Rng`] in
-///     [`TpmPlatform`](crate::platform::TpmPlatform)), and
-///   - the RNG instances created through [`Random`].
-///
-/// [`CryptoProvider::get_random`] is a **required** method: the TPM engine
-/// cannot run without randomness, so a provider without a random source should
-/// fail to compile rather than fail at run time with
-/// [`CryptoError::Unsupported`]. [`CryptoProvider::stir_random`] defaults to
-/// ignoring the additional data (`Ok(())`), which is valid for generators that
-/// are continuously reseeded from an entropy source.
-///
-/// ## Example
-///
-/// ```
-/// # use tpm2::crypto::*;
-/// # struct MyBackend;
-/// # impl Hash for MyBackend {
-/// #     type Sha1Context = !;
-/// #     type Sha256Context = !;
-/// #     type Sha384Context = !;
-/// #     type Sha512Context = !;
-/// #     type Sm3_256Context = !;
-/// #     type Sha3_256Context = !;
-/// #     type Sha3_384Context = !;
-/// #     type Sha3_512Context = !;
-/// # }
-/// # impl Hmac for MyBackend {
-/// #     type Sha1Context = !;
-/// #     type Sha256Context = !;
-/// #     type Sha384Context = !;
-/// #     type Sha512Context = !;
-/// #     type Sm3_256Context = !;
-/// #     type Sha3_256Context = !;
-/// #     type Sha3_384Context = !;
-/// #     type Sha3_512Context = !;
-/// # }
-/// # impl Cmac for MyBackend {
-/// #     type Aes128Context = !;
-/// #     type Aes192Context = !;
-/// #     type Aes256Context = !;
-/// #     type Sm4_128Context = !;
-/// #     type Camellia128Context = !;
-/// #     type Camellia192Context = !;
-/// #     type Camellia256Context = !;
-/// # }
-/// # impl Symmetric for MyBackend {}
-/// # impl ConstantTimeEq for MyBackend {
-/// #     fn constant_time_eq<const N: usize>(&self, a: &[u8; N], b: &[u8; N]) -> bool {
-/// #         a.iter().zip(b).fold(0, |acc, (x, y)| acc | (x ^ y)) == 0
-/// #     }
-/// # }
-/// # impl Random for MyBackend {
-/// #     type Rng = !;
-/// # }
-/// # impl Asymmetric for MyBackend {}
-/// # impl AsymmetricSign for MyBackend {}
-/// # impl Ecc for MyBackend {
-/// #     type NistP192Context = !;
-/// #     type NistP224Context = !;
-/// #     type NistP256Context = !;
-/// #     type NistP384Context = !;
-/// #     type NistP521Context = !;
-/// #     type BnP256Context = !;
-/// #     type BnP638Context = !;
-/// #     type Sm2P256Context = !;
-/// #     type BpP256R1Context = !;
-/// #     type BpP384R1Context = !;
-/// #     type BpP512R1Context = !;
-/// #     type Curve25519Context = !;
-/// #     type Curve448Context = !;
-/// # }
-/// # impl Mlkem for MyBackend {}
-/// # impl Mldsa for MyBackend {}
-/// impl CryptoProvider for MyBackend {
-///     fn get_random(&self, dest: &mut [u8]) -> Result<(), CryptoError> {
-///         // Fill `dest` from the backend's CSPRNG.
-///         dest.fill(0x42);
-///         Ok(())
-///     }
-///     // `stir_random` keeps its default (ignore the additional data).
-/// }
-/// ```
-pub trait CryptoProvider:
-    Hash
-    + Hmac
-    + Cmac
-    + Symmetric
-    + ConstantTimeEq
-    + Random
-    + Asymmetric
-    + AsymmetricSign
-    + Ecc
-    + Mlkem
-    + Mldsa
+/// Backends implement [`Random`], the [`backend`] family traits, and then this
+/// trait. Generic code should use a `C: Crypto` bound rather than naming the
+/// backend traits directly.
+pub trait Crypto:
+    Random
+    + backend::Hash
+    + backend::Hmac
+    + backend::Cmac
+    + backend::Symmetric
+    + backend::Rsa
+    + backend::Ecc
+    + backend::Mldsa
+    + backend::Mlkem
 {
-    /// Fills `dest` with cryptographically secure random bytes from the
-    /// provider's CSPRNG.
-    ///
-    /// # Errors
-    /// * [`CryptoError::Internal`] - The underlying entropy source failed
-    ///   (e.g. the TRNG ran out of entropy or a continuous health test failed).
-    fn get_random(&self, dest: &mut [u8]) -> Result<(), CryptoError>;
+    /// Returns `a == b`, in time independent of the slice contents.
+    fn ct_eq(a: &[u8], b: &[u8]) -> bool;
 
-    /// Whether the TPM's algorithm self tests (TPM 2.0 Part 1, "Self-Test Modes") compare this
-    /// provider's results with their known answers (default `true`).
+    /// Whether the TPM's algorithm self tests (TPM 2.0 Part 1, "Self-Test
+    /// Modes") compare this backend's results with their known answers
+    /// (default `true`).
     ///
-    /// Only a test double whose algorithms are not the real ones (e.g. a fake hash) sets this to
-    /// `false`: the self tests then still run and mark the algorithms as tested, but a result
-    /// that differs from the known answer does not put the TPM into Failure mode.
+    /// This is a tpm-rs extension. Only a test double whose algorithms are not
+    /// the real ones (e.g. a fake hash) sets this to `false`: the self tests
+    /// then still run and mark the algorithms as tested, but a result that
+    /// differs from the known answer does not put the TPM into Failure mode.
     const KNOWN_ANSWER_TESTS: bool = true;
-
-    /// Mixes `data` into the provider's CSPRNG state (`TPM2_StirRandom`).
-    ///
-    /// The default implementation ignores `data` and returns `Ok(())`.
-    ///
-    /// # Errors
-    /// * [`CryptoError::Internal`] - The generator failed to absorb `data`.
-    fn stir_random(&self, data: &[u8]) -> Result<(), CryptoError> {
-        let _ = data;
-        Ok(())
-    }
 }
+
+/// Returns whether the tagged digests `a` and `b` are equal (same hash
+/// algorithm and same digest), comparing the digests in constant time with
+/// [`Crypto::ct_eq`].
+///
+/// This is a tpm-rs extension.
+pub fn digest_eq<C: Crypto>(a: crate::TpmtHa<'_>, b: crate::TpmtHa<'_>) -> bool {
+    a.hash_alg() == b.hash_alg() && C::ct_eq(a.digest(), b.digest())
+}
+
+// Internal helpers
+
+/// Left-pads a non-empty big-endian integer slice (`1 <= src.len() <= N`) with
+/// `0x00` bytes into an `N`-byte array, returning `None` if `src` is empty or
+/// longer than `N`.
+#[cfg(any(feature = "rsa", feature = "ecc"))]
+// Unused if `ecc` is enabled without `rsa` or any Weierstrass curve.
+#[cfg_attr(not(feature = "rsa"), allow(dead_code))]
+pub(crate) fn left_pad_be<const N: usize>(src: &[u8]) -> Option<[u8; N]> {
+    if src.is_empty() || src.len() > N {
+        return None;
+    }
+    let mut out = [0u8; N];
+    out[N - src.len()..].copy_from_slice(src);
+    Some(out)
+}
+
+// Internal helper macros
+
+/// Generates a `match` with one arm per enabled variant of an algorithm enum.
+///
+/// The first arm is a template: `$Alg` is replaced with each variant name. Its
+/// pattern must be a path ending in `$Alg` (optionally followed by `(..)`), and
+/// its body must be a `{ .. }` block. Arms after it (following a `,`) are
+/// copied unchanged, e.g. for variants outside the algorithm family:
+///
+/// ```ignore
+/// match_ecc_curve!(match self {
+///     Self::$Alg(_) => { TpmEccCurve::$Alg },
+///     Self::X25519(_) => TpmEccCurve::Curve25519,
+/// })
+/// ```
+///
+/// The scrutinee must be a single token tree, e.g. `self` or `(*self)`.
+macro_rules! match_variants {
+    (
+        [$($(#[$m:meta])* $V:ident),* $(,)?]
+        match $v:tt {
+            $($p:ident ::)+ $d:tt $Alg:ident $(($($f:tt)*))? => $body:tt
+            $(, $($extra:tt)*)?
+        }
+    ) => {{
+        // `$d` is the caller's `$`, needed to declare the inner macro's metavariables.
+        macro_rules! match_arms {
+            ($d($d(#[$d m:meta])* $d $Alg:ident),*) => {
+                match $v {
+                    $d($d(#[$d m])* $($p ::)+ $d $Alg $(($($f)*))? => $body,)*
+                    $($($extra)*)?
+                }
+            };
+        }
+        match_arms!($($(#[$m])* $V),*)
+    }};
+}
+
+/// [`match_variants`] over the [`TpmiAlgHash`](crate::TpmiAlgHash) variants.
+macro_rules! match_hash_alg {
+    ($($t:tt)*) => {
+        $crate::crypto::match_variants!([
+            #[cfg(feature = "sha1")] Sha1,
+            #[cfg(feature = "sha256")] Sha256,
+            #[cfg(feature = "sha384")] Sha384,
+            #[cfg(feature = "sha512")] Sha512,
+            #[cfg(feature = "sm3_256")] Sm3_256,
+            #[cfg(feature = "sha3_256")] Sha3_256,
+            #[cfg(feature = "sha3_384")] Sha3_384,
+            #[cfg(feature = "sha3_512")] Sha3_512,
+        ] $($t)*)
+    };
+}
+
+/// [`match_variants`] over the [`AlgSym`](crate::AlgSym) variants.
+macro_rules! match_sym_alg {
+    ($($t:tt)*) => {
+        $crate::crypto::match_variants!([
+            #[cfg(feature = "aes128")] Aes128,
+            #[cfg(feature = "aes192")] Aes192,
+            #[cfg(feature = "aes256")] Aes256,
+            #[cfg(feature = "sm4_128")] Sm4_128,
+            #[cfg(feature = "camellia128")] Camellia128,
+            #[cfg(feature = "camellia192")] Camellia192,
+            #[cfg(feature = "camellia256")] Camellia256,
+        ] $($t)*)
+    };
+}
+
+/// [`match_variants`] over the [`TpmiRsaKeyBits`](crate::TpmiRsaKeyBits)
+/// variants.
+#[cfg(feature = "rsa")]
+macro_rules! match_rsa_bits {
+    ($($t:tt)*) => {
+        $crate::crypto::match_variants!([
+            #[cfg(feature = "rsa1024")] Rsa1024,
+            #[cfg(feature = "rsa2048")] Rsa2048,
+            #[cfg(feature = "rsa3072")] Rsa3072,
+            #[cfg(feature = "rsa4096")] Rsa4096,
+        ] $($t)*)
+    };
+}
+#[cfg(feature = "rsa")]
+use match_rsa_bits;
+
+/// [`match_variants`] over the Weierstrass [`TpmEccCurve`](crate::TpmEccCurve)
+/// variants.
+#[cfg(feature = "ecc")]
+macro_rules! match_ecc_curve {
+    ($($t:tt)*) => {
+        $crate::crypto::match_variants!([
+            #[cfg(feature = "nist_p192")] NistP192,
+            #[cfg(feature = "nist_p224")] NistP224,
+            #[cfg(feature = "nist_p256")] NistP256,
+            #[cfg(feature = "nist_p384")] NistP384,
+            #[cfg(feature = "nist_p521")] NistP521,
+            #[cfg(feature = "bn_p256")] BNP256,
+            #[cfg(feature = "bn_p638")] BNP638,
+            #[cfg(feature = "sm2_p256")] SM2P256,
+            #[cfg(feature = "bp_p256_r1")] BpP256R1,
+            #[cfg(feature = "bp_p384_r1")] BpP384R1,
+            #[cfg(feature = "bp_p512_r1")] BpP512R1,
+        ] $($t)*)
+    };
+}
+#[cfg(feature = "ecc")]
+use match_ecc_curve;
+
+/// [`match_variants`] over the [`TpmiMldsaParms`](crate::TpmiMldsaParms)
+/// variants.
+#[cfg(feature = "mldsa")]
+macro_rules! match_mldsa_parms {
+    ($($t:tt)*) => {
+        $crate::crypto::match_variants!([
+            #[cfg(feature = "mldsa_44")] Mldsa44,
+            #[cfg(feature = "mldsa_65")] Mldsa65,
+            #[cfg(feature = "mldsa_87")] Mldsa87,
+        ] $($t)*)
+    };
+}
+#[cfg(feature = "mldsa")]
+use match_mldsa_parms;
+
+/// [`match_variants`] over the [`TpmiMlkemParms`](crate::TpmiMlkemParms)
+/// variants.
+#[cfg(feature = "mlkem")]
+macro_rules! match_mlkem_parms {
+    ($($t:tt)*) => {
+        $crate::crypto::match_variants!([
+            #[cfg(feature = "mlkem_512")] Mlkem512,
+            #[cfg(feature = "mlkem_768")] Mlkem768,
+            #[cfg(feature = "mlkem_1024")] Mlkem1024,
+        ] $($t)*)
+    };
+}
+#[cfg(feature = "mlkem")]
+use match_mlkem_parms;
+
+use {match_hash_alg, match_sym_alg, match_variants};
+
+#[cfg(test)]
+mod tests;

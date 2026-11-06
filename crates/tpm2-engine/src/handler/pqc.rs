@@ -14,10 +14,11 @@
 
 #![cfg_attr(not(any(feature = "mlkem", feature = "mldsa")), allow(dead_code))]
 
-use tpm2::crypto::{
-    CryptoError, CryptoProvider, MLDSA_MU_SIZE, MLDSA_RND_SIZE, MLDSA_SEED_SIZE,
-    MLKEM_ENTROPY_SIZE, MLKEM_SEED_SIZE, MLKEM_SHARED_SECRET_SIZE, Rng,
-};
+use tpm2::crypto::{Crypto, CryptoError, Rng};
+#[cfg(feature = "mldsa")]
+use tpm2::crypto::{MldsaPrivateKey, MldsaPublicKey};
+#[cfg(feature = "mlkem")]
+use tpm2::crypto::{MlkemPrivateKey, MlkemPublicKey};
 use tpm2::errors::TpmRc;
 use tpm2::{Alg, TpmiMldsaParms, TpmiMlkemParms};
 
@@ -59,7 +60,241 @@ fn seed_of<const N: usize>(object: &TransientObject) -> Result<[u8; N], TpmRc> {
         .map_err(|_| TpmRc::FAILURE)
 }
 
-/// Maps a crypto provider failure of an operation on caller-supplied key material: an
+/// The size of the message representative `mu` of ML-DSA.
+const MLDSA_MU_SIZE: usize = TpmiMldsaParms::MU_BYTES;
+/// The size of the private seed of an ML-DSA key.
+const MLDSA_SEED_SIZE: usize = TpmiMldsaParms::PRIV_KEY_BYTES;
+/// The size of the signing randomness `rnd` of ML-DSA.
+const MLDSA_RND_SIZE: usize = 32;
+/// The size of the private seed of an ML-KEM key.
+const MLKEM_SEED_SIZE: usize = TpmiMlkemParms::PRIV_KEY_BYTES;
+/// The size of the encapsulation randomness `m` of ML-KEM.
+const MLKEM_ENTROPY_SIZE: usize = 32;
+/// The size of the shared secret of ML-KEM.
+const MLKEM_SHARED_SECRET_SIZE: usize = TpmiMlkemParms::SHARED_SECRET_BYTES;
+
+/// The encapsulation key of the ML-KEM key with parameter set `param_set` and private seed
+/// `seed` ([`MlkemPrivateKey::expand`]), written to the start of `out`. Returns its length.
+#[cfg(feature = "mlkem")]
+fn mlkem_expand_public<C: Crypto>(
+    param_set: TpmiMlkemParms,
+    seed: &[u8; MLKEM_SEED_SIZE],
+    out: &mut [u8],
+) -> Result<usize, TpmRc> {
+    let key = mlkem_private_key::<C>(param_set, seed)?;
+    let mut public = [0u8; TpmiMlkemParms::MAX_PUB_KEY_BYTES];
+    let public = key.public(&mut public).map_err(crypto_rc)?;
+    copy_out(public.as_slice(), out)
+}
+
+/// `ML-KEM.Encaps_internal(ek, m)` ([`MlkemPublicKey::encapsulate_internal`]) to the encapsulation
+/// key `public_key` of parameter set `param_set` with the randomness `entropy`. Writes the
+/// ciphertext to the start of `ciphertext_out` and returns its length; an invalid encapsulation
+/// key is `TPM_RC_PARMS`.
+#[cfg(feature = "mlkem")]
+fn mlkem_encapsulate_with<C: Crypto>(
+    param_set: TpmiMlkemParms,
+    public_key: &[u8],
+    entropy: &[u8; MLKEM_ENTROPY_SIZE],
+    ciphertext_out: &mut [u8],
+    shared_secret_out: &mut [u8; MLKEM_SHARED_SECRET_SIZE],
+) -> Result<usize, TpmRc> {
+    let public_key = tpm2::Tpm2bPublicKeyMlkem::new(public_key).ok_or(TpmRc::PARMS.to_rc())?;
+    let public_key = MlkemPublicKey::<C>::load(param_set, public_key)
+        .map_err(crypto_rc)?
+        .ok_or(TpmRc::PARMS.to_rc())?;
+    let (ciphertext, _) = public_key
+        .encapsulate_internal(entropy, ciphertext_out, shared_secret_out)
+        .map_err(crypto_rc)?;
+    Ok(ciphertext.as_slice().len())
+}
+
+/// `ML-KEM.Decaps` ([`MlkemPrivateKey::decapsulate`]) of `ciphertext` with the ML-KEM key of
+/// parameter set `param_set` and private seed `seed`; a ciphertext of the wrong size is
+/// `TPM_RC_PARMS`.
+#[cfg(feature = "mlkem")]
+fn mlkem_decapsulate_with<C: Crypto>(
+    param_set: TpmiMlkemParms,
+    seed: &[u8; MLKEM_SEED_SIZE],
+    ciphertext: &[u8],
+    shared_secret_out: &mut [u8; MLKEM_SHARED_SECRET_SIZE],
+) -> Result<(), TpmRc> {
+    let ciphertext = tpm2::Tpm2bKemCiphertext::new(ciphertext).ok_or(TpmRc::PARMS.to_rc())?;
+    match mlkem_private_key::<C>(param_set, seed)?
+        .decapsulate(ciphertext, shared_secret_out)
+        .map_err(crypto_rc)?
+    {
+        Some(_) => Ok(()),
+        None => Err(TpmRc::PARMS.to_rc()),
+    }
+}
+
+/// The ML-KEM key with parameter set `param_set` expanded from the private seed `seed`.
+#[cfg(feature = "mlkem")]
+fn mlkem_private_key<C: Crypto>(
+    param_set: TpmiMlkemParms,
+    seed: &[u8; MLKEM_SEED_SIZE],
+) -> Result<MlkemPrivateKey<C>, TpmRc> {
+    let seed = tpm2::Tpm2bPrivateKeyMlkem::new(seed).ok_or(TpmRc::FAILURE)?;
+    MlkemPrivateKey::expand(param_set, seed)
+        .map_err(crypto_rc)?
+        .ok_or(TpmRc::FAILURE)
+}
+
+/// The verification key of the ML-DSA key with parameter set `param_set` and private seed
+/// `seed` ([`MldsaPrivateKey::expand`]), written to the start of `out`. Returns its length.
+#[cfg(feature = "mldsa")]
+fn mldsa_expand_public<C: Crypto>(
+    param_set: TpmiMldsaParms,
+    seed: &[u8; MLDSA_SEED_SIZE],
+    out: &mut [u8],
+) -> Result<usize, TpmRc> {
+    let key = mldsa_private_key::<C>(param_set, seed)?;
+    let mut public = [0u8; TpmiMldsaParms::MAX_PUB_KEY_BYTES];
+    let public = key.public(&mut public).map_err(crypto_rc)?;
+    copy_out(public.as_slice(), out)
+}
+
+/// The ML-DSA signature of the message representative `mu` with the key of parameter set
+/// `param_set` and private seed `seed`, and the signing randomness `rnd`
+/// ([`MldsaPrivateKey::sign_mu_internal`]). Writes the signature to the start of
+/// `signature_out` and returns its length.
+#[cfg(feature = "mldsa")]
+fn mldsa_sign_mu_with<C: Crypto>(
+    param_set: TpmiMldsaParms,
+    seed: &[u8; MLDSA_SEED_SIZE],
+    mu: &[u8; MLDSA_MU_SIZE],
+    rnd: &[u8; MLDSA_RND_SIZE],
+    signature_out: &mut [u8],
+) -> Result<usize, TpmRc> {
+    let mut signature = [0u8; tpm2::crypto::MAX_SIGNATURE_BYTES];
+    let signature = mldsa_private_key::<C>(param_set, seed)?
+        .sign_mu_internal(rnd, mu, &mut signature)
+        .map_err(crypto_rc)?;
+    let tpm2::TpmtSignature::Mldsa(signature) = signature else {
+        return Err(TpmRc::FAILURE);
+    };
+    copy_out(signature.as_slice(), signature_out)
+}
+
+/// Whether `signature` is an ML-DSA signature of the message representative `mu` with the
+/// verification key `public_key` of parameter set `param_set` ([`MldsaPublicKey::verify`]). A
+/// verification key or signature of the wrong size does not verify.
+#[cfg(feature = "mldsa")]
+fn mldsa_verify_mu_with<C: Crypto>(
+    param_set: TpmiMldsaParms,
+    public_key: &[u8],
+    mu: &[u8; MLDSA_MU_SIZE],
+    signature: &[u8],
+) -> Result<bool, TpmRc> {
+    let (Some(public_key), Some(signature)) = (
+        tpm2::Tpm2bPublicKeyMldsa::new(public_key),
+        tpm2::Tpm2bSignatureMldsa::new(signature),
+    ) else {
+        return Ok(false);
+    };
+    match MldsaPublicKey::<C>::load(param_set, public_key).map_err(crypto_rc)? {
+        Some(public_key) => public_key
+            .verify(&[], mu, tpm2::TpmtSignature::Mldsa(signature))
+            .map_err(crypto_rc),
+        None => Ok(false),
+    }
+}
+
+/// The ML-DSA key with parameter set `param_set` expanded from the private seed `seed`.
+#[cfg(feature = "mldsa")]
+fn mldsa_private_key<C: Crypto>(
+    param_set: TpmiMldsaParms,
+    seed: &[u8; MLDSA_SEED_SIZE],
+) -> Result<MldsaPrivateKey<C>, TpmRc> {
+    let seed = tpm2::Tpm2bPrivateKeyMldsa::new(seed).ok_or(TpmRc::FAILURE)?;
+    MldsaPrivateKey::expand(param_set, seed)
+        .map_err(crypto_rc)?
+        .ok_or(TpmRc::FAILURE)
+}
+
+/// Without the `mlkem` feature, ML-KEM is not supported by the crypto backend.
+#[cfg(not(feature = "mlkem"))]
+#[allow(clippy::extra_unused_type_parameters)] // The signature of the `mlkem` version.
+fn mlkem_expand_public<C: Crypto>(
+    _: TpmiMlkemParms,
+    _: &[u8; MLKEM_SEED_SIZE],
+    _: &mut [u8],
+) -> Result<usize, TpmRc> {
+    Err(crypto_rc(CryptoError::Unsupported))
+}
+
+/// Without the `mlkem` feature, ML-KEM is not supported by the crypto backend.
+#[cfg(not(feature = "mlkem"))]
+#[allow(clippy::extra_unused_type_parameters)] // The signature of the `mlkem` version.
+fn mlkem_encapsulate_with<C: Crypto>(
+    _: TpmiMlkemParms,
+    _: &[u8],
+    _: &[u8; MLKEM_ENTROPY_SIZE],
+    _: &mut [u8],
+    _: &mut [u8; MLKEM_SHARED_SECRET_SIZE],
+) -> Result<usize, TpmRc> {
+    Err(crypto_rc(CryptoError::Unsupported))
+}
+
+/// Without the `mlkem` feature, ML-KEM is not supported by the crypto backend.
+#[cfg(not(feature = "mlkem"))]
+#[allow(clippy::extra_unused_type_parameters)] // The signature of the `mlkem` version.
+fn mlkem_decapsulate_with<C: Crypto>(
+    _: TpmiMlkemParms,
+    _: &[u8; MLKEM_SEED_SIZE],
+    _: &[u8],
+    _: &mut [u8; MLKEM_SHARED_SECRET_SIZE],
+) -> Result<(), TpmRc> {
+    Err(crypto_rc(CryptoError::Unsupported))
+}
+
+/// Without the `mldsa` feature, ML-DSA is not supported by the crypto backend.
+#[cfg(not(feature = "mldsa"))]
+#[allow(clippy::extra_unused_type_parameters)] // The signature of the `mldsa` version.
+fn mldsa_expand_public<C: Crypto>(
+    _: TpmiMldsaParms,
+    _: &[u8; MLDSA_SEED_SIZE],
+    _: &mut [u8],
+) -> Result<usize, TpmRc> {
+    Err(crypto_rc(CryptoError::Unsupported))
+}
+
+/// Without the `mldsa` feature, ML-DSA is not supported by the crypto backend.
+#[cfg(not(feature = "mldsa"))]
+#[allow(clippy::extra_unused_type_parameters)] // The signature of the `mldsa` version.
+fn mldsa_sign_mu_with<C: Crypto>(
+    _: TpmiMldsaParms,
+    _: &[u8; MLDSA_SEED_SIZE],
+    _: &[u8; MLDSA_MU_SIZE],
+    _: &[u8; MLDSA_RND_SIZE],
+    _: &mut [u8],
+) -> Result<usize, TpmRc> {
+    Err(crypto_rc(CryptoError::Unsupported))
+}
+
+/// Without the `mldsa` feature, ML-DSA is not supported by the crypto backend.
+#[cfg(not(feature = "mldsa"))]
+#[allow(clippy::extra_unused_type_parameters)] // The signature of the `mldsa` version.
+fn mldsa_verify_mu_with<C: Crypto>(
+    _: TpmiMldsaParms,
+    _: &[u8],
+    _: &[u8; MLDSA_MU_SIZE],
+    _: &[u8],
+) -> Result<bool, TpmRc> {
+    Err(crypto_rc(CryptoError::Unsupported))
+}
+
+/// Copies `src` to the start of `out` and returns its length (`TPM_RC_FAILURE` if `out` is too
+/// small).
+fn copy_out(src: &[u8], out: &mut [u8]) -> Result<usize, TpmRc> {
+    out.get_mut(..src.len())
+        .ok_or(TpmRc::FAILURE)?
+        .copy_from_slice(src);
+    Ok(src.len())
+}
+
+/// Maps a crypto backend failure of an operation on caller-supplied key material: an
 /// unsupported parameter set is `TPM_RC_PARMS` (as the reference's `ERROR_EXIT(TPM_RC_PARMS)`
 /// when its crypto library fails), an internal failure `TPM_RC_FAILURE`.
 fn crypto_rc(error: CryptoError) -> TpmRc {
@@ -69,7 +304,7 @@ fn crypto_rc(error: CryptoError) -> TpmRc {
     }
 }
 
-impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
+impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     CommandHandler<'a, 'b, C, S, T, R>
 {
     /// The encapsulation key of the ML-KEM key with private seed `seed`
@@ -81,9 +316,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         seed: &[u8; MLKEM_SEED_SIZE],
         out: &mut [u8],
     ) -> Result<usize, TpmRc> {
-        self.crypto()
-            .mlkem_generate_key(param_set, seed, out)
-            .map_err(crypto_rc)
+        mlkem_expand_public::<C>(param_set, seed, out)
     }
 
     /// The verification key of the ML-DSA key with private seed `seed`
@@ -95,9 +328,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         seed: &[u8; MLDSA_SEED_SIZE],
         out: &mut [u8],
     ) -> Result<usize, TpmRc> {
-        self.crypto()
-            .mldsa_generate_key(param_set, seed, out)
-            .map_err(crypto_rc)
+        mldsa_expand_public::<C>(param_set, seed, out)
     }
 
     /// `CryptoMlkem_Encapsulate()` with the TPM's DRBG: tests ML-KEM if needed, draws the 32
@@ -117,16 +348,13 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         self.do_self_test(Alg::MLKEM)?;
         let mut entropy = [0u8; MLKEM_ENTROPY_SIZE];
         self.context.random_crypto(&mut entropy)?;
-        self.crypto()
-            .mlkem_encapsulate(
-                param_set,
-                public_key,
-                &entropy,
-                ciphertext_out,
-                shared_secret_out,
-            )
-            .map_err(crypto_rc)?
-            .ok_or(TpmRc::PARMS.to_rc())
+        mlkem_encapsulate_with::<C>(
+            param_set,
+            public_key,
+            &entropy,
+            ciphertext_out,
+            shared_secret_out,
+        )
     }
 
     /// `CryptoMlkem_Decapsulate()`: tests ML-KEM if needed and decapsulates `ciphertext` with the
@@ -141,15 +369,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let (param_set, _) = mlkem_key(key).ok_or(TpmRc::TYPE.to_rc())?;
         self.do_self_test(Alg::MLKEM)?;
         let seed: [u8; MLKEM_SEED_SIZE] = seed_of(key)?;
-        if self
-            .crypto()
-            .mlkem_decapsulate(param_set, &seed, ciphertext, shared_secret_out)
-            .map_err(crypto_rc)?
-        {
-            Ok(())
-        } else {
-            Err(TpmRc::PARMS.to_rc())
-        }
+        mlkem_decapsulate_with::<C>(param_set, &seed, ciphertext, shared_secret_out)
     }
 
     /// The `seed` of the ML-KEM Labeled KEM (TPM 2.0 Part 1, "ML-KEM Labeled KEM"):
@@ -239,12 +459,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let seed: [u8; MLDSA_SEED_SIZE] = seed_of(key)?;
         let mut rnd = [0u8; MLDSA_RND_SIZE];
         self.context.random_crypto(&mut rnd)?;
-        self.crypto()
-            .mldsa_sign_mu(param_set, &seed, mu, &rnd, signature_out)
-            .map_err(crypto_rc)?
-            // No signature (the rejection sampling gave up): `TPM_RC_NO_RESULT`, as in the
-            // reference's `CryptoMldsa_SignMu()`.
-            .ok_or(TpmRc::NO_RESULT)
+        mldsa_sign_mu_with::<C>(param_set, &seed, mu, &rnd, signature_out)
     }
 
     /// `CryptoMldsa_VerifyMu()`: tests ML-DSA if needed and verifies `signature` over the
@@ -258,9 +473,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let (param_set, _) = mldsa_key(key).ok_or(TpmRc::TYPE.to_rc())?;
         self.do_self_test(Alg::MLDSA)?;
         let (_, public_key) = mldsa_key(key).ok_or(TpmRc::TYPE.to_rc())?;
-        self.crypto()
-            .mldsa_verify_mu(param_set, public_key, mu, signature)
-            .map_err(crypto_rc)
+        mldsa_verify_mu_with::<C>(param_set, public_key, mu, signature)
     }
 
     /// A pure ML-DSA signature of the message made of `parts` with an empty context (FIPS 204,
@@ -309,7 +522,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     }
 }
 
-impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
+impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     CommandHandler<'a, 'b, C, S, T, R>
 {
     /// The self test of `CryptoMlkem_GenerateKey()`/`CryptoMldsa_GenerateKey()` before the key

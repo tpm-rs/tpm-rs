@@ -1,3 +1,4 @@
+use crate::_common::ClientCrypto;
 use crate::test_utils::marshal_to_slice;
 use tpm2::Alg;
 // Ported from tpm-go/tpm2/test/names_test.go
@@ -74,7 +75,8 @@ fn test_object_name() {
         primary_handle: Handle::RH_ENDORSEMENT,
         in_sensitive,
         in_public,
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
 
     let rsp = execute_with_password_sessions(&mut sim, &create_primary, 1, &[])
@@ -89,10 +91,9 @@ fn test_object_name() {
     let pub_len = marshal_to_slice(&public_struct, &mut pub_buf);
 
     let mut digest_buf = [0u8; tpm2::TpmtHa::MAX_DIGEST_SIZE];
-    let digest = tpm2::crypto::hash(
-        CLIENT_CRYPTO,
+    let digest = tpm2::crypto::hash::<ClientCrypto>(
         TpmiAlgHash::Sha256,
-        &pub_buf[..pub_len],
+        &[&pub_buf[..pub_len]],
         &mut digest_buf,
     )
     .unwrap()
@@ -145,10 +146,9 @@ fn test_nv_name() {
     let pub_len = marshal_to_slice(&public_info_struct, &mut pub_buf);
 
     let mut digest_buf = [0u8; tpm2::TpmtHa::MAX_DIGEST_SIZE];
-    let digest = tpm2::crypto::hash(
-        CLIENT_CRYPTO,
+    let digest = tpm2::crypto::hash::<ClientCrypto>(
         TpmiAlgHash::Sha256,
-        &pub_buf[..pub_len],
+        &[&pub_buf[..pub_len]],
         &mut digest_buf,
     )
     .unwrap()

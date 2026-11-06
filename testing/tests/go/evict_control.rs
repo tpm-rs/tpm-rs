@@ -45,7 +45,9 @@ fn test_evict_control() {
     let srk_create = CreatePrimary {
         primary_handle: Handle::RH_OWNER,
         in_public: tpm2::Tpm2b(ecc_srk_template()),
-        ..Default::default()
+        in_sensitive: Default::default(),
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     let srk_create_rsp = execute_with_password_sessions(&mut sim, &srk_create, 1, &[])
         .expect("could not generate SRK");

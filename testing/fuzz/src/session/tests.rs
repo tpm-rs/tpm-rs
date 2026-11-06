@@ -368,16 +368,7 @@ fn session_key_matches_common_kdfa() {
     let (nt, nc) = (vec![1u8; 32], vec![2u8; 16]);
     assert!(session_key(alg, None, b"", &nt, &nc).is_empty());
     let mut expected = vec![0u8; 32];
-    _common::kdfa_by_alg(
-        CLIENT_CRYPTO,
-        alg,
-        b"auth",
-        b"ATH",
-        &nt,
-        &nc,
-        256,
-        &mut expected,
-    );
+    _common::kdfa_by_alg(alg, b"auth", b"ATH", &nt, &nc, 256, &mut expected);
     assert_eq!(session_key(alg, Some(b"auth"), b"", &nt, &nc), expected);
     let sha1 = session_key(TpmiAlgHash::Sha1, Some(b"auth"), b"", &nt, &nc);
     assert_eq!(sha1.len(), 20);

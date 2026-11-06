@@ -31,7 +31,7 @@ use crate::TpmEngine;
 use crate::handler::{context_integrity_hash_alg, provisioned_secret};
 use crate::self_test::kdfa_bits;
 use tpm2::Handle;
-use tpm2::crypto::{CryptoProvider, Rng};
+use tpm2::crypto::{Crypto, Rng};
 use tpm2::errors::{Fmt1, TpmRc};
 use tpm2::platform::{NvStorage, TpmTimer};
 
@@ -149,7 +149,7 @@ impl core::fmt::Debug for HierarchySecret {
     }
 }
 
-impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<'a, C, S, T, R> {
+impl<'a, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<'a, C, S, T, R> {
     /// Whether the base hierarchy `base` is enabled (`TPM_RH_NULL` always is); `None` if `base`
     /// is not a base hierarchy.
     pub(crate) fn base_hierarchy_enabled(&self, base: u32) -> Option<bool> {

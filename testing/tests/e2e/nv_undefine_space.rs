@@ -1,5 +1,6 @@
 //! TPM2_NV_UndefineSpace and TPM2_NV_UndefineSpaceSpecial: authorization and handle checks.
 
+use crate::_common::ClientCrypto;
 use crate::_common::{define_nv_space as define, exec_with_empty_passwords as pw, *};
 use testing::tpm::Tpm;
 use tpm2::commands::{
@@ -358,7 +359,7 @@ fn special_with_policy_delete_session() {
     let cp_hash = sha256_bytes(&cp_data);
 
     let mut hmac_state =
-        tpm2::crypto::HmacStream::new(CLIENT_CRYPTO, TpmiAlgHash::Sha256, &[]).unwrap();
+        tpm2::crypto::HmacContext::<ClientCrypto>::new(TpmiAlgHash::Sha256, &[]).unwrap();
     let caller_nonce = [5u8; 32];
     hmac_state.update(&cp_hash).unwrap();
     hmac_state.update(&caller_nonce).unwrap();

@@ -21,7 +21,7 @@ use crate::storage::manager::StorageManager;
 use crate::storage::{NvStorage, Tpm2Storage};
 use crate::timer::TpmTimer;
 use tpm2::TpmCc;
-use tpm2::crypto::{CryptoProvider, Rng};
+use tpm2::crypto::{Crypto, Rng};
 
 /// The commands that can be gated with Physical Presence (C `PP_COMMAND`/`PP_REQUIRED`): the
 /// commands with a `TPMI_RH_PLATFORM`, `TPMI_RH_PROVISION`, `TPMI_RH_CLEAR`, `TPMI_RH_HIERARCHY`
@@ -133,7 +133,7 @@ impl PpList {
 /// `gp.algorithmSet` ([`crate::storage::nv::NvPlatformSettingsRecord`]).
 pub(crate) use crate::storage::nv::PLATFORM_SETTINGS_HANDLE;
 
-impl<C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<'_, C, S, T, R> {
+impl<C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<'_, C, S, T, R> {
     /// Sets whether Physical Presence is asserted (C `_plat__Signal_PhysicalPresenceOn()` /
     /// `_plat__Signal_PhysicalPresenceOff()`). The platform keeps it across `_TPM_Init`.
     pub fn set_physical_presence(&mut self, asserted: bool) {

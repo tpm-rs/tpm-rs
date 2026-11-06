@@ -6,8 +6,6 @@ mod common;
 
 use common::{FakeRng, FakeStorage, FakeTimer};
 use tpm2::commands::{Command, FlushContext};
-use tpm2::crypto::{Asymmetric, AsymmetricSign};
-use tpm2::crypto::{CryptoError, CryptoProvider};
 use tpm2::{Handle, Marshal};
 use tpm2::{TpmiAlgHash, TpmsAuthCommand};
 use tpm2_engine::TpmEngine;
@@ -16,121 +14,8 @@ use tpm2_engine::handler::SessionState;
 
 struct StressTestCrypto;
 
-impl_fake_hash!(StressTestCrypto);
-
-impl AsymmetricSign for StressTestCrypto {
-    /// Fills the signature with `0xee` bytes (64 for ECDSA, 256 otherwise). A `signature_out`
-    /// that is too small fails with [`CryptoError::Internal`] (formerly `BufferTooSmall`).
-    fn sign_inner(
-        &self,
-        sign_alg: tpm2::Alg,
-        _private_key: &[u8],
-        _digest: tpm2::TpmtHa<'_>,
-        signature_out: &mut [u8],
-    ) -> Result<Option<usize>, CryptoError> {
-        let len = match sign_alg {
-            tpm2::Alg::ECDSA => {
-                if signature_out.len() < 64 {
-                    return Err(CryptoError::Internal);
-                }
-                signature_out[..64].fill(0xee);
-                64
-            }
-            _ => {
-                if signature_out.len() < 256 {
-                    return Err(CryptoError::Internal);
-                }
-                signature_out[..256].fill(0xee);
-                256
-            }
-        };
-        Ok(Some(len))
-    }
-}
-
-impl Asymmetric for StressTestCrypto {
-    /// Accepts every signature (formerly `Ok(())`).
-    fn verify_inner(
-        &self,
-        _sign_alg: tpm2::Alg,
-        _public_key: &[u8],
-        _rsa_exponent: u32,
-        _digest: tpm2::TpmtHa<'_>,
-        _signature: &[u8],
-    ) -> Result<bool, CryptoError> {
-        Ok(true)
-    }
-    fn encrypt(
-        &self,
-        _scheme: tpm2::Alg,
-        _hash_alg: tpm2::Alg,
-        _public_key: &[u8],
-        _rsa_exponent: u32,
-        _data: &[u8],
-        _ciphertext: &mut [u8],
-        _label: &[u8],
-    ) -> Result<Option<usize>, CryptoError> {
-        Ok(Some(0))
-    }
-    /// Copies `ciphertext` to `plaintext`. An empty private key fails with
-    /// [`CryptoError::Internal`] (formerly `HardwareFailure`), and so does a `plaintext` buffer
-    /// that is too small (formerly `BufferTooSmall`).
-    fn decrypt(
-        &self,
-        _scheme: tpm2::Alg,
-        _hash_alg: tpm2::Alg,
-        private_key: &[u8],
-        ciphertext: &[u8],
-        plaintext: &mut [u8],
-        _label: &[u8],
-    ) -> Result<Option<usize>, CryptoError> {
-        if private_key.is_empty() {
-            return Err(CryptoError::Internal);
-        }
-        let len = ciphertext.len();
-        if plaintext.len() < len {
-            return Err(CryptoError::Internal);
-        }
-        plaintext[..len].copy_from_slice(ciphertext);
-        Ok(Some(len))
-    }
-    fn generate_key(
-        &self,
-        scheme: tpm2::Alg,
-        _params: Option<tpm2::crypto::asymmetric::KeyParams>,
-        public_key: &mut [u8],
-        private_key: &mut [u8],
-        _seed: Option<&[u8]>,
-    ) -> Result<(usize, usize), CryptoError> {
-        match scheme {
-            tpm2::Alg::RSA => {
-                public_key[..256].fill(0xcc);
-                private_key[..256].fill(0xdd);
-                Ok((256, 256))
-            }
-            tpm2::Alg::ECC => {
-                public_key[..64].fill(0xcc);
-                private_key[..32].fill(0xdd);
-                Ok((64, 32))
-            }
-            _ => Err(CryptoError::Internal),
-        }
-    }
-}
-
-impl tpm2::crypto::Mlkem for StressTestCrypto {}
-impl tpm2::crypto::Mldsa for StressTestCrypto {}
-
-impl CryptoProvider for StressTestCrypto {
-    /// Its algorithms are fakes, which fail the known-answer self tests.
-    const KNOWN_ANSWER_TESTS: bool = false;
-
-    /// The provider CSPRNG: fills `dest` with `0xaa` bytes.
-    fn get_random(&self, dest: &mut [u8]) -> Result<(), CryptoError> {
-        dest.fill(0xaa);
-        Ok(())
-    }
-}
+// The provider CSPRNG fills every buffer with `0xaa` bytes.
+impl_fake_crypto!(common, StressTestCrypto, common::ConstRng<0xaa>);
 
 fn setup_tpm<'a>(
     crypto: &'a mut StressTestCrypto,

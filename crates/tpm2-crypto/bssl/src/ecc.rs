@@ -1,327 +1,236 @@
-use crate::bssl::{EcGroup, ec_point_multiply, ec_point_multiply_generator, ec_validate_point};
-use crate::{BsslCryptoProvider, output, verified};
-use tpm2::crypto::{CryptoError, Ecc, EccCurve};
+//! Elliptic-curve cryptography: NIST P-224, P-256, P-384, P-521 and BN P-256 with BoringSSL
+//! (`EC_GROUP`, `EC_POINT`, `ECDSA_*`), and NIST P-192, BN P-638 and SM2 P-256 with the generic
+//! arithmetic of `tpm2-crypto-weierstrass`.
 
-/// NIST P-224 context for `BsslCryptoProvider`.
-pub struct BsslEccNistP224;
+use core::marker::PhantomData;
 
-impl EccCurve<28> for BsslEccNistP224 {
-    fn validate_point(&self, x: &[u8; 28], y: &[u8; 28]) -> Result<bool, CryptoError> {
-        verified(ec_validate_point(EcGroup::P224, x, y))
-    }
+use crate::bssl::{
+    BsslError, EcGroup, cleanse, ec_generate_key, ec_point_multiply, ec_point_multiply_generator,
+    ec_validate_point, ecdsa_sign, ecdsa_verify,
+};
+use crate::{BsslCryptoProvider, BsslRng, output, verified};
+use tpm2::crypto::CryptoError;
+use tpm2::crypto::backend::{Ecc, EccCurve, PrivateKey};
 
-    fn point_multiply_generator(
-        &self,
-        scalar: &[u8; 28],
-        x_out: &mut [u8; 28],
-        y_out: &mut [u8; 28],
-    ) -> Result<Option<()>, CryptoError> {
-        output(ec_point_multiply_generator(
-            EcGroup::P224,
-            scalar,
-            x_out,
-            y_out,
-        ))
-    }
+/// A curve of BoringSSL ([`EcGroup`]), selecting the curve of [`BsslEcc`] and
+/// [`BsslEccPublicKey`].
+pub trait BsslCurve: 'static {
+    /// The BoringSSL group of the curve.
+    const GROUP: EcGroup;
+}
 
-    fn point_multiply(
-        &self,
-        scalar: &[u8; 28],
-        x_in: &[u8; 28],
-        y_in: &[u8; 28],
-        x_out: &mut [u8; 28],
-        y_out: &mut [u8; 28],
-    ) -> Result<Option<()>, CryptoError> {
-        output(ec_point_multiply(
-            EcGroup::P224,
-            scalar,
-            x_in,
-            y_in,
-            x_out,
-            y_out,
-        ))
-    }
+macro_rules! bssl_curves {
+    ($($(#[$m:meta])* $name:ident => $group:ident;)*) => {
+        $(
+            $(#[$m])*
+            #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+            pub struct $name;
 
-    fn ecdaa_sign(
-        &self,
-        _commit_r: &[u8; 28],
-        _commit_x: &[u8],
-        _commit_p1: &[u8],
-        _private_key_d: &[u8; 28],
-        _digest: &[u8],
-        _nonce_k_out: &mut [u8; 28],
-        _s_out: &mut [u8; 28],
-    ) -> Result<Option<()>, CryptoError> {
-        Err(CryptoError::Unsupported)
+            impl BsslCurve for $name {
+                const GROUP: EcGroup = EcGroup::$group;
+            }
+        )*
+    };
+}
+
+bssl_curves! {
+    /// NIST P-224 (`EC_group_p224`).
+    NistP224Group => P224;
+    /// NIST P-256 (`EC_group_p256`).
+    NistP256Group => P256;
+    /// NIST P-384 (`EC_group_p384`).
+    NistP384Group => P384;
+    /// NIST P-521 (`EC_group_p521`).
+    NistP521Group => P521;
+    /// BN P-256 (a custom `EC_GROUP`).
+    BnP256Group => BnP256;
+}
+
+/// A validated public key (a point of the curve other than the point at infinity) of the
+/// BoringSSL curve `G`, as the affine point `x || y` of `POINT` bytes.
+pub struct BsslEccPublicKey<G, const POINT: usize> {
+    point: [u8; POINT],
+    curve: PhantomData<fn() -> G>,
+}
+
+impl<G, const POINT: usize> BsslEccPublicKey<G, POINT> {
+    /// Returns the coordinates `(x, y)`.
+    fn coords(&self) -> (&[u8], &[u8]) {
+        self.point.split_at(POINT / 2)
     }
 }
 
-/// NIST P-256 context for `BsslCryptoProvider`.
-pub struct BsslEccNistP256;
+/// A validated private key of the BoringSSL curve `G` with `COORD`-byte scalars and coordinates
+/// (`POINT = 2 * COORD`), for `BsslCryptoProvider`. The secret scalar is cleansed on drop.
+pub struct BsslEcc<G, const COORD: usize, const POINT: usize> {
+    d: [u8; COORD],
+    public: BsslEccPublicKey<G, POINT>,
+}
 
-impl EccCurve<32> for BsslEccNistP256 {
-    fn validate_point(&self, x: &[u8; 32], y: &[u8; 32]) -> Result<bool, CryptoError> {
-        verified(ec_validate_point(EcGroup::P256, x, y))
-    }
-
-    fn point_multiply_generator(
-        &self,
-        scalar: &[u8; 32],
-        x_out: &mut [u8; 32],
-        y_out: &mut [u8; 32],
-    ) -> Result<Option<()>, CryptoError> {
-        output(ec_point_multiply_generator(
-            EcGroup::P256,
-            scalar,
-            x_out,
-            y_out,
-        ))
-    }
-
-    fn point_multiply(
-        &self,
-        scalar: &[u8; 32],
-        x_in: &[u8; 32],
-        y_in: &[u8; 32],
-        x_out: &mut [u8; 32],
-        y_out: &mut [u8; 32],
-    ) -> Result<Option<()>, CryptoError> {
-        output(ec_point_multiply(
-            EcGroup::P256,
-            scalar,
-            x_in,
-            y_in,
-            x_out,
-            y_out,
-        ))
-    }
-
-    /// Not provided: ECDAA signing (TPM 2.0 Part 1, "ECDAA Sign Operation") needs the
-    /// signing scheme's hash, which this interface does not carry, so `tpm2-engine` computes it
-    /// itself from the generic primitives. The previous implementation did not follow the
-    /// spec (it derived the nonce from the digest and special-cased fixed test points).
-    fn ecdaa_sign(
-        &self,
-        _commit_r: &[u8; 32],
-        _commit_x: &[u8],
-        _commit_p1: &[u8],
-        _private_key_d: &[u8; 32],
-        _digest: &[u8],
-        _nonce_k_out: &mut [u8; 32],
-        _s_out: &mut [u8; 32],
-    ) -> Result<Option<()>, CryptoError> {
-        Err(CryptoError::Unsupported)
+impl<G, const COORD: usize, const POINT: usize> Drop for BsslEcc<G, COORD, POINT> {
+    fn drop(&mut self) {
+        cleanse(&mut self.d);
     }
 }
 
-/// NIST P-384 context for `BsslCryptoProvider`.
-pub struct BsslEccNistP384;
-
-impl EccCurve<48> for BsslEccNistP384 {
-    fn validate_point(&self, x: &[u8; 48], y: &[u8; 48]) -> Result<bool, CryptoError> {
-        verified(ec_validate_point(EcGroup::P384, x, y))
-    }
-
-    fn point_multiply_generator(
-        &self,
-        scalar: &[u8; 48],
-        x_out: &mut [u8; 48],
-        y_out: &mut [u8; 48],
-    ) -> Result<Option<()>, CryptoError> {
-        output(ec_point_multiply_generator(
-            EcGroup::P384,
-            scalar,
-            x_out,
-            y_out,
-        ))
-    }
-
-    fn point_multiply(
-        &self,
-        scalar: &[u8; 48],
-        x_in: &[u8; 48],
-        y_in: &[u8; 48],
-        x_out: &mut [u8; 48],
-        y_out: &mut [u8; 48],
-    ) -> Result<Option<()>, CryptoError> {
-        output(ec_point_multiply(
-            EcGroup::P384,
-            scalar,
-            x_in,
-            y_in,
-            x_out,
-            y_out,
-        ))
-    }
-
-    fn ecdaa_sign(
-        &self,
-        _commit_r: &[u8; 48],
-        _commit_x: &[u8],
-        _commit_p1: &[u8],
-        _private_key_d: &[u8; 48],
-        _digest: &[u8],
-        _nonce_k_out: &mut [u8; 48],
-        _s_out: &mut [u8; 48],
-    ) -> Result<Option<()>, CryptoError> {
-        Err(CryptoError::Unsupported)
+impl<G: BsslCurve, const COORD: usize, const POINT: usize> BsslEcc<G, COORD, POINT> {
+    /// Computes `[k]G` as an encoded point, or `Ok(None)` if `k` is not in `[1, n - 1]`.
+    fn mul_base(k: &[u8; COORD]) -> Result<Option<[u8; POINT]>, CryptoError> {
+        let mut point = [0u8; POINT];
+        let (x, y) = point.split_at_mut(COORD);
+        Ok(output(ec_point_multiply_generator(G::GROUP, k, x, y))?.map(|()| point))
     }
 }
 
-/// NIST P-521 context for `BsslCryptoProvider`.
-pub struct BsslEccNistP521;
+impl<G: BsslCurve, const COORD: usize, const POINT: usize> PrivateKey<POINT, COORD, BsslRng>
+    for BsslEcc<G, COORD, POINT>
+{
+    type PublicKey = BsslEccPublicKey<G, POINT>;
 
-impl EccCurve<66> for BsslEccNistP521 {
-    fn validate_point(&self, x: &[u8; 66], y: &[u8; 66]) -> Result<bool, CryptoError> {
-        verified(ec_validate_point(EcGroup::P521, x, y))
+    /// Draws the secret scalar from `rng` (by rejection sampling), so that the key is
+    /// deterministic for the RNG of `from_seed`.
+    fn generate(rng: &mut BsslRng, _: ()) -> Result<Self, CryptoError> {
+        let mut key = Self {
+            d: [0u8; COORD],
+            public: BsslEccPublicKey {
+                point: [0u8; POINT],
+                curve: PhantomData,
+            },
+        };
+        ec_generate_key(G::GROUP, rng, &mut key.public.point, &mut key.d)?;
+        Ok(key)
     }
 
-    fn point_multiply_generator(
-        &self,
-        scalar: &[u8; 66],
-        x_out: &mut [u8; 66],
-        y_out: &mut [u8; 66],
-    ) -> Result<Option<()>, CryptoError> {
-        output(ec_point_multiply_generator(
-            EcGroup::P521,
-            scalar,
-            x_out,
-            y_out,
-        ))
+    fn load(public: Self::PublicKey, private: &[u8; COORD]) -> Result<Option<Self>, CryptoError> {
+        match Self::mul_base(private)? {
+            Some(point) if point == public.point => Ok(Some(Self {
+                d: *private,
+                public,
+            })),
+            _ => Ok(None),
+        }
     }
 
-    fn point_multiply(
-        &self,
-        scalar: &[u8; 66],
-        x_in: &[u8; 66],
-        y_in: &[u8; 66],
-        x_out: &mut [u8; 66],
-        y_out: &mut [u8; 66],
-    ) -> Result<Option<()>, CryptoError> {
-        output(ec_point_multiply(
-            EcGroup::P521,
-            scalar,
-            x_in,
-            y_in,
-            x_out,
-            y_out,
-        ))
+    fn store(&self, out: &mut [u8; COORD]) -> Result<(), CryptoError> {
+        *out = self.d;
+        Ok(())
     }
 
-    fn ecdaa_sign(
+    fn as_public(&self) -> &Self::PublicKey {
+        &self.public
+    }
+
+    fn load_public(_: (), public: &[u8; POINT]) -> Result<Option<Self::PublicKey>, CryptoError> {
+        let (x, y) = public.split_at(COORD);
+        if !verified(ec_validate_point(G::GROUP, x, y))? {
+            return Ok(None);
+        }
+        Ok(Some(BsslEccPublicKey {
+            point: *public,
+            curve: PhantomData,
+        }))
+    }
+
+    fn store_public(public: &Self::PublicKey, out: &mut [u8; POINT]) -> Result<(), CryptoError> {
+        *out = public.point;
+        Ok(())
+    }
+}
+
+/// ECDSA, ECDH and point multiplications with BoringSSL. SM2 signatures are not supported
+/// (the defaults, `Err(CryptoError::Unsupported)`). The ECDSA nonce comes from BoringSSL's RNG
+/// (the `rng` argument is unused).
+impl<G: BsslCurve, const COORD: usize, const POINT: usize> EccCurve<COORD, POINT, BsslRng>
+    for BsslEcc<G, COORD, POINT>
+{
+    /// The cofactor of every BoringSSL curve is 1, so `Z = [d]Q`.
+    fn ecdh(
         &self,
-        _commit_r: &[u8; 66],
-        _commit_x: &[u8],
-        _commit_p1: &[u8],
-        _private_key_d: &[u8; 66],
-        _digest: &[u8],
-        _nonce_k_out: &mut [u8; 66],
-        _s_out: &mut [u8; 66],
+        peer_public: &Self::PublicKey,
+        out_x: &mut [u8; COORD],
+        out_y: &mut [u8; COORD],
     ) -> Result<Option<()>, CryptoError> {
-        Err(CryptoError::Unsupported)
+        let (x, y) = peer_public.coords();
+        output(ec_point_multiply(G::GROUP, &self.d, x, y, out_x, out_y))
+    }
+
+    fn sign(
+        &self,
+        _rng: &mut BsslRng,
+        digest: &[u8],
+        out_r: &mut [u8; COORD],
+        out_s: &mut [u8; COORD],
+    ) -> Result<(), CryptoError> {
+        let mut signature = [0u8; POINT];
+        ecdsa_sign(G::GROUP, &self.d, digest, &mut signature).map_err(|err| match err {
+            // The scalar of a loaded key is valid.
+            BsslError::InvalidData => CryptoError::Internal,
+            err => err.into(),
+        })?;
+        let (r, s) = signature.split_at(COORD);
+        out_r.copy_from_slice(r);
+        out_s.copy_from_slice(s);
+        Ok(())
+    }
+
+    fn verify(
+        public: &Self::PublicKey,
+        digest: &[u8],
+        sig_r: &[u8; COORD],
+        sig_s: &[u8; COORD],
+    ) -> Result<bool, CryptoError> {
+        let mut signature = [0u8; POINT];
+        signature[..COORD].copy_from_slice(sig_r);
+        signature[COORD..].copy_from_slice(sig_s);
+        verified(ecdsa_verify(G::GROUP, &public.point, digest, &signature))
+    }
+
+    fn mul_generator(
+        k: &[u8; COORD],
+        out_x: &mut [u8; COORD],
+        out_y: &mut [u8; COORD],
+    ) -> Result<Option<()>, CryptoError> {
+        output(ec_point_multiply_generator(G::GROUP, k, out_x, out_y))
+    }
+
+    fn mul_point(
+        point: &Self::PublicKey,
+        k: &[u8; COORD],
+        out_x: &mut [u8; COORD],
+        out_y: &mut [u8; COORD],
+    ) -> Result<Option<()>, CryptoError> {
+        let (x, y) = point.coords();
+        output(ec_point_multiply(G::GROUP, k, x, y, out_x, out_y))
     }
 }
 
-/// BN-P256 context for `BsslCryptoProvider`.
-pub struct BsslEccBnP256;
-
-impl EccCurve<32> for BsslEccBnP256 {
-    fn validate_point(&self, x: &[u8; 32], y: &[u8; 32]) -> Result<bool, CryptoError> {
-        verified(ec_validate_point(EcGroup::BnP256, x, y))
-    }
-
-    fn point_multiply_generator(
-        &self,
-        scalar: &[u8; 32],
-        x_out: &mut [u8; 32],
-        y_out: &mut [u8; 32],
-    ) -> Result<Option<()>, CryptoError> {
-        output(ec_point_multiply_generator(
-            EcGroup::BnP256,
-            scalar,
-            x_out,
-            y_out,
-        ))
-    }
-
-    fn point_multiply(
-        &self,
-        scalar: &[u8; 32],
-        x_in: &[u8; 32],
-        y_in: &[u8; 32],
-        x_out: &mut [u8; 32],
-        y_out: &mut [u8; 32],
-    ) -> Result<Option<()>, CryptoError> {
-        output(ec_point_multiply(
-            EcGroup::BnP256,
-            scalar,
-            x_in,
-            y_in,
-            x_out,
-            y_out,
-        ))
-    }
-
-    fn ecdaa_sign(
-        &self,
-        _commit_r: &[u8; 32],
-        _commit_x: &[u8],
-        _commit_p1: &[u8],
-        _private_key_d: &[u8; 32],
-        _digest: &[u8],
-        _nonce_k_out: &mut [u8; 32],
-        _s_out: &mut [u8; 32],
-    ) -> Result<Option<()>, CryptoError> {
-        Err(CryptoError::Unsupported)
-    }
-}
+/// NIST P-224 keys for `BsslCryptoProvider`.
+pub type BsslEccNistP224 = BsslEcc<NistP224Group, 28, 56>;
+/// NIST P-256 keys for `BsslCryptoProvider`.
+pub type BsslEccNistP256 = BsslEcc<NistP256Group, 32, 64>;
+/// NIST P-384 keys for `BsslCryptoProvider`.
+pub type BsslEccNistP384 = BsslEcc<NistP384Group, 48, 96>;
+/// NIST P-521 keys for `BsslCryptoProvider`.
+pub type BsslEccNistP521 = BsslEcc<NistP521Group, 66, 132>;
+/// BN P-256 keys for `BsslCryptoProvider`.
+pub type BsslEccBnP256 = BsslEcc<BnP256Group, 32, 64>;
 
 impl Ecc for BsslCryptoProvider {
-    type NistP256Context = BsslEccNistP256;
-    fn nist_p256(&self) -> Result<Self::NistP256Context, CryptoError> {
-        Ok(BsslEccNistP256)
-    }
-
-    type NistP384Context = BsslEccNistP384;
-    fn nist_p384(&self) -> Result<Self::NistP384Context, CryptoError> {
-        Ok(BsslEccNistP384)
-    }
-
-    type NistP521Context = BsslEccNistP521;
-    fn nist_p521(&self) -> Result<Self::NistP521Context, CryptoError> {
-        Ok(BsslEccNistP521)
-    }
-
-    type BnP256Context = BsslEccBnP256;
-    fn bn_p256(&self) -> Result<Self::BnP256Context, CryptoError> {
-        Ok(BsslEccBnP256)
-    }
-
-    type NistP224Context = BsslEccNistP224;
-    fn nist_p224(&self) -> Result<Self::NistP224Context, CryptoError> {
-        Ok(BsslEccNistP224)
-    }
-
+    type NistP224 = BsslEccNistP224;
+    type NistP256 = BsslEccNistP256;
+    type NistP384 = BsslEccNistP384;
+    type NistP521 = BsslEccNistP521;
+    type BNP256 = BsslEccBnP256;
     // NIST P-192, BN P-638 and SM2 P-256: the generic constant-time short-Weierstrass
-    // arithmetic of `tpm2-crypto-weierstrass` (no ECDAA, as for the other curves).
-    type NistP192Context = tpm2_crypto_weierstrass::NistP192;
-    fn nist_p192(&self) -> Result<Self::NistP192Context, CryptoError> {
-        tpm2_crypto_weierstrass::nist_p192()
-    }
-
-    type BnP638Context = tpm2_crypto_weierstrass::BnP638;
-    fn bn_p638(&self) -> Result<Self::BnP638Context, CryptoError> {
-        tpm2_crypto_weierstrass::bn_p638()
-    }
-
-    type Sm2P256Context = tpm2_crypto_weierstrass::Sm2P256;
-    fn sm2_p256(&self) -> Result<Self::Sm2P256Context, CryptoError> {
-        tpm2_crypto_weierstrass::sm2_p256()
-    }
-
-    type BpP256R1Context = !;
-    type BpP384R1Context = !;
-    type BpP512R1Context = !;
-    type Curve25519Context = !;
-    type Curve448Context = !;
+    // arithmetic of `tpm2-crypto-weierstrass` (which also implements SM2 signatures).
+    type NistP192 = tpm2_crypto_weierstrass::NistP192;
+    type BNP638 = tpm2_crypto_weierstrass::BnP638;
+    type SM2P256 = tpm2_crypto_weierstrass::Sm2P256;
+    type BpP256R1 = !;
+    type BpP384R1 = !;
+    type BpP512R1 = !;
+    type Ed25519 = !;
+    type Ed448 = !;
+    type X25519 = !;
+    type X448 = !;
 }

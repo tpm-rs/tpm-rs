@@ -257,7 +257,7 @@ fn scheme_seed_unique_and_key_size_checks() {
             TpmsRsaParms {
                 symmetric: None,
                 scheme: None,
-                key_bits: TpmiRsaKeyBits(2048),
+                key_bits: TpmiRsaKeyBits::Rsa2048,
                 exponent: 0,
             },
             Tpm2bPublicKeyRsa::from_bytes(leak_bytes(&modulus)).unwrap(),

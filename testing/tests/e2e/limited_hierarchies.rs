@@ -660,7 +660,7 @@ fn auth_tickets_of_limited_hierarchies() {
             key_handle: key,
             digest: Tpm2bDigest::from_bytes(leak_bytes(&a_hash)).unwrap(),
             in_scheme: Some(TpmtSigScheme::Ecdsa(TpmiAlgHash::Sha256)),
-            validation: TpmtTkHashcheck::default(),
+            validation: TpmtTkHashcheck::new(Handle::RH_NULL, Tpm2bDigest::default()),
         };
         let buf: &'static mut [u8; 4096] = Box::leak(Box::new([0u8; 4096]));
         let signature = execute_sign(&mut tpm, &sign, 1, &[], buf)
@@ -781,7 +781,7 @@ fn verified_tickets_of_limited_hierarchies() {
             key_handle: signer,
             digest,
             in_scheme: None,
-            validation: TpmtTkHashcheck::default(),
+            validation: TpmtTkHashcheck::new(Handle::RH_NULL, Tpm2bDigest::default()),
         };
         let mut buf = [0u8; 4096];
         let signature = execute_sign(&mut tpm, &sign, 1, &[], &mut buf)
@@ -890,7 +890,7 @@ fn load_external_in_limited_hierarchies() {
         key_handle: signer,
         digest,
         in_scheme: None,
-        validation: TpmtTkHashcheck::default(),
+        validation: TpmtTkHashcheck::new(Handle::RH_NULL, Tpm2bDigest::default()),
     };
     let mut buf = [0u8; 4096];
     let signature = execute_sign(&mut tpm, &sign, 1, &[], &mut buf)

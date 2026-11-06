@@ -44,8 +44,8 @@ fn current_pcr_digest(tpm: &mut RealCryptoEngine<'_>) -> Vec<u8> {
         &[],
     )
     .expect("PCRRead failed");
-    let crypto = TestCryptoProvider;
-    let mut ctx = tpm2::crypto::HashStream::new(&crypto, TpmiAlgHash::Sha256).unwrap();
+    let mut ctx =
+        tpm2::crypto::HashContext::<TestCryptoProvider>::new(TpmiAlgHash::Sha256).unwrap();
     for value in read.pcr_values.as_ref() {
         ctx.update(value.get_buffer()).unwrap();
     }
@@ -119,7 +119,8 @@ fn create_pcr_gated_key(tpm: &mut RealCryptoEngine<'_>) -> (Handle, Vec<u8>) {
                 tpm2::TpmsEccPoint::default(),
             ),
         }),
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     let rsp = execute_command(tpm, &create, &[password_auth(b"")]).expect("CreatePrimary failed");
     (rsp.object_handle, pcr_digest)

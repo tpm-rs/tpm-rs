@@ -18,7 +18,7 @@
 //! ([`GoHmacSession`]) and command executor ([`execute_go`]).
 
 use crate::_common::Connection;
-use crate::test_utils::CLIENT_CRYPTO;
+use crate::test_utils::ClientCrypto;
 use crate::test_utils::{
     CmdHeader, RespHandles, RespHeader, execute_with_password_sessions, flush_context, kdfa_by_alg,
     leak_bytes, marshal_auth_command, marshal_to_slice, strip_trailing_zeros, sym_decrypt,
@@ -91,7 +91,7 @@ fn rsa_srk_template() -> TpmtPublic<'static> {
                     mode: Some(TpmiAlgCipherMode::Cfb.into()),
                 }),
                 scheme: None,
-                key_bits: TpmiRsaKeyBits(2048),
+                key_bits: TpmiRsaKeyBits::Rsa2048,
                 exponent: 0,
             },
             Tpm2bPublicKeyRsa::from_bytes(&ZEROS_256).unwrap(),
@@ -303,7 +303,6 @@ impl GoHmacSession {
             let bits = (digest_size(self.hash) * 8) as u32;
             let mut out = vec![0u8; digest_size(self.hash)];
             kdfa_by_alg(
-                CLIENT_CRYPTO,
                 self.hash,
                 &key,
                 b"ATH",
@@ -362,7 +361,6 @@ impl GoHmacSession {
         session_value.extend_from_slice(&self.auth);
         let mut key_iv = vec![0u8; key_bytes + 16];
         kdfa_by_alg(
-            CLIENT_CRYPTO,
             self.hash,
             &session_value,
             b"CFB",
@@ -374,9 +372,9 @@ impl GoHmacSession {
         let (key, iv) = key_iv.split_at_mut(key_bytes);
         let alg = TpmtSymDefObject::aes_cfb((key_bytes * 8) as u16).unwrap();
         if decrypt {
-            sym_decrypt(CLIENT_CRYPTO, alg, key, iv, param).unwrap();
+            sym_decrypt(alg, key, iv, param).unwrap();
         } else {
-            sym_encrypt(CLIENT_CRYPTO, alg, key, iv, param).unwrap();
+            sym_encrypt(alg, key, iv, param).unwrap();
         }
     }
 }
@@ -390,24 +388,17 @@ fn encrypted_salt(
     let name_alg = public.name_alg.expect("salt key must have a name alg");
     match &public.parms_and_id {
         PublicParmsAndId::Rsa(_, pub_key_rsa) => {
-            use tpm2::crypto::Asymmetric;
             let mut salt = vec![0u8; digest_size(name_alg)];
             crate::_common::client_random(&mut salt).unwrap();
-            let mut ciphertext = [0u8; 512];
-            let len = CLIENT_CRYPTO
-                .encrypt(
-                    tpm2::Alg::OAEP,
-                    name_alg.into(),
-                    pub_key_rsa.get_buffer(),
-                    0,
-                    &salt,
-                    &mut ciphertext,
-                    b"SECRET\0",
-                )
-                .unwrap()
-                .expect("OAEP encryption of the salt failed");
+            let scheme = tpm2::crypto::RsaEncryptScheme::Oaep {
+                hash: name_alg,
+                label: Some(c"SECRET"),
+            };
+            let ciphertext =
+                crate::_common::client_rsa_encrypt(pub_key_rsa.get_buffer(), 0, scheme, &salt)
+                    .expect("OAEP encryption of the salt failed");
             (
-                Tpm2bEncryptedSecret::from_bytes(leak_bytes(&ciphertext[..len])).unwrap(),
+                Tpm2bEncryptedSecret::from_bytes(leak_bytes(&ciphertext)).unwrap(),
                 salt,
             )
         }
@@ -434,13 +425,11 @@ fn encrypted_salt(
             let mut padded_tpm_x = [0u8; 32];
             padded_tpm_x[32 - tpm_x.len()..].copy_from_slice(tpm_x);
             let mut salt = vec![0u8; 32];
-            tpm2::crypto::kdf::kdfe_bits(
-                CLIENT_CRYPTO,
+            tpm2::crypto::kdfe_bits::<ClientCrypto>(
                 TpmiAlgHash::Sha256,
                 z.raw_secret_bytes().as_slice(),
                 b"SECRET",
-                eph_x,
-                &padded_tpm_x,
+                (eph_x, &padded_tpm_x),
                 256,
                 &mut salt,
             )
@@ -463,7 +452,7 @@ fn encrypted_salt(
 
 /// Computes a digest with the simulator's crypto provider.
 fn hash(_sim: &Tpm, alg: TpmiAlgHash, parts: &[&[u8]]) -> Vec<u8> {
-    let mut ctx = tpm2::crypto::HashStream::new(CLIENT_CRYPTO, alg).unwrap();
+    let mut ctx = tpm2::crypto::HashContext::<ClientCrypto>::new(alg).unwrap();
     for p in parts {
         ctx.update(p).unwrap();
     }
@@ -473,7 +462,7 @@ fn hash(_sim: &Tpm, alg: TpmiAlgHash, parts: &[&[u8]]) -> Vec<u8> {
 
 /// Computes an HMAC with the simulator's crypto provider.
 fn hmac(_sim: &Tpm, alg: TpmiAlgHash, key: &[u8], parts: &[&[u8]]) -> Vec<u8> {
-    let mut ctx = tpm2::crypto::HmacStream::new(CLIENT_CRYPTO, alg, key).unwrap();
+    let mut ctx = tpm2::crypto::HmacContext::<ClientCrypto>::new(alg, key).unwrap();
     for p in parts {
         ctx.update(p).unwrap();
     }
@@ -694,7 +683,8 @@ fn create_srk(sim: &mut Tpm, kind: SrkKind) -> Srk {
             data: Tpm2bSensitiveData::default(),
         }),
         in_public: tpm2::Tpm2b(kind.template()),
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     let rsp = execute_with_password_sessions(sim, &cmd, 1, &[]).expect("TPM2_CreatePrimary failed");
     Srk {

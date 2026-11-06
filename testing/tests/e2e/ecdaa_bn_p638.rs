@@ -1,4 +1,4 @@
-//! ECDAA on BN P-638 (`ecc_curve_bn_p638`): TPM2_Commit with an ECDAA key on BN P-638 returns
+//! ECDAA on BN P-638 (`bn_p638`): TPM2_Commit with an ECDAA key on BN P-638 returns
 //! commitment points of the curve (`E = [r]G` without inputs, `E = [r]P1` with `P1`), the
 //! TPM2_Sign ECDAA signature with the committed counter verifies client-side
 //! (`[s]G = E + [T]Q` with `T = H(k || digest) mod n`), and a counter signs only once.

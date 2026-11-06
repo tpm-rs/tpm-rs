@@ -13,10 +13,10 @@ use crate::owned::OwnedPublicParmsAndId;
 use crate::self_test::kdfa_bits;
 use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
-use tpm2::crypto::{CryptoProvider, Direction, Rng};
+use tpm2::crypto::{Crypto, Direction, Rng};
 use tpm2::{TpmaObject, TpmsSensitiveCreate, TpmtSensitive, TpmuSensitiveComposite};
 
-impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
+impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     CommandHandler<'a, 'b, C, S, T, R>
 {
     /// Handles the [TpmCc::Import] (`0x156`) command.
@@ -437,7 +437,18 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         // 6. Public-Private consistency check and import validation
         // Per TCG Part 3 Section 13.3.3: if parent has fixedTPM set, binding/sensitive validation must be checked on import.
         // If parent has fixedTPM clear, binding and secret formatting validation need only be checked when the object is loaded.
-        let mut actual_private_key = [0u8; MAX_PRIVATE_KEY_SIZE];
+        // A validated private value fits `MAX_PRIVATE_KEY_SIZE`; under a parent that is not
+        // fixedTPM an unvalidated one is copied as it is (up to the capacity of its TPM2B, e.g. a
+        // CRT-sized `TPM2B_PRIVATE_KEY_RSA`, rejected by `TPM2_Load`).
+        const RAW_SENSITIVE_SIZE: usize = {
+            let rsa = tpm2::Tpm2bPrivateKeyRsa::CAP;
+            if rsa > MAX_PRIVATE_KEY_SIZE {
+                rsa
+            } else {
+                MAX_PRIVATE_KEY_SIZE
+            }
+        };
+        let mut actual_private_key = [0u8; RAW_SENSITIVE_SIZE];
         let actual_private_key_len = if parent_obj
             .public
             .object_attributes
@@ -446,7 +457,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             self.validate_and_import_sensitive(
                 &object_public_struct,
                 &sensitive_struct,
-                &mut actual_private_key,
+                actual_private_key.first_chunk_mut().unwrap(),
                 Position::parameter(3),
                 Position::parameter(2),
                 true,
@@ -455,7 +466,7 @@ impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             match self.validate_and_import_sensitive(
                 &object_public_struct,
                 &sensitive_struct,
-                &mut actual_private_key,
+                actual_private_key.first_chunk_mut().unwrap(),
                 Position::parameter(3),
                 Position::parameter(2),
                 true,

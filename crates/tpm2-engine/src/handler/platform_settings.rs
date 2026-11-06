@@ -6,10 +6,10 @@ use crate::timer::TpmTimer;
 #[allow(unused_imports)]
 use tpm2::TpmCc;
 use tpm2::commands::{PPCommands, SetAlgorithmSet};
-use tpm2::crypto::{CryptoProvider, Rng};
+use tpm2::crypto::{Crypto, Rng};
 use tpm2::errors::{Position, TpmRc};
 
-impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
+impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     CommandHandler<'a, 'b, C, S, T, R>
 {
     /// Handles the [TpmCc::PPCommands] (`0x12D`) command.

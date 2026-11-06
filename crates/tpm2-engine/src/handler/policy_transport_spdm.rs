@@ -3,7 +3,7 @@ use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
 use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
 use tpm2::commands::PolicyTransportSPDM;
-use tpm2::crypto::{CryptoProvider, Rng};
+use tpm2::crypto::{Crypto, Rng};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{TpmCc, TpmSe, TpmiAlgHash};
 
@@ -29,7 +29,7 @@ fn check_key_name(name: &[u8], pos: Position) -> Result<(), TpmRc> {
     Ok(())
 }
 
-impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
+impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     CommandHandler<'a, 'b, C, S, T, R>
 {
     /// Handles the [TpmCc::PolicyTransportSPDM] (`0x1A1`) command.

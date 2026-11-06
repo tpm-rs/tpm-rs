@@ -34,7 +34,7 @@ fn template(bits: u16, attributes: TpmaObject) -> TpmtPublic<'static> {
             TpmsRsaParms {
                 symmetric: None,
                 scheme: None,
-                key_bits: TpmiRsaKeyBits(bits),
+                key_bits: TpmiRsaKeyBits::new(bits).expect("implemented RSA key size"),
                 exponent: 0,
             },
             Tpm2bPublicKeyRsa::default(),
@@ -72,7 +72,9 @@ fn create_primary(tpm: &mut Tpm, public: TpmtPublic<'static>) -> (Handle, TpmtPu
     let cmd = CreatePrimary {
         primary_handle: Handle::RH_OWNER,
         in_public: Tpm2b(public),
-        ..Default::default()
+        in_sensitive: Default::default(),
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     let rsp = execute_with_password_sessions(tpm, &cmd, 1, &[])
         .unwrap_or_else(|rc| panic!("CreatePrimary failed: {rc:#x}"));
@@ -90,7 +92,9 @@ fn create_and_load(
     let cmd = Create {
         parent_handle: parent,
         in_public: Tpm2b(public),
-        ..Default::default()
+        in_sensitive: Default::default(),
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     let rsp = execute_with_password_sessions(tpm, &cmd, 1, &[])
         .unwrap_or_else(|rc| panic!("Create failed: {rc:#x}"));
@@ -109,7 +113,7 @@ fn rsa_key(public: &TpmtPublic<'static>) -> (u16, &'static [u8]) {
     let PublicParmsAndId::Rsa(parms, unique) = public.parms_and_id else {
         panic!("expected an RSA key");
     };
-    (parms.key_bits.0, unique.get_buffer())
+    (parms.key_bits.as_u16(), unique.get_buffer())
 }
 
 /// The modulus of a created key has exactly `keyBits` bits.
@@ -293,7 +297,7 @@ fn test_parms_accepts(bits: u16) {
             parameters: TpmtPublicParms::Rsa(TpmsRsaParms {
                 symmetric,
                 scheme: None,
-                key_bits: TpmiRsaKeyBits(bits),
+                key_bits: TpmiRsaKeyBits::new(bits).expect("implemented RSA key size"),
                 exponent: 0,
             }),
         };
@@ -353,7 +357,9 @@ fn duplicate_and_import(bits: u16) {
     let cmd = Create {
         parent_handle: old_parent,
         in_public: Tpm2b(duplicable),
-        ..Default::default()
+        in_sensitive: Default::default(),
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     let rsp = execute_with_password_sessions(&mut tpm, &cmd, 1, &[])
         .unwrap_or_else(|rc| panic!("Create failed: {rc:#x}"));

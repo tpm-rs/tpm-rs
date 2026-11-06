@@ -35,7 +35,8 @@ fn create_primary(hierarchy: Handle, public: TpmtPublic<'static>) -> Vec<u8> {
             data: Tpm2bSensitiveData::default(),
         }),
         in_public: Tpm2b(public),
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     build_cmd(&cmd, &[pw()])
 }

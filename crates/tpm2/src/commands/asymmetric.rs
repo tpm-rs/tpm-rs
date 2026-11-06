@@ -18,7 +18,7 @@ use crate::{errors::UnmarshalError, marshal::marshal_helper, *};
 /// [TPM2.0 1.83] 14.2 TPM2_RSA_Encrypt (Command)
 #[doc(alias = "TPM2_RSA_Encrypt")]
 #[doc(alias = "RSA_Encrypt_In")]
-#[derive(Clone, Copy, PartialEq, Debug, Default, Eq)]
+#[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct RSAEncrypt<'a> {
     pub key_handle: Handle,
     pub message: Tpm2bPublicKeyRsa<'a>,
@@ -27,7 +27,7 @@ pub struct RSAEncrypt<'a> {
 }
 /// [TPM2.0 1.83] 14.2 TPM2_RSA_Encrypt (Response)
 #[doc(alias = "RSA_Encrypt_Out")]
-#[derive(Clone, Copy, PartialEq, Debug, Default, Eq)]
+#[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct RSAEncryptRsp<'a> {
     pub out_data: Tpm2bPublicKeyRsa<'a>,
 }
@@ -93,7 +93,7 @@ impl<'a> UnmarshalMessage<'a> for RSAEncryptRsp<'a> {
 /// [TPM2.0 1.83] 14.3 TPM2_RSA_Decrypt (Command)
 #[doc(alias = "TPM2_RSA_Decrypt")]
 #[doc(alias = "RSA_Decrypt_In")]
-#[derive(Clone, Copy, PartialEq, Debug, Default, Eq)]
+#[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct RSADecrypt<'a> {
     pub key_handle: Handle,
     pub cipher_text: Tpm2bPublicKeyRsa<'a>,
@@ -102,7 +102,7 @@ pub struct RSADecrypt<'a> {
 }
 /// [TPM2.0 1.83] 14.3 TPM2_RSA_Decrypt (Response)
 #[doc(alias = "RSA_Decrypt_Out")]
-#[derive(Clone, Copy, PartialEq, Debug, Default, Eq)]
+#[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct RSADecryptRsp<'a> {
     pub message: Tpm2bPublicKeyRsa<'a>,
 }
@@ -379,7 +379,7 @@ pub struct ZGen2Phase<'a> {
 }
 /// [TPM2.0 1.83] 14.7 TPM2_ZGen_2Phase (Response)
 #[doc(alias = "ZGen_2Phase_Out")]
-#[derive(Clone, Copy, PartialEq, Debug, Default, Eq)]
+#[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct ZGen2PhaseRsp<'a> {
     pub out_z1: Tpm2bEccPoint<'a>,
     pub out_z2: Tpm2bEccPoint<'a>,
@@ -610,13 +610,13 @@ impl<'a> UnmarshalMessage<'a> for ECCDecryptRsp<'a> {
 /// [TPM2.0 1.83] 14.10 TPM2_Encapsulate (Command)
 #[doc(alias = "TPM2_Encapsulate")]
 #[doc(alias = "Encapsulate_In")]
-#[derive(Clone, Copy, PartialEq, Debug, Default, Eq)]
+#[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct Encapsulate {
     pub key_handle: Handle,
 }
 /// [TPM2.0 1.83] 14.10 TPM2_Encapsulate (Response)
 #[doc(alias = "Encapsulate_Out")]
-#[derive(Clone, Copy, PartialEq, Debug, Default, Eq)]
+#[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct EncapsulateRsp<'a> {
     pub shared_secret: Tpm2bSharedSecret<'a>,
     pub ciphertext: Tpm2bKemCiphertext<'a>,
@@ -677,14 +677,14 @@ impl<'a> UnmarshalMessage<'a> for EncapsulateRsp<'a> {
 /// [TPM2.0 1.83] 14.11 TPM2_Decapsulate (Command)
 #[doc(alias = "TPM2_Decapsulate")]
 #[doc(alias = "Decapsulate_In")]
-#[derive(Clone, Copy, PartialEq, Debug, Default, Eq)]
+#[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct Decapsulate<'a> {
     pub key_handle: Handle,
     pub ciphertext: Tpm2bKemCiphertext<'a>,
 }
 /// [TPM2.0 1.83] 14.11 TPM2_Decapsulate (Response)
 #[doc(alias = "Decapsulate_Out")]
-#[derive(Clone, Copy, PartialEq, Debug, Default, Eq)]
+#[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct DecapsulateRsp<'a> {
     pub shared_secret: Tpm2bSharedSecret<'a>,
 }

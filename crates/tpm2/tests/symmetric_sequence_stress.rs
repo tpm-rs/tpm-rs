@@ -128,6 +128,7 @@ fn test_sequence_complete_cmd_layout_and_big_endian() {
 }
 
 #[test]
+#[cfg(feature = "sha512")]
 fn test_marshalling_stress_buffer_sizes() {
     // Stress test marshalling and unmarshalling for all commands using various buffer sizes
     let test_sizes = [0, 1, 2, 4, 32, 128, 512, 1024];

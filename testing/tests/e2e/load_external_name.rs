@@ -1,5 +1,6 @@
 //! Names returned by TPM2_LoadExternal match nameAlg || H(public area).
 
+use crate::_common::ClientCrypto;
 use crate::_common::{
     ECC_D, ECC_X, ECC_Y, RSA_N, STRONGEST_HASH_ALG, flush_context, make_ecc_public_area,
     make_keyed_hash_public_area_obfuscated, make_rsa_public_area_opt_name_alg, marshal_to_slice,
@@ -10,7 +11,6 @@ use tpm2::{
     Alg, Handle, Tpm2bAuth, Tpm2bDigest, Tpm2bEccParameter, Tpm2bName, TpmaObject, TpmiAlgHash,
     TpmtSensitive, TpmuSensitiveComposite,
 };
-use tpm2_platform_linux::PlatformCryptoProvider;
 
 /// The returned Name of a loaded ECC key equals nameAlg || H(public area).
 #[test]
@@ -29,11 +29,11 @@ fn ecc_name_matches_public_digest() {
     // Compute expected name
     let mut buf = [0u8; 1024];
     let len = marshal_to_slice(&pub_struct, &mut buf);
-    let provider = PlatformCryptoProvider;
     let mut digest_buf = [0u8; tpm2::TpmtHa::MAX_DIGEST_SIZE];
-    let digest = tpm2::crypto::hash(&provider, TpmiAlgHash::Sha256, &buf[..len], &mut digest_buf)
-        .unwrap()
-        .digest();
+    let digest =
+        tpm2::crypto::hash::<ClientCrypto>(TpmiAlgHash::Sha256, &[&buf[..len]], &mut digest_buf)
+            .unwrap()
+            .digest();
     let mut name_bytes = Vec::new();
     name_bytes.extend_from_slice(&Alg::from(TpmiAlgHash::Sha256).id().to_be_bytes());
     name_bytes.extend_from_slice(digest);
@@ -61,11 +61,11 @@ fn keyed_hash_name_matches_public_digest() {
     // Compute expected name
     let mut buf = [0u8; 1024];
     let len = marshal_to_slice(&pub_struct, &mut buf);
-    let provider = PlatformCryptoProvider;
     let mut digest_buf = [0u8; tpm2::TpmtHa::MAX_DIGEST_SIZE];
-    let digest = tpm2::crypto::hash(&provider, TpmiAlgHash::Sha256, &buf[..len], &mut digest_buf)
-        .unwrap()
-        .digest();
+    let digest =
+        tpm2::crypto::hash::<ClientCrypto>(TpmiAlgHash::Sha256, &[&buf[..len]], &mut digest_buf)
+            .unwrap()
+            .digest();
     let mut name_bytes = Vec::new();
     name_bytes.extend_from_slice(&Alg::from(TpmiAlgHash::Sha256).id().to_be_bytes());
     name_bytes.extend_from_slice(digest);
@@ -99,11 +99,11 @@ fn name_with_sensitive_matches_public_digest() {
     // Compute expected name
     let mut buf = [0u8; 1024];
     let len = marshal_to_slice(&pub_struct, &mut buf);
-    let provider = PlatformCryptoProvider;
     let mut digest_buf = [0u8; tpm2::TpmtHa::MAX_DIGEST_SIZE];
-    let digest = tpm2::crypto::hash(&provider, TpmiAlgHash::Sha256, &buf[..len], &mut digest_buf)
-        .unwrap()
-        .digest();
+    let digest =
+        tpm2::crypto::hash::<ClientCrypto>(TpmiAlgHash::Sha256, &[&buf[..len]], &mut digest_buf)
+            .unwrap()
+            .digest();
     let mut name_bytes = Vec::new();
     name_bytes.extend_from_slice(&Alg::from(TpmiAlgHash::Sha256).id().to_be_bytes());
     name_bytes.extend_from_slice(digest);
@@ -151,11 +151,11 @@ fn rsa_name_matches_public_digest() {
     // Compute expected name
     let mut buf = [0u8; 1024];
     let len = marshal_to_slice(&pub_struct, &mut buf);
-    let provider = PlatformCryptoProvider;
     let mut digest_buf = [0u8; tpm2::TpmtHa::MAX_DIGEST_SIZE];
-    let digest = tpm2::crypto::hash(&provider, TpmiAlgHash::Sha256, &buf[..len], &mut digest_buf)
-        .unwrap()
-        .digest();
+    let digest =
+        tpm2::crypto::hash::<ClientCrypto>(TpmiAlgHash::Sha256, &[&buf[..len]], &mut digest_buf)
+            .unwrap()
+            .digest();
     let mut name_bytes = Vec::new();
     name_bytes.extend_from_slice(&Alg::from(TpmiAlgHash::Sha256).id().to_be_bytes());
     name_bytes.extend_from_slice(digest);
@@ -208,9 +208,8 @@ fn sha512_name_alg_name() {
 
     let mut buf = [0u8; 1024];
     let len = marshal_to_slice(&pub_struct, &mut buf);
-    let provider = PlatformCryptoProvider;
     let mut digest_buf = [0u8; tpm2::TpmtHa::MAX_DIGEST_SIZE];
-    let digest = tpm2::crypto::hash(&provider, name_alg, &buf[..len], &mut digest_buf)
+    let digest = tpm2::crypto::hash::<ClientCrypto>(name_alg, &[&buf[..len]], &mut digest_buf)
         .unwrap()
         .digest();
     let mut name_bytes = Vec::new();

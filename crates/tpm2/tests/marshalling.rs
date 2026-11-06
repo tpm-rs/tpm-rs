@@ -60,6 +60,12 @@ fn test_marshal_enum_override() {
 }
 
 #[test]
+#[cfg(all(
+    feature = "sha256",
+    feature = "aes128",
+    feature = "rsassa",
+    feature = "rsa2048"
+))]
 fn test_marshal_tpmt_public() {
     let aes_sym_def_obj = Some(TpmtSymDefObject {
         alg: AlgSym::Aes128,
@@ -73,7 +79,7 @@ fn test_marshal_tpmt_public() {
     let rsa_parms = TpmsRsaParms {
         symmetric: aes_sym_def_obj,
         scheme: rsa_scheme,
-        key_bits: TpmiRsaKeyBits(2048),
+        key_bits: TpmiRsaKeyBits::Rsa2048,
         exponent: 2,
     };
 
@@ -554,6 +560,7 @@ fn test_nv_undefine_space_marshalling() {
 }
 
 #[test]
+#[cfg(all(feature = "sha256", feature = "aes128", feature = "nist_p256"))]
 fn test_print_ecc_parent() {
     let public_area = TpmtPublic {
         name_alg: Some(TpmiAlgHash::Sha256),
@@ -1390,7 +1397,7 @@ fn test_rsa_key_bits_and_sensitive_and_ecc_point_unmarshalling() {
         "TpmiRsaKeyBits::try_from(512) must fail with UnmarshalError::VALUE"
     );
     #[cfg(feature = "rsa2048")]
-    assert_eq!(TpmiRsaKeyBits::try_from(2048), Ok(TpmiRsaKeyBits(2048)));
+    assert_eq!(TpmiRsaKeyBits::try_from(2048), Ok(TpmiRsaKeyBits::Rsa2048));
 
     // TpmsRsaParms::unmarshal with invalid scheme (0x0099) returns UnmarshalError::VALUE
     let bad_rsa_parms_buf = [0x00u8, 0x10, 0x00, 0x99, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00];
@@ -1708,4 +1715,41 @@ fn test_tpm2b_template_and_context_data_raw_unmarshalling() {
     let ctx2 =
         Tpm2bContextData::unmarshal(&mut src_ctx2).expect("TPM2B_CONTEXT_DATA opaque bytes valid");
     assert_eq!(ctx2.get_buffer(), &[0x01, 0x02, 0x03, 0x04]);
+}
+
+#[test]
+fn test_tpms_capability_data_act_marshalling() {
+    let act_data = TpmsActData {
+        handle: Handle::RH_ACT_0,
+        timeout: 30,
+        attributes: TpmaAct::SIGNALED,
+    };
+    let cap_data = TpmsCapabilityData::ActData(TpmlActData::new(&[act_data]).unwrap());
+
+    let mut buf = [0u8; TpmsCapabilityData::MAX_SIZE];
+    let len = cap_data.marshal(&mut buf);
+    let mut reader = &buf[..len];
+    let unmarshaled = TpmsCapabilityData::unmarshal(&mut reader).unwrap();
+    assert_eq!(unmarshaled, cap_data);
+    assert!(reader.is_empty());
+}
+
+#[test]
+fn test_tpmt_nv_public_2_marshalling() {
+    let public = TpmsNvPublic {
+        nv_index: Handle(0x01000001),
+        name_alg: TpmiAlgHash::Sha256,
+        attributes: TpmaNv::from(TpmNt::Ordinary) | TpmaNv::AUTHWRITE | TpmaNv::AUTHREAD,
+        auth_policy: Tpm2bDigest::default(),
+        data_size: 32,
+    };
+    let nv_public = TpmtNvPublic2::new(TpmuNvPublic2::NvIndex(public));
+    assert_eq!(nv_public.handle_type(), TpmHt::NVIndex);
+
+    let mut buf = [0u8; TpmtNvPublic2::MAX_SIZE];
+    let len = nv_public.marshal(&mut buf);
+    let mut reader = &buf[..len];
+    let unmarshaled = TpmtNvPublic2::unmarshal(&mut reader).unwrap();
+    assert_eq!(unmarshaled, nv_public);
+    assert!(reader.is_empty());
 }

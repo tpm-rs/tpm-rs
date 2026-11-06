@@ -5,10 +5,11 @@ use crate::handler::SessionState;
 use crate::storage::{NvStorage, StorageError};
 use crate::timer::TpmTimer;
 use alloc::vec::Vec;
-use tpm2::Alg;
 use tpm2::TpmSe;
-use tpm2::crypto::{Asymmetric, AsymmetricSign, Cmac, ConstantTimeEq, Random, Rng, Symmetric};
-use tpm2::crypto::{CryptoError, CryptoProvider, Direction, ModeIv};
+use tpm2::crypto::backend::{
+    Cmac, Ecc, Hash, Hmac, HmacState, Mldsa, Mlkem, Rsa, Symmetric, SymmetricState, default_crypt,
+};
+use tpm2::crypto::{Block, CipherInput, Crypto, CryptoError, Direction, Random, Rng};
 use tpm2::{Tpm2bNonce, TpmiAlgHash, TpmtSymDef};
 
 #[allow(clippy::too_many_arguments)]
@@ -58,8 +59,8 @@ pub fn make_test_session_state(
     }
 }
 
-/// A deterministic platform RNG: fills buffers with an incrementing (wrapping) byte counter that
-/// starts at 1 and continues across calls.
+/// A deterministic RNG: fills buffers with an incrementing (wrapping) byte counter that starts at
+/// 1 and continues across calls. It is both the fake platform RNG and the RNG of [`FakeCrypto`].
 pub struct FakeRng {
     counter: u8,
 }
@@ -85,271 +86,180 @@ impl Rng for FakeRng {
         Ok(())
     }
 
-    /// Ignores `data`, like exp's default `Rng::stir_random`.
-    fn reseed(&mut self, _data: &[u8]) -> Result<(), CryptoError> {
+    /// Ignores `data`.
+    fn stir_bytes(&mut self, _data: &[u8]) -> Result<(), CryptoError> {
         Ok(())
     }
 }
 
+/// A fake crypto backend: the fake HMAC ([`FakeHmac`]), the fake AES ([`FakeAes`]) and the
+/// [`FakeRng`]; every other algorithm is unsupported.
 pub struct FakeCrypto;
 
-impl tpm2::crypto::Hash for FakeCrypto {
-    type Sha1Context = !;
-    type Sha256Context = !;
-    type Sha384Context = !;
-    type Sha512Context = !;
-    type Sm3_256Context = !;
-    type Sha3_256Context = !;
-    type Sha3_384Context = !;
-    type Sha3_512Context = !;
+impl Hash for FakeCrypto {
+    type Sha1 = !;
+    type Sha256 = !;
+    type Sha384 = !;
+    type Sha512 = !;
+    type Sm3_256 = !;
+    type Sha3_256 = !;
+    type Sha3_384 = !;
+    type Sha3_512 = !;
 }
 
 /// A fake HMAC: XOR-folds the key and the data into the output and mixes in their total length.
-pub struct FakeHmacCtx(Vec<u8>);
+pub struct FakeHmac(Vec<u8>);
 
-impl tpm2::crypto::Update for FakeHmacCtx {
+impl<const N: usize> HmacState<N> for FakeHmac {
+    fn init(key: &[u8]) -> Result<Self, CryptoError> {
+        Ok(Self(key.to_vec()))
+    }
+
     fn update(&mut self, data: &[u8]) -> Result<(), CryptoError> {
         self.0.extend_from_slice(data);
         Ok(())
     }
-}
 
-impl<const N: usize> tpm2::crypto::Finalize<N> for FakeHmacCtx {
-    fn finalize(self, out: &mut [u8; N]) -> Result<(), CryptoError> {
+    fn finalize(&mut self, out: &mut [u8; N]) -> Result<(), CryptoError> {
         out.fill(0);
-        if !self.0.is_empty() {
-            for (i, &b) in self.0.iter().enumerate() {
-                out[i % N] ^= b;
-            }
+        for (i, &b) in self.0.iter().enumerate() {
+            out[i % N] ^= b;
         }
         out[1] ^= self.0.len() as u8;
         Ok(())
     }
 }
 
-impl tpm2::crypto::Hmac for FakeCrypto {
-    type Sha1Context = FakeHmacCtx;
-    fn sha1(&self, key: &[u8]) -> Result<Self::Sha1Context, CryptoError> {
-        Ok(FakeHmacCtx(key.to_vec()))
-    }
-    type Sha256Context = FakeHmacCtx;
-    fn sha256(&self, key: &[u8]) -> Result<Self::Sha256Context, CryptoError> {
-        Ok(FakeHmacCtx(key.to_vec()))
-    }
-    type Sha384Context = FakeHmacCtx;
-    fn sha384(&self, key: &[u8]) -> Result<Self::Sha384Context, CryptoError> {
-        Ok(FakeHmacCtx(key.to_vec()))
-    }
-    type Sha512Context = FakeHmacCtx;
-    fn sha512(&self, key: &[u8]) -> Result<Self::Sha512Context, CryptoError> {
-        Ok(FakeHmacCtx(key.to_vec()))
-    }
-    type Sm3_256Context = !;
-    type Sha3_256Context = !;
-    type Sha3_384Context = !;
-    type Sha3_512Context = !;
+impl Hmac for FakeCrypto {
+    type Sha1 = FakeHmac;
+    type Sha256 = FakeHmac;
+    type Sha384 = FakeHmac;
+    type Sha512 = FakeHmac;
+    type Sm3_256 = !;
+    type Sha3_256 = !;
+    type Sha3_384 = !;
+    type Sha3_512 = !;
 }
 
-/// The fake AES cipher, for both directions and every mode: XORs `data` with the repeated key
-/// and the repeated IV (all zeros for ECB). The IV is left unchanged, so the returned `ivOut`
-/// equals the IV passed in.
-fn fake_sym_xor(key: &[u8], mode: ModeIv<'_>, data: &mut [u8]) -> Result<(), CryptoError> {
-    let iv = match mode {
-        ModeIv::Ctr(iv) | ModeIv::Ofb(iv) | ModeIv::Cbc(iv) | ModeIv::Cfb(iv) => *iv,
-        ModeIv::Ecb => [0u8; 16],
-    };
-    for (i, b) in data.iter_mut().enumerate() {
-        *b ^= key[i % key.len()] ^ iv[i % 16];
+/// The fake AES cipher, for both directions and every mode: XORs the data with the repeated key
+/// and the repeated IV (all zeros for ECB). The IV is left unchanged (also after a partial final
+/// CFB block), so the returned `ivOut` equals the IV passed in.
+pub struct FakeAes<const K: usize>([u8; K]);
+
+impl<const K: usize> FakeAes<K> {
+    fn xor(&self, iv: &Block, data: &mut [u8]) -> Result<(), CryptoError> {
+        for (i, b) in data.iter_mut().enumerate() {
+            *b ^= self.0[i % K] ^ iv[i % 16];
+        }
+        Ok(())
     }
-    Ok(())
+}
+
+impl<const K: usize> SymmetricState<K> for FakeAes<K> {
+    fn init(key: &[u8; K]) -> Result<Self, CryptoError> {
+        Ok(Self(*key))
+    }
+    fn ctr(&self, iv: &mut Block, data: &mut [u8]) -> Result<(), CryptoError> {
+        self.xor(iv, data)
+    }
+    fn ofb(&self, iv: &mut Block, data: &mut [u8]) -> Result<(), CryptoError> {
+        self.xor(iv, data)
+    }
+    fn cbc(&self, _dir: Direction, iv: &mut Block, data: &mut [Block]) -> Result<(), CryptoError> {
+        self.xor(iv, data.as_flattened_mut())
+    }
+    fn cfb(&self, _dir: Direction, iv: &mut Block, data: &mut [u8]) -> Result<(), CryptoError> {
+        self.xor(iv, data)
+    }
+    fn ecb(&self, _dir: Direction, data: &mut [Block]) -> Result<(), CryptoError> {
+        self.xor(&[0; 16], data.as_flattened_mut())
+    }
+    /// Like [`default_crypt`], but without zeroing the IV after a partial final CFB block.
+    fn crypt(&self, dir: Direction, input: CipherInput<'_>) -> Result<(), CryptoError> {
+        match input {
+            CipherInput::Cfb(iv, data) => self.cfb(dir, iv, data),
+            input => default_crypt(self, dir, input),
+        }
+    }
 }
 
 impl Symmetric for FakeCrypto {
-    fn aes128(
-        &self,
-        key: &[u8; 16],
-        mode: ModeIv<'_>,
-        _dir: Direction,
-        data: &mut [u8],
-    ) -> Result<(), CryptoError> {
-        fake_sym_xor(key, mode, data)
-    }
-
-    fn aes192(
-        &self,
-        key: &[u8; 24],
-        mode: ModeIv<'_>,
-        _dir: Direction,
-        data: &mut [u8],
-    ) -> Result<(), CryptoError> {
-        fake_sym_xor(key, mode, data)
-    }
-
-    fn aes256(
-        &self,
-        key: &[u8; 32],
-        mode: ModeIv<'_>,
-        _dir: Direction,
-        data: &mut [u8],
-    ) -> Result<(), CryptoError> {
-        fake_sym_xor(key, mode, data)
-    }
-}
-
-impl AsymmetricSign for FakeCrypto {
-    fn sign_inner(
-        &self,
-        _sign_alg: Alg,
-        _private_key: &[u8],
-        _digest: tpm2::TpmtHa<'_>,
-        _signature_out: &mut [u8],
-    ) -> Result<Option<usize>, CryptoError> {
-        todo!()
-    }
-}
-
-impl Asymmetric for FakeCrypto {
-    fn verify_inner(
-        &self,
-        _sign_alg: Alg,
-        _public_key: &[u8],
-        _rsa_exponent: u32,
-        _digest: tpm2::TpmtHa<'_>,
-        _signature: &[u8],
-    ) -> Result<bool, CryptoError> {
-        todo!()
-    }
-    fn encrypt(
-        &self,
-        _scheme: Alg,
-        _hash_alg: Alg,
-        _public_key: &[u8],
-        _rsa_exponent: u32,
-        _data: &[u8],
-        _ciphertext: &mut [u8],
-        _label: &[u8],
-    ) -> Result<Option<usize>, CryptoError> {
-        todo!()
-    }
-    /// Copies `ciphertext` to `plaintext`. An empty private key fails with
-    /// [`CryptoError::Internal`] (exp: `HardwareFailure`), and so does a `plaintext` buffer that
-    /// is too small (exp: `BufferTooSmall`).
-    fn decrypt(
-        &self,
-        _scheme: Alg,
-        _hash_alg: Alg,
-        private_key: &[u8],
-        ciphertext: &[u8],
-        plaintext: &mut [u8],
-        _label: &[u8],
-    ) -> Result<Option<usize>, CryptoError> {
-        if private_key.is_empty() {
-            return Err(CryptoError::Internal);
-        }
-        let len = ciphertext.len();
-        if plaintext.len() < len {
-            return Err(CryptoError::Internal);
-        }
-        plaintext[..len].copy_from_slice(ciphertext);
-        Ok(Some(len))
-    }
-    fn generate_key(
-        &self,
-        _scheme: Alg,
-        _params: Option<tpm2::crypto::asymmetric::KeyParams>,
-        _public_key: &mut [u8],
-        _private_key: &mut [u8],
-        _seed: Option<&[u8]>,
-    ) -> Result<(usize, usize), CryptoError> {
-        todo!()
-    }
+    type Aes128 = FakeAes<16>;
+    type Aes192 = FakeAes<24>;
+    type Aes256 = FakeAes<32>;
+    type Sm4_128 = !;
+    type Camellia128 = !;
+    type Camellia192 = !;
+    type Camellia256 = !;
 }
 
 impl Cmac for FakeCrypto {
-    type Aes128Context = !;
-    type Aes192Context = !;
-    type Aes256Context = !;
-    type Sm4_128Context = !;
-    type Camellia128Context = !;
-    type Camellia192Context = !;
-    type Camellia256Context = !;
+    type Aes128 = !;
+    type Aes192 = !;
+    type Aes256 = !;
+    type Sm4_128 = !;
+    type Camellia128 = !;
+    type Camellia192 = !;
+    type Camellia256 = !;
 }
 
-impl ConstantTimeEq for FakeCrypto {
-    fn constant_time_eq<const N: usize>(&self, a: &[u8; N], b: &[u8; N]) -> bool {
-        a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
-    }
+impl Rsa for FakeCrypto {
+    type Rsa1024 = !;
+    type Rsa2048 = !;
+    type Rsa3072 = !;
+    type Rsa4096 = !;
+}
+
+impl Ecc for FakeCrypto {
+    type NistP192 = !;
+    type NistP224 = !;
+    type NistP256 = !;
+    type NistP384 = !;
+    type NistP521 = !;
+    type BNP256 = !;
+    type BNP638 = !;
+    type SM2P256 = !;
+    type BpP256R1 = !;
+    type BpP384R1 = !;
+    type BpP512R1 = !;
+    type Ed25519 = !;
+    type Ed448 = !;
+    type X25519 = !;
+    type X448 = !;
+}
+
+impl Mldsa for FakeCrypto {
+    type Mldsa44 = !;
+    type Mldsa65 = !;
+    type Mldsa87 = !;
+}
+
+impl Mlkem for FakeCrypto {
+    type Mlkem512 = !;
+    type Mlkem768 = !;
+    type Mlkem1024 = !;
 }
 
 impl Random for FakeCrypto {
-    type Rng = !;
-}
+    type Rng = FakeRng;
 
-/// The fake ECC operations accept every input and report success without writing any output
-/// (exp's `Ok(())`). The output lengths reported are those of the output buffers.
-impl tpm2::crypto::Ecc for FakeCrypto {
-    type NistP192Context = !;
-    type NistP224Context = !;
-    type NistP256Context = !;
-    type NistP384Context = !;
-    type NistP521Context = !;
-    type BnP256Context = !;
-    type BnP638Context = !;
-    type Sm2P256Context = !;
-    type BpP256R1Context = !;
-    type BpP384R1Context = !;
-    type BpP512R1Context = !;
-    type Curve25519Context = !;
-    type Curve448Context = !;
+    fn from_entropy() -> Result<FakeRng, CryptoError> {
+        Ok(FakeRng::new())
+    }
 
-    fn validate_point(
-        &self,
-        _curve: tpm2::TpmEccCurve,
-        _public_key: &[u8],
-    ) -> Result<bool, CryptoError> {
-        Ok(true)
-    }
-    fn point_multiply_generator(
-        &self,
-        _curve: tpm2::TpmEccCurve,
-        _scalar: &[u8],
-        public_key_out: &mut [u8],
-    ) -> Result<Option<usize>, CryptoError> {
-        Ok(Some(public_key_out.len()))
-    }
-    fn point_multiply(
-        &self,
-        _curve: tpm2::TpmEccCurve,
-        _scalar: &[u8],
-        _public_point: &[u8],
-        derived_point_out: &mut [u8],
-    ) -> Result<Option<usize>, CryptoError> {
-        Ok(Some(derived_point_out.len()))
-    }
-    fn ecdaa_sign(
-        &self,
-        _curve: tpm2::TpmEccCurve,
-        _commit_r: &[u8],
-        _commit_x: &[u8],
-        _commit_p1: &[u8],
-        _private_key_d: &[u8],
-        _digest: &[u8],
-        _nonce_k_out: &mut [u8],
-        s_out: &mut [u8],
-    ) -> Result<Option<usize>, CryptoError> {
-        Ok(Some(s_out.len()))
+    /// Deterministic: the counter starts at the wrapping sum of the seed octets plus 1.
+    fn from_seed(seed: &[u8]) -> Result<FakeRng, CryptoError> {
+        let start = seed.iter().fold(1u8, |acc, &b| acc.wrapping_add(b));
+        Ok(FakeRng { counter: start })
     }
 }
 
-impl tpm2::crypto::Mlkem for FakeCrypto {}
-impl tpm2::crypto::Mldsa for FakeCrypto {}
-
-impl CryptoProvider for FakeCrypto {
+impl Crypto for FakeCrypto {
     /// Its algorithms are fakes, which fail the known-answer self tests.
     const KNOWN_ANSWER_TESTS: bool = false;
 
-    fn get_random(&self, _dest: &mut [u8]) -> Result<(), CryptoError> {
-        todo!()
+    fn ct_eq(a: &[u8], b: &[u8]) -> bool {
+        a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
     }
 }
 

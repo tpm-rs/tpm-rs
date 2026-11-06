@@ -2,7 +2,7 @@
 //! the tests it dispatches to (`AlgorithmTests.c`), and of `CryptSelfTest()`,
 //! `CryptIncrementalSelfTest()` and `CryptRunSelfTests()` (`CryptSelfTest.c`).
 //!
-//! The tests are known-answer tests ([`super::vectors`]) on the crypto provider. Their algorithm
+//! The tests are known-answer tests ([`super::vectors`]) on the crypto backend. Their algorithm
 //! bookkeeping, including its idiosyncrasies (e.g. which tests also mark other algorithms as
 //! tested, and that the RSA and ECC signature tests clear `TPM_ALG_NULL`/`TPM_ALG_ECDH` without
 //! testing them), is that of the reference, because it is visible in the `toDoList` of
@@ -14,9 +14,18 @@
 //! use) or a local copy of the algorithms a command asked to test ([`Vector::Local`]); the
 //! reference's `CLEAR_BOTH`/`SET_BOTH`/`TEST_BOTH` macros update/test both.
 
-use tpm2::crypto::{CryptoError, CryptoProvider, Direction, HmacStream, ModeIv, SymmetricKey};
+#[cfg(not(feature = "reference-rng"))]
+use tpm2::crypto::EccPrivateKey;
+use tpm2::crypto::{
+    CipherInput, Crypto, CryptoError, Direction, RsaPrivateKey, RsaPublicKey, SignatureBuffer,
+    SymmetricKey,
+};
 use tpm2::errors::TpmRc;
-use tpm2::{Alg, AlgSym, TpmEccCurve, TpmiAlgCipherMode, TpmiAlgHash, TpmtHa};
+use tpm2::{
+    Alg, AlgSym, Tpm2bEccParameter, Tpm2bPrivateKeyRsa, Tpm2bPublicKeyRsa, TpmEccCurve,
+    TpmiAlgCipherMode, TpmiAlgHash, TpmiRsaKeyBits, TpmsSignatureEcc, TpmsSignatureRsa,
+    TpmtSigScheme, TpmtSignature,
+};
 
 #[cfg(feature = "reference-rng")]
 use crate::reference_rng::{RefRng, ecc, rsa};
@@ -29,6 +38,8 @@ const SYM_MODES: core::ops::RangeInclusive<u16> = 0x0040..=0x0044;
 
 /// The size of the test RSA key (`RSA_TEST_KEY_SIZE`).
 const RSA_TEST_KEY_SIZE: usize = 256;
+/// The key size of the test RSA key.
+const RSA_TEST_KEY_BITS: TpmiRsaKeyBits = TpmiRsaKeyBits::Rsa2048;
 /// The public exponent of the test RSA key (the default exponent, `RsaKeyInitialize()`).
 const RSA_TEST_EXPONENT: u32 = 65537;
 /// The OAEP label of the RSA tests (`OAEP_TEST_STRING`, a `TPM2B_STRING` including the NUL).
@@ -96,10 +107,6 @@ impl Vector<'_> {
             Vector::Global => Vector::Global,
             Vector::Local(v) => Vector::Local(v),
         }
-    }
-
-    fn is_global(&self) -> bool {
-        matches!(self, Vector::Global)
     }
 }
 
@@ -236,12 +243,12 @@ fn test_bit(state: &SelfTestState, v: &Vector<'_>, alg: u16) -> bool {
     }
 }
 
-/// Runs the algorithm self tests: the crypto provider (hooked, so that the algorithms the tests
+/// Runs the algorithm self tests: the crypto backend (hooked, so that the algorithms the tests
 /// use are tested first, as the reference's nested `TPM_DO_SELF_TEST()` calls do) and, with the
 /// `reference-rng` feature, the TPM's DRBG for the tests that draw random values.
-pub(crate) struct SelfTester<'a, C: CryptoProvider> {
+pub(crate) struct SelfTester<'a, C: Crypto> {
     pub(crate) crypto: Tested<'a, C>,
-    /// The TPM's DRBG, or `None` in the hooked crypto provider, which only runs tests that draw
+    /// The TPM's DRBG, or `None` in the hooked crypto backend, which only runs tests that draw
     /// no random values.
     #[cfg(feature = "reference-rng")]
     pub(crate) rng: Option<RefRng<'a>>,
@@ -249,7 +256,7 @@ pub(crate) struct SelfTester<'a, C: CryptoProvider> {
 
 type TestResult = Result<(), TpmRc>;
 
-impl<'a, C: CryptoProvider> SelfTester<'a, C> {
+impl<'a, C: Crypto> SelfTester<'a, C> {
     fn state(&self) -> &'a SelfTestState {
         self.crypto.state
     }
@@ -260,8 +267,8 @@ impl<'a, C: CryptoProvider> SelfTester<'a, C> {
         TpmRc::FAILURE
     }
 
-    /// Fails the test unless `ok` (or the provider is a test double whose results are not
-    /// compared, [`CryptoProvider::KNOWN_ANSWER_TESTS`]).
+    /// Fails the test unless `ok` (or the backend is a test double whose results are not
+    /// compared, [`Crypto::KNOWN_ANSWER_TESTS`]).
     fn check(&self, ok: bool) -> TestResult {
         if ok || !C::KNOWN_ANSWER_TESTS {
             Ok(())
@@ -270,8 +277,8 @@ impl<'a, C: CryptoProvider> SelfTester<'a, C> {
         }
     }
 
-    /// Checks the result of a crypto provider operation: `ok` decides on a successful result; an
-    /// operation the provider does not implement ([`CryptoError::Unsupported`]) cannot produce a
+    /// Checks the result of a crypto backend operation: `ok` decides on a successful result; an
+    /// operation the backend does not implement ([`CryptoError::Unsupported`]) cannot produce a
     /// value that depends on it (Part 3, "Testing": "The TPM may perform operations using
     /// testable functions before those functions have been tested as long as the TPM returns no
     /// value that depends on the correctness of the testable function"), so it passes.
@@ -284,15 +291,6 @@ impl<'a, C: CryptoProvider> SelfTester<'a, C> {
             Ok(value) => self.check(ok(value)),
             Err(CryptoError::Unsupported) => Ok(()),
             Err(_) => self.check(false),
-        }
-    }
-
-    /// The value of a test step that must succeed: `Some` value, or (if [`Self::check`] lets a
-    /// failure pass) the default.
-    fn require<T: Default>(&self, value: Option<T>) -> Result<T, TpmRc> {
-        match value {
-            Some(value) => Ok(value),
-            None => self.check(false).map(|()| T::default()),
         }
     }
 
@@ -378,10 +376,12 @@ impl<'a, C: CryptoProvider> SelfTester<'a, C> {
             _ => return Ok(()),
         };
         let digest_size = hash.digest_size();
-        let block_size = usize::from(hash.block_size());
+        let block_size = hash.block_size();
         let mut out = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
         let computed = (|| {
-            let mut mac = HmacStream::new(&self.crypto, hash, &HASH_TEST_KEY[..2 * digest_size])?;
+            let mut mac = self
+                .crypto
+                .hmac_stream(hash, &HASH_TEST_KEY[..2 * digest_size])?;
             mac.update(&HASH_TEST_DATA[..2 * block_size])?;
             let digest = mac.finalize(&mut out)?;
             Ok::<bool, CryptoError>(digest.digest() == kvt)
@@ -414,16 +414,11 @@ impl<'a, C: CryptoProvider> SelfTester<'a, C> {
         let mut data = *test.data_in;
         let mut iv = [0u8; 16];
         let iv_len = make_iv(mode, &mut iv);
-        let mode_iv = ModeIv::new(cipher_mode, &mut iv[..iv_len]).ok_or_else(|| self.failure())?;
-        let encrypted = tpm2::crypto::encrypt_decrypt(
-            &self.crypto,
-            key,
-            mode_iv,
-            Direction::Encrypt,
-            &mut data,
-        );
+        let input = CipherInput::new(cipher_mode, &mut iv[..iv_len], &mut data)
+            .ok_or_else(|| self.failure())?;
+        let encrypted = self.crypto.crypt(key, Direction::Encrypt, input);
         if encrypted == Err(CryptoError::Unsupported) {
-            // A crypto provider that does not implement the mode (e.g. a test double that
+            // A crypto backend that does not implement the mode (e.g. a test double that
             // implements only CFB) cannot return any value that depends on it (Part 3,
             // "Testing": "The TPM may perform operations using testable functions before those
             // functions have been tested as long as the TPM returns no value that depends on the
@@ -432,14 +427,9 @@ impl<'a, C: CryptoProvider> SelfTester<'a, C> {
         }
         self.check_crypto(&encrypted, |_| &data == expected)?;
         let iv_len = make_iv(mode, &mut iv);
-        let mode_iv = ModeIv::new(cipher_mode, &mut iv[..iv_len]).ok_or_else(|| self.failure())?;
-        let decrypted = tpm2::crypto::encrypt_decrypt(
-            &self.crypto,
-            key,
-            mode_iv,
-            Direction::Decrypt,
-            &mut data,
-        );
+        let input = CipherInput::new(cipher_mode, &mut iv[..iv_len], &mut data)
+            .ok_or_else(|| self.failure())?;
+        let decrypted = self.crypto.crypt(key, Direction::Decrypt, input);
         self.check_crypto(&decrypted, |_| &data == test.data_in)
     }
 
@@ -503,19 +493,23 @@ impl<'a, C: CryptoProvider> SelfTester<'a, C> {
     // RSA.
     // ---------------------------------------------------------------------------------------
 
-    /// The private key of the test RSA key (`RsaKeyInitialize()`: the public modulus, the first
-    /// prime and the default exponent), in the crypto provider's format.
-    fn rsa_test_key(&self, out: &mut [u8]) -> Result<Option<usize>, TpmRc> {
-        let imported = self.crypto.inner.rsa_import_private_key(
-            &RSA_TEST_MODULUS,
-            &RSA_TEST_PRIME,
-            RSA_TEST_EXPONENT,
-            out,
-        );
-        match imported {
+    /// The test RSA key (`RsaKeyInitialize()`: the public modulus, the first prime and the
+    /// default exponent) as a private key of the crypto backend, or `None` if the backend has no
+    /// RSA-2048 private keys (so nothing depends on them).
+    fn rsa_test_key(&self) -> Result<Option<RsaPrivateKey<C>>, TpmRc> {
+        let loaded = (|| {
+            let Some(public) = rsa_test_public_key::<C>()? else {
+                return Ok(None);
+            };
+            let prime = Tpm2bPrivateKeyRsa::new(&RSA_TEST_PRIME).ok_or(CryptoError::Internal)?;
+            RsaPrivateKey::load(public, prime)
+        })();
+        match loaded {
             // No RSA private keys, so nothing that depends on them.
             Err(CryptoError::Unsupported) => Ok(None),
-            imported => self.require(imported.ok().flatten()).map(Some),
+            Ok(Some(key)) => Ok(Some(key)),
+            // A test double whose results are not compared has nothing to test without a key.
+            _ => self.check(false).map(|()| None),
         }
     }
 
@@ -540,12 +534,7 @@ impl<'a, C: CryptoProvider> SelfTester<'a, C> {
                 None => rsa::rsaes_pkcs1v15_encode(rng, message, &mut padded),
             };
             self.check(encoded.is_ok())?;
-            let encrypted = self.crypto.inner.rsa_null_encrypt(
-                &RSA_TEST_MODULUS,
-                RSA_TEST_EXPONENT,
-                &padded,
-                &mut out[..],
-            );
+            let encrypted = rsa_test_encrypt::<C>(Alg::NULL, Alg::NULL, &padded, &mut out[..]);
             self.check_crypto(&encrypted, |len| *len == Some(RSA_TEST_KEY_SIZE))
         }
         #[cfg(not(feature = "reference-rng"))]
@@ -554,15 +543,7 @@ impl<'a, C: CryptoProvider> SelfTester<'a, C> {
                 Some(hash) => (Alg::OAEP, Alg::from(hash)),
                 None => (Alg::RSAES, Alg::NULL),
             };
-            let encrypted = self.crypto.inner.encrypt(
-                scheme,
-                hash_alg,
-                &RSA_TEST_MODULUS,
-                RSA_TEST_EXPONENT,
-                message,
-                &mut out[..],
-                OAEP_TEST_LABEL,
-            );
+            let encrypted = rsa_test_encrypt::<C>(scheme, hash_alg, message, &mut out[..]);
             self.check_crypto(&encrypted, |len| *len == Some(RSA_TEST_KEY_SIZE))
         }
     }
@@ -573,25 +554,18 @@ impl<'a, C: CryptoProvider> SelfTester<'a, C> {
         let state = self.state();
         clear_both(state, &mut v, scheme);
         clear_both(state, &mut v, id(Alg::NULL));
-        let mut private_key = [0u8; 2048];
-        let Some(key_len) = self.rsa_test_key(&mut private_key)? else {
+        let Some(private_key) = self.rsa_test_key()? else {
             return Ok(());
         };
-        let private_key = &private_key[..key_len];
-        let crypto = self.crypto.inner;
         let mut output = [0u8; RSA_TEST_KEY_SIZE];
         if scheme == id(Alg::NULL) {
-            let encrypted = crypto.rsa_null_encrypt(
-                &RSA_TEST_MODULUS,
-                RSA_TEST_EXPONENT,
-                &RSA_TEST_VALUE,
-                &mut output,
-            );
+            let encrypted =
+                rsa_test_encrypt::<C>(Alg::NULL, Alg::NULL, &RSA_TEST_VALUE, &mut output);
             self.check_crypto(&encrypted, |len| {
                 *len == Some(RSA_TEST_KEY_SIZE) && output == RSAEP_KVT
             })?;
             let mut decrypted = [0u8; RSA_TEST_KEY_SIZE];
-            let len = crypto.rsa_null_decrypt(private_key, &output, &mut decrypted);
+            let len = rsa_test_decrypt(&private_key, Alg::NULL, Alg::NULL, &output, &mut decrypted);
             return self.check_crypto(&len, |len| {
                 *len == Some(RSA_TEST_KEY_SIZE) && decrypted == RSA_TEST_VALUE
             });
@@ -614,13 +588,12 @@ impl<'a, C: CryptoProvider> SelfTester<'a, C> {
         self.rsa_encrypt(oaep.then_some(hash), message, &mut output)?;
         let mut decrypted = [0u8; RSA_TEST_KEY_SIZE];
         for ciphertext in [&output, kvt] {
-            let len = crypto.decrypt(
+            let len = rsa_test_decrypt(
+                &private_key,
                 scheme_alg,
                 hash_alg,
-                private_key,
                 ciphertext,
                 &mut decrypted,
-                OAEP_TEST_LABEL,
             );
             self.check_crypto(&len, |len| {
                 *len == Some(message.len()) && &decrypted[..message.len()] == message
@@ -637,29 +610,23 @@ impl<'a, C: CryptoProvider> SelfTester<'a, C> {
         clear_both(state, &mut v, scheme);
         clear_both(state, &mut v, id(Alg::NULL));
         clear_both(state, &mut v, id(Alg::RSA));
-        let mut private_key = [0u8; 2048];
-        let Some(key_len) = self.rsa_test_key(&mut private_key)? else {
+        let Some(private_key) = self.rsa_test_key()? else {
             return Ok(());
         };
-        let private_key = &private_key[..key_len];
         let hash = default_test_hash();
         let digest = &RSA_TEST_VALUE[..hash.digest_size()];
-        let ha = TpmtHa::new(hash, digest).ok_or_else(|| self.failure())?;
         let mut signature = [0u8; RSA_TEST_KEY_SIZE];
         if scheme == id(Alg::RSASSA) {
-            let signed = self
-                .crypto
-                .inner
-                .rsassa_sign(private_key, ha, &mut signature);
+            let signed = rsa_test_sign(
+                &private_key,
+                TpmtSigScheme::Rsassa(hash),
+                digest,
+                &mut signature,
+            );
             self.check_crypto(&signed, |len| {
                 *len == Some(RSA_TEST_KEY_SIZE) && signature == rsassa_kvt(hash)
             })?;
-            let verified = self.crypto.inner.rsassa_verify(
-                &RSA_TEST_MODULUS,
-                RSA_TEST_EXPONENT,
-                ha,
-                &signature,
-            );
+            let verified = rsa_test_verify::<C>(false, hash, digest, &signature);
             return self.check_crypto(&verified, |ok| *ok);
         }
         if scheme != id(Alg::RSAPSS) {
@@ -667,12 +634,9 @@ impl<'a, C: CryptoProvider> SelfTester<'a, C> {
         }
         // `PssEncode()` starts a hash with the default test hash.
         self.do_self_test(id_hash(hash))?;
-        self.rsa_pss_sign(private_key, hash, digest, &mut signature)?;
+        self.rsa_pss_sign(&private_key, hash, digest, &mut signature)?;
         for sig in [&signature, rsapss_kvt(hash)] {
-            let verified =
-                self.crypto
-                    .inner
-                    .rsapss_verify(&RSA_TEST_MODULUS, RSA_TEST_EXPONENT, ha, sig);
+            let verified = rsa_test_verify::<C>(true, hash, digest, sig);
             self.check_crypto(&verified, |ok| *ok)?;
         }
         Ok(())
@@ -682,7 +646,7 @@ impl<'a, C: CryptoProvider> SelfTester<'a, C> {
     /// DRBG as the reference's `CryptRsaSign()` does.
     fn rsa_pss_sign(
         &mut self,
-        private_key: &[u8],
+        private_key: &RsaPrivateKey<C>,
         hash: TpmiAlgHash,
         digest: &[u8],
         out: &mut [u8; RSA_TEST_KEY_SIZE],
@@ -697,16 +661,13 @@ impl<'a, C: CryptoProvider> SelfTester<'a, C> {
             let mut encoded = [0u8; RSA_TEST_KEY_SIZE];
             let pss = rsa::pss_encode(rng, hash, digest, &mut encoded);
             self.check(pss.is_ok())?;
-            let signed = self
-                .crypto
-                .inner
-                .rsa_null_decrypt(private_key, &encoded, &mut out[..]);
+            let signed =
+                rsa_test_decrypt(private_key, Alg::NULL, Alg::NULL, &encoded, &mut out[..]);
             self.check_crypto(&signed, |len| *len == Some(RSA_TEST_KEY_SIZE))
         }
         #[cfg(not(feature = "reference-rng"))]
         {
-            let ha = TpmtHa::new(hash, digest).ok_or_else(|| self.failure())?;
-            let signed = self.crypto.inner.rsapss_sign(private_key, ha, &mut out[..]);
+            let signed = rsa_test_sign(private_key, TpmtSigScheme::Rsapss(hash), digest, out);
             self.check_crypto(&signed, |len| *len == Some(RSA_TEST_KEY_SIZE))
         }
     }
@@ -789,14 +750,13 @@ impl<'a, C: CryptoProvider> SelfTester<'a, C> {
             return Ok(());
         }
         let digest = &EC_TEST_VALUE[..hash.digest_size()];
-        let ha = TpmtHa::new(hash, digest).ok_or_else(|| self.failure())?;
         let (kvt_r, kvt_s) = ecdsa_kvt(hash);
         signature[..32].copy_from_slice(kvt_r);
         signature[32..].copy_from_slice(kvt_s);
-        let verified = self.crypto.inner.ecdsa_verify(&qs, ha, &signature);
+        let verified = ecdsa_test_verify::<C>(hash, &qs, digest, &signature);
         self.check_crypto(&verified, |ok| *ok)?;
         self.ecdsa_sign(digest, &mut signature)?;
-        let verified = self.crypto.inner.ecdsa_verify(&qs, ha, &signature);
+        let verified = ecdsa_test_verify::<C>(hash, &qs, digest, &signature);
         self.check_crypto(&verified, |ok| *ok)
     }
 
@@ -810,16 +770,8 @@ impl<'a, C: CryptoProvider> SelfTester<'a, C> {
         signature: &[u8; 64],
     ) -> TestResult {
         let (r, s) = signature.split_at(32);
-        let verified = crate::ecc_schemes::schnorr_verify(
-            self.crypto.inner,
-            &self.crypto,
-            TEST_CURVE,
-            hash,
-            qs,
-            digest,
-            r,
-            s,
-        );
+        let verified =
+            crate::ecc_schemes::schnorr_verify(&self.crypto, TEST_CURVE, hash, qs, digest, r, s);
         self.check_crypto(&verified, |ok| *ok)
     }
 
@@ -855,15 +807,13 @@ impl<'a, C: CryptoProvider> SelfTester<'a, C> {
         }
         #[cfg(not(feature = "reference-rng"))]
         {
-            let crypto = self.crypto;
             let signed = crate::ecc_schemes::schnorr_sign(
-                crypto.inner,
-                &crypto,
+                &self.crypto,
                 TEST_CURVE,
                 hash,
                 &EC_TEST_KEY_DS,
                 digest,
-                |buf: &mut [u8]| crypto.inner.get_random(buf),
+                |buf: &mut [u8]| C::rand_bytes(buf),
                 &mut out[..],
             );
             self.check_crypto(&signed, |len| *len == Some(64))
@@ -886,11 +836,7 @@ impl<'a, C: CryptoProvider> SelfTester<'a, C> {
         }
         #[cfg(not(feature = "reference-rng"))]
         {
-            let ha = TpmtHa::new(default_test_hash(), digest).ok_or_else(|| self.failure())?;
-            let signed = self
-                .crypto
-                .inner
-                .ecdsa_sign(&EC_TEST_KEY_DS, ha, &mut out[..]);
+            let signed = ecdsa_test_sign::<C>(default_test_hash(), digest, out);
             self.check_crypto(&signed, |len| *len == Some(64))
         }
     }
@@ -929,7 +875,7 @@ impl<'a, C: CryptoProvider> SelfTester<'a, C> {
         clear_both(self.state(), &mut v, id(Alg::KDF1_SP800_108));
         let hash = default_test_hash();
         let mut out = [0u8; 20];
-        let derived = tpm2::crypto::kdfa_bits(
+        let derived = super::kdfa_bits(
             &self.crypto,
             hash,
             &KDF_TEST_KEY_IN,
@@ -953,6 +899,7 @@ impl<'a, C: CryptoProvider> SelfTester<'a, C> {
 
     /// Random bytes from the TPM's DRBG (`CryptoRand_DRBG_Generate(NULL, ...)`), as the ML-KEM
     /// encapsulation and the ML-DSA signature of the tests draw them.
+    #[cfg(any(feature = "mlkem", feature = "mldsa"))]
     fn draw_random(&mut self, out: &mut [u8]) -> TestResult {
         #[cfg(feature = "reference-rng")]
         {
@@ -965,10 +912,7 @@ impl<'a, C: CryptoProvider> SelfTester<'a, C> {
         }
         #[cfg(not(feature = "reference-rng"))]
         {
-            self.crypto
-                .inner
-                .get_random(out)
-                .map_err(|_| self.failure())
+            C::rand_bytes(out).map_err(|_| self.failure())
         }
     }
 
@@ -976,40 +920,47 @@ impl<'a, C: CryptoProvider> SelfTester<'a, C> {
     /// the TPM's DRBG) to the test key whose result decapsulates to the same shared secret. The
     /// vectors are ML-KEM-512 (`MLKEM_TEST_PARMS`: the first implemented parameter set).
     fn test_mlkem(&mut self, mut v: Vector<'_>) -> TestResult {
-        use super::pqc_vectors::*;
         clear_both(self.state(), &mut v, id(Alg::MLKEM));
-        let param = tpm2::TpmiMlkemParms::Mlkem512;
-        let mut secret = [0u8; tpm2::crypto::MLKEM_SHARED_SECRET_SIZE];
-        let decapsulated = self.crypto.inner.mlkem_decapsulate(
-            param,
-            &MLKEM_KAT_SEED,
-            &MLKEM_KAT_CIPHERTEXT,
-            &mut secret,
-        );
-        self.check_crypto(&decapsulated, |ok| *ok && secret == MLKEM_KAT_SECRET)?;
+        #[cfg(feature = "mlkem")]
+        {
+            use super::pqc_vectors::*;
+            use tpm2::crypto::{MlkemPrivateKey, MlkemPublicKey};
+            use tpm2::{Tpm2bKemCiphertext, Tpm2bPrivateKeyMlkem, Tpm2bPublicKeyMlkem};
+            let param = tpm2::TpmiMlkemParms::Mlkem512;
+            let decapsulate = |seed: &[u8], ciphertext: &[u8], secret: &mut [u8]| {
+                let seed = Tpm2bPrivateKeyMlkem::new(seed).ok_or(CryptoError::Internal)?;
+                let Some(key) = MlkemPrivateKey::<C>::expand(param, seed)? else {
+                    return Ok(false);
+                };
+                let ct = Tpm2bKemCiphertext::new(ciphertext).ok_or(CryptoError::Internal)?;
+                Ok::<bool, CryptoError>(key.decapsulate(ct, secret)?.is_some())
+            };
+            let mut secret = [0u8; tpm2::TpmiMlkemParms::SHARED_SECRET_BYTES];
+            let decapsulated = decapsulate(&MLKEM_KAT_SEED, &MLKEM_KAT_CIPHERTEXT, &mut secret);
+            self.check_crypto(&decapsulated, |ok| *ok && secret == MLKEM_KAT_SECRET)?;
 
-        let mut entropy = [0u8; tpm2::crypto::MLKEM_ENTROPY_SIZE];
-        self.draw_random(&mut entropy)?;
-        let mut ciphertext = [0u8; MLKEM_KAT_CIPHERTEXT.len()];
-        let encapsulated = self.crypto.inner.mlkem_encapsulate(
-            param,
-            &MLKEM_TEST_PUB,
-            &entropy,
-            &mut ciphertext,
-            &mut secret,
-        );
-        self.check_crypto(&encapsulated, |len| *len == Some(ciphertext.len()))?;
-        if encapsulated.is_err() {
-            return Ok(());
+            let mut entropy = [0u8; 32];
+            self.draw_random(&mut entropy)?;
+            let mut ciphertext = [0u8; MLKEM_KAT_CIPHERTEXT.len()];
+            let encapsulated = (|| {
+                let public =
+                    Tpm2bPublicKeyMlkem::new(&MLKEM_TEST_PUB).ok_or(CryptoError::Internal)?;
+                let Some(public) = MlkemPublicKey::<C>::load(param, public)? else {
+                    return Ok(None);
+                };
+                let (ct, _) =
+                    public.encapsulate_internal(&entropy, &mut ciphertext, &mut secret)?;
+                Ok::<_, CryptoError>(Some(ct.as_slice().len()))
+            })();
+            self.check_crypto(&encapsulated, |len| *len == Some(ciphertext.len()))?;
+            if encapsulated.is_err() {
+                return Ok(());
+            }
+            let mut check_secret = [0u8; tpm2::TpmiMlkemParms::SHARED_SECRET_BYTES];
+            let decapsulated = decapsulate(&MLKEM_TEST_SEED, &ciphertext, &mut check_secret);
+            self.check_crypto(&decapsulated, |ok| *ok && check_secret == secret)?;
         }
-        let mut check_secret = [0u8; tpm2::crypto::MLKEM_SHARED_SECRET_SIZE];
-        let decapsulated = self.crypto.inner.mlkem_decapsulate(
-            param,
-            &MLKEM_TEST_SEED,
-            &ciphertext,
-            &mut check_secret,
-        );
-        self.check_crypto(&decapsulated, |ok| *ok && check_secret == secret)
+        Ok(())
     }
 
     /// `TestMldsa()`: a known-answer verification of a signature over a known message
@@ -1017,35 +968,203 @@ impl<'a, C: CryptoProvider> SelfTester<'a, C> {
     /// TPM's DRBG) that has to verify. The vectors are ML-DSA-44 (`MLDSA_TEST_PARMS`: the first
     /// implemented parameter set).
     fn test_mldsa(&mut self, mut v: Vector<'_>) -> TestResult {
-        use super::pqc_vectors::*;
         clear_both(self.state(), &mut v, id(Alg::MLDSA));
-        let param = tpm2::TpmiMldsaParms::Mldsa44;
-        let verified =
-            self.crypto
-                .inner
-                .mldsa_verify_mu(param, &MLDSA_KAT_PUB, &MLDSA_KAT_MU, &MLDSA_KAT_SIG);
-        self.check_crypto(&verified, |ok| *ok)?;
+        #[cfg(feature = "mldsa")]
+        {
+            use super::pqc_vectors::*;
+            use tpm2::crypto::{MldsaPrivateKey, MldsaPublicKey};
+            use tpm2::{Tpm2bPrivateKeyMldsa, Tpm2bPublicKeyMldsa, Tpm2bSignatureMldsa};
+            let param = tpm2::TpmiMldsaParms::Mldsa44;
+            let verify = |public: &[u8], signature: &[u8]| {
+                let public = Tpm2bPublicKeyMldsa::new(public).ok_or(CryptoError::Internal)?;
+                let Some(public) = MldsaPublicKey::<C>::load(param, public)? else {
+                    return Ok(false);
+                };
+                let sig = Tpm2bSignatureMldsa::new(signature).ok_or(CryptoError::Internal)?;
+                public.verify(&[], &MLDSA_KAT_MU, TpmtSignature::Mldsa(sig))
+            };
+            let verified = verify(&MLDSA_KAT_PUB, &MLDSA_KAT_SIG);
+            self.check_crypto(&verified, |ok| *ok)?;
 
-        let mut rnd = [0u8; tpm2::crypto::MLDSA_RND_SIZE];
-        self.draw_random(&mut rnd)?;
-        let mut signature = [0u8; MLDSA_KAT_SIG.len()];
-        let signed = self.crypto.inner.mldsa_sign_mu(
-            param,
-            &MLDSA_TEST_SEED,
-            &MLDSA_KAT_MU,
-            &rnd,
-            &mut signature,
-        );
-        self.check_crypto(&signed, |len| *len == Some(signature.len()))?;
-        if signed.is_err() {
-            return Ok(());
+            let mut rnd = [0u8; 32];
+            self.draw_random(&mut rnd)?;
+            let mut signature = [0u8; MLDSA_KAT_SIG.len()];
+            let signed = (|| {
+                let seed =
+                    Tpm2bPrivateKeyMldsa::new(&MLDSA_TEST_SEED).ok_or(CryptoError::Internal)?;
+                let Some(key) = MldsaPrivateKey::<C>::expand(param, seed)? else {
+                    return Ok(None);
+                };
+                let mut buf = [0u8; core::mem::size_of::<SignatureBuffer>()];
+                let TpmtSignature::Mldsa(sig) =
+                    key.sign_mu_internal(&rnd, &MLDSA_KAT_MU, &mut buf)?
+                else {
+                    return Err(CryptoError::Internal);
+                };
+                let Some(out) = signature.get_mut(..sig.as_slice().len()) else {
+                    return Ok(None);
+                };
+                out.copy_from_slice(sig.as_slice());
+                Ok::<_, CryptoError>(Some(out.len()))
+            })();
+            self.check_crypto(&signed, |len| *len == Some(signature.len()))?;
+            if signed.is_err() {
+                return Ok(());
+            }
+            let verified = verify(&MLDSA_TEST_PUB, &signature);
+            self.check_crypto(&verified, |ok| *ok)?;
         }
-        let verified =
-            self.crypto
-                .inner
-                .mldsa_verify_mu(param, &MLDSA_TEST_PUB, &MLDSA_KAT_MU, &signature);
-        self.check_crypto(&verified, |ok| *ok)
+        Ok(())
     }
+}
+
+/// The public key of the test RSA key (`Ok(None)`: the backend rejects it).
+fn rsa_test_public_key<C: Crypto>() -> Result<Option<RsaPublicKey<C>>, CryptoError> {
+    let modulus = Tpm2bPublicKeyRsa::new(&RSA_TEST_MODULUS).ok_or(CryptoError::Internal)?;
+    RsaPublicKey::load(RSA_TEST_KEY_BITS, RSA_TEST_EXPONENT, modulus)
+}
+
+/// The encryption of `message` with the public test RSA key and `scheme`/`hash`
+/// ([`crate::rsa::rsa_encrypt`], with the test label), with randomness from the backend.
+fn rsa_test_encrypt<C: Crypto>(
+    scheme: Alg,
+    hash: Alg,
+    message: &[u8],
+    out: &mut [u8],
+) -> Result<Option<usize>, CryptoError> {
+    let Some(public) = rsa_test_public_key::<C>()? else {
+        return Ok(None);
+    };
+    let mut rng = C::from_entropy()?;
+    crate::rsa::rsa_encrypt::<C>(
+        &mut rng,
+        &public,
+        scheme,
+        hash,
+        OAEP_TEST_LABEL,
+        message,
+        out,
+    )
+}
+
+/// The decryption of `ciphertext` with the private test RSA key `key` and `scheme`/`hash`
+/// ([`crate::rsa::rsa_decrypt`], with the test label), with randomness (blinding) from the
+/// backend.
+fn rsa_test_decrypt<C: Crypto>(
+    key: &RsaPrivateKey<C>,
+    scheme: Alg,
+    hash: Alg,
+    ciphertext: &[u8],
+    out: &mut [u8],
+) -> Result<Option<usize>, CryptoError> {
+    let mut rng = C::from_entropy()?;
+    crate::rsa::rsa_decrypt::<C>(
+        &mut rng,
+        key,
+        scheme,
+        hash,
+        OAEP_TEST_LABEL,
+        ciphertext,
+        out,
+    )
+}
+
+/// Signs `digest` with the private test RSA key `key` and `scheme` (RSASSA or RSASSA-PSS, salt
+/// from the backend) and writes the signature to `out`; returns its length (`Ok(None)` for a
+/// signature of another size).
+fn rsa_test_sign<C: Crypto>(
+    key: &RsaPrivateKey<C>,
+    scheme: TpmtSigScheme,
+    digest: &[u8],
+    out: &mut [u8; RSA_TEST_KEY_SIZE],
+) -> Result<Option<usize>, CryptoError> {
+    let mut rng = C::from_entropy()?;
+    let mut buf = [0u8; core::mem::size_of::<SignatureBuffer>()];
+    let sig = match key.sign(&mut rng, scheme, digest, &mut buf)? {
+        TpmtSignature::Rsassa(sig) | TpmtSignature::Rsapss(sig) => sig.sig,
+        _ => return Err(CryptoError::Internal),
+    };
+    let sig = sig.as_slice();
+    if sig.len() != out.len() {
+        return Ok(None);
+    }
+    out.copy_from_slice(sig);
+    Ok(Some(sig.len()))
+}
+
+/// Verifies the RSASSA (or RSASSA-PSS with `pss`) signature `signature` of `digest` with the
+/// hash `hash` with the public test RSA key.
+fn rsa_test_verify<C: Crypto>(
+    pss: bool,
+    hash: TpmiAlgHash,
+    digest: &[u8],
+    signature: &[u8],
+) -> Result<bool, CryptoError> {
+    let Some(public) = rsa_test_public_key::<C>()? else {
+        return Ok(false);
+    };
+    let sig = TpmsSignatureRsa {
+        hash,
+        sig: Tpm2bPublicKeyRsa::new(signature).ok_or(CryptoError::Internal)?,
+    };
+    let signature = if pss {
+        TpmtSignature::Rsapss(sig)
+    } else {
+        TpmtSignature::Rsassa(sig)
+    };
+    public.verify(digest, signature)
+}
+
+/// Verifies the ECDSA signature `r || s` (each 32 octets) of `digest` with the hash `hash` with
+/// the public test ECC key `qs` (`x || y`).
+fn ecdsa_test_verify<C: Crypto>(
+    hash: TpmiAlgHash,
+    qs: &[u8; 64],
+    digest: &[u8],
+    signature: &[u8; 64],
+) -> Result<bool, CryptoError> {
+    let Some(public) = crate::ecc_curves::load_point::<C>(TEST_CURVE, qs)? else {
+        return Ok(false);
+    };
+    let (r, s) = signature.split_at(32);
+    let signature = TpmtSignature::Ecdsa(TpmsSignatureEcc {
+        hash,
+        signature_r: Tpm2bEccParameter::new(r).ok_or(CryptoError::Internal)?,
+        signature_s: Tpm2bEccParameter::new(s).ok_or(CryptoError::Internal)?,
+    });
+    public.verify(digest, signature)
+}
+
+/// An ECDSA signature `r || s` (each component padded to 32 octets) of `digest` with the hash
+/// `hash` with the private test ECC key, with the nonce from the backend. Returns its length
+/// (`Ok(None)`: the backend rejects the key, or a component does not fit).
+#[cfg(not(feature = "reference-rng"))]
+fn ecdsa_test_sign<C: Crypto>(
+    hash: TpmiAlgHash,
+    digest: &[u8],
+    out: &mut [u8; 64],
+) -> Result<Option<usize>, CryptoError> {
+    let Some(key) = EccPrivateKey::<C>::from_scalar(TEST_CURVE, &EC_TEST_KEY_DS)? else {
+        return Ok(None);
+    };
+    let mut rng = C::from_entropy()?;
+    let mut buf = [0u8; core::mem::size_of::<SignatureBuffer>()];
+    let TpmtSignature::Ecdsa(sig) =
+        key.sign(&mut rng, TpmtSigScheme::Ecdsa(hash), digest, &mut buf)?
+    else {
+        return Err(CryptoError::Internal);
+    };
+    out.fill(0);
+    for (half, component) in out
+        .chunks_mut(32)
+        .zip([sig.signature_r.as_slice(), sig.signature_s.as_slice()])
+    {
+        let Some(offset) = 32usize.checked_sub(component.len()) else {
+            return Ok(None);
+        };
+        half[offset..].copy_from_slice(component);
+    }
+    Ok(Some(64))
 }
 
 /// `MakeIv()`: the IV of the symmetric tests (none for ECB; for CTR the block size bytes ending

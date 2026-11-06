@@ -151,7 +151,16 @@ fn owner_policy_set() {
     // 2. Confirm subsequent hierarchy-bound operations enforce the new primary policy.
     let create_cmd = CreatePrimary {
         primary_handle: Handle::RH_OWNER,
-        ..Default::default()
+        in_sensitive: Default::default(),
+        // An empty KEYEDHASH public area (nameAlg NULL, no attributes).
+        in_public: tpm2::Tpm2b(tpm2::TpmtPublic {
+            name_alg: None,
+            object_attributes: tpm2::TpmaObject::empty(),
+            auth_policy: Default::default(),
+            parms_and_id: tpm2::PublicParmsAndId::KeyedHash(None, Default::default()),
+        }),
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     let _ = execute_with_password_sessions_status(&mut sim, &create_cmd, 1, &[]);
     assert_ne!(

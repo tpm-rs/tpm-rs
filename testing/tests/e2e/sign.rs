@@ -451,7 +451,7 @@ fn sign_and_verify_signature_round_trip_and_tampering() {
             TpmsRsaParms {
                 symmetric: None,
                 scheme: Some(TpmtRsaScheme::Rsassa(TpmiAlgHash::Sha256)),
-                key_bits: TpmiRsaKeyBits(2048),
+                key_bits: TpmiRsaKeyBits::Rsa2048,
                 exponent: 0,
             },
             Tpm2bPublicKeyRsa::default(),
@@ -487,7 +487,7 @@ fn sign_and_verify_signature_round_trip_and_tampering() {
         key_handle: object_handle,
         digest: Tpm2bDigest::from_bytes(&digest).unwrap(),
         in_scheme: Some(TpmtSigScheme::Rsassa(TpmiAlgHash::Sha1)), // Mismatched hash algorithm
-        validation: TpmtTkHashcheck::default(),
+        validation: TpmtTkHashcheck::new(Handle::RH_NULL, Tpm2bDigest::default()),
     };
 
     let res_mismatched =
@@ -502,7 +502,7 @@ fn sign_and_verify_signature_round_trip_and_tampering() {
         key_handle: object_handle,
         digest: Tpm2bDigest::from_bytes(&digest).unwrap(),
         in_scheme: Some(TpmtSigScheme::Rsassa(TpmiAlgHash::Sha256)),
-        validation: TpmtTkHashcheck::default(),
+        validation: TpmtTkHashcheck::new(Handle::RH_NULL, Tpm2bDigest::default()),
     };
     let mut resp_buffer = [0u8; 4096];
     let sign_resp =
@@ -577,7 +577,7 @@ fn sign_rejects_decrypt_only_key() {
             TpmsRsaParms {
                 symmetric: None,
                 scheme: None,
-                key_bits: TpmiRsaKeyBits(2048),
+                key_bits: TpmiRsaKeyBits::Rsa2048,
                 exponent: 0,
             },
             Tpm2bPublicKeyRsa::default(),
@@ -612,7 +612,7 @@ fn sign_rejects_decrypt_only_key() {
         key_handle: object_handle,
         digest: Tpm2bDigest::from_bytes(&digest).unwrap(),
         in_scheme: Some(TpmtSigScheme::Rsassa(TpmiAlgHash::Sha256)),
-        validation: TpmtTkHashcheck::default(),
+        validation: TpmtTkHashcheck::new(Handle::RH_NULL, Tpm2bDigest::default()),
     };
 
     let res = execute_with_password_sessions_status(&mut sim, &sign_cmd, 1, &[]);
@@ -659,7 +659,7 @@ fn sign_rejects_key_without_sign() {
         key_handle: object_handle,
         digest: Tpm2bDigest::from_bytes(&[0x01; 32]).unwrap(),
         in_scheme: None,
-        validation: TpmtTkHashcheck::default(),
+        validation: TpmtTkHashcheck::new(Handle::RH_NULL, Tpm2bDigest::default()),
     };
     let res = execute_with_password_sessions_status(&mut sim, &sign_cmd, 1, &[]);
     // Sign.c: !IsSigningObject -> TPM_RCS_KEY + RC_Sign_keyHandle.
@@ -679,7 +679,7 @@ fn sign_rejects_unloaded_key_handle() {
         key_handle: Handle::TRANSIENT_LAST,
         digest: Tpm2bDigest::default(),
         in_scheme: None,
-        validation: TpmtTkHashcheck::default(),
+        validation: TpmtTkHashcheck::new(Handle::RH_NULL, Tpm2bDigest::default()),
     };
     let res = execute_with_password_sessions_status(&mut sim, &sign_cmd, 1, &[]);
     assert_eq!(res.err(), Some(TpmRc::REFERENCE_H0.get()));
@@ -712,7 +712,7 @@ fn sign_rejects_unimplemented_scheme() {
         key_handle: load_rsp.object_handle,
         digest: Tpm2bDigest::from_bytes(&[0x01; 32]).unwrap(),
         in_scheme: Some(TpmtSigScheme::Ecdsa(TpmiAlgHash::Sha256)),
-        validation: TpmtTkHashcheck::default(),
+        validation: TpmtTkHashcheck::new(Handle::RH_NULL, Tpm2bDigest::default()),
     };
     // inScheme = TPM_ALG_EDDSA (not a `TpmtSigScheme` of this TPM), after the digest.
     let res =

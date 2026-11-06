@@ -1,31 +1,39 @@
-//! The ECC signature schemes computed by the TPM itself on top of the crypto provider's point
-//! multiplications ([`tpm2::crypto::Ecc`]) and [`crate::ecc_curves`]: SM2 (`TPM_ALG_SM2`, TPM 2.0
-//! Part 1, "SM2 Digital Signature Algorithm"), EC-Schnorr (`TPM_ALG_ECSCHNORR`, Part 1, "EC
-//! Schnorr") and ECDSA on the curves the provider's ECDSA interface cannot select (it identifies
-//! the curve by the key size, so it covers only the NIST curves).
+//! The ECC signature schemes computed by the TPM itself on top of the crypto backend's point
+//! multiplications ([`tpm2::crypto::ecc_mul_generator`], [`EccPublicKey::mul_point`]) and
+//! [`crate::ecc_curves`]: SM2 (`TPM_ALG_SM2`, TPM 2.0 Part 1, "SM2 Digital Signature
+//! Algorithm"), EC-Schnorr (`TPM_ALG_ECSCHNORR`, Part 1, "EC Schnorr") and ECDSA on any curve
+//! (the engine uses it on the curves the backend's ECDSA does not cover).
 //!
-//! The provider's `AsymmetricSign`/`Asymmetric` methods carry no curve, so these schemes cannot
-//! be delegated to it. All values are big-endian; signatures are `(r, s)` with both components
-//! padded to the size of the curve order. Semantic failures (an invalid signature or key) are
-//! `Ok(false)`/`Ok(None)`; [`CryptoError`] is returned only by the provider.
+//! The dispatch API ([`tpm2::crypto::EccPrivateKey::sign`]) does not implement EC-Schnorr and
+//! implements SM2 only where the backend does, so these schemes are computed here. All values
+//! are big-endian; signatures are `(r, s)` with both components padded to the size of the curve
+//! order. Semantic failures (an invalid signature or key) are `Ok(false)`/`Ok(None)`;
+//! [`CryptoError`] is returned only by the backend.
+//!
+//! The point multiplications are the backend's, without the ECDH self test (as the old
+//! multiplications of the old provider interface were); the EC-Schnorr hashes test their hash algorithm
+//! ([`Tested`]).
 //!
 //! The signing functions take the random nonce source as a closure (`nonce`) that fills its
 //! argument with random bytes, so that the TPM can draw from its DRBG.
 
 use tpm2::TpmEccCurve;
 use tpm2::TpmiAlgHash;
-use tpm2::crypto::{CryptoError, Ecc, Hash, HashStream};
+use tpm2::crypto::{Crypto, CryptoError, EccPublicKey};
+
+use crate::self_test::Tested;
 
 use crate::ecc_curves::{CurveParams, curve_params, point_add};
-use crate::modular::{
-    add_mod, ecc_scalar_from_extra_bits, inv_mod, inv_mod_prime, is_zero, mul_mod, reduce, sub_mod,
-};
+use crate::modular::{add_mod, inv_mod, is_zero, mul_mod, reduce, sub_mod};
+#[cfg(any(test, not(feature = "reference-rng")))]
+use crate::modular::{ecc_scalar_from_extra_bits, inv_mod_prime};
 
 /// Largest coordinate/scalar size of the registered curves (BN P-638).
 const MAX: usize = 80;
 /// Largest digest size.
 const MAX_DIGEST: usize = TpmiAlgHash::MAX_DIGEST_BYTES;
 /// Retries of a signing loop before giving up (each retry has a negligible probability).
+#[cfg(any(test, not(feature = "reference-rng")))]
 const MAX_ATTEMPTS: usize = 100;
 
 /// A big-endian scalar or coordinate of at most [`MAX`] bytes.
@@ -102,6 +110,7 @@ fn inv_public(a: &Num, n: &[u8]) -> Option<Num> {
 
 /// `a^-1 mod n` for a secret `a` and the prime group order `n` (constant time), or `None` if `a`
 /// is zero.
+#[cfg(any(test, not(feature = "reference-rng")))]
 fn inv_secret(a: &Num, n: &[u8]) -> Option<Num> {
     let mut out = Num::zero(n.len());
     inv_mod_prime(a.as_ref(), n, out.as_mut()).then_some(out)
@@ -115,6 +124,7 @@ fn params(curve: TpmEccCurve) -> Result<&'static CurveParams, CryptoError> {
 
 /// Splits the signature `r || s` buffer `out` into its halves of `n_len` bytes, or fails with
 /// `Internal` (a programming error) if it is too small.
+#[cfg(any(test, not(feature = "reference-rng")))]
 fn split_out(out: &mut [u8], n_len: usize) -> Result<(&mut [u8], &mut [u8]), CryptoError> {
     let out = out.get_mut(..2 * n_len).ok_or(CryptoError::Internal)?;
     Ok(out.split_at_mut(n_len))
@@ -123,8 +133,7 @@ fn split_out(out: &mut [u8], n_len: usize) -> Result<(&mut [u8], &mut [u8]), Cry
 /// `[u1]G + [u2]Q` on curve `c` (`q` is `x || y`), skipping a term whose scalar is zero. The
 /// scalars are reduced modulo `n`. Returns `x || y` in `out` (`2 * c.coordinate_size()` bytes),
 /// or `Ok(None)` for the point at infinity or an invalid `q`.
-fn mul_add<E: Ecc>(
-    e: &E,
+fn mul_add<C: Crypto>(
     curve: TpmEccCurve,
     c: &CurveParams,
     u1: &Num,
@@ -138,12 +147,12 @@ fn mul_add<E: Ecc>(
     let first = if u1.is_zero() {
         None
     } else {
-        tpm2::crypto::point_multiply_generator(e, curve, u1.as_ref(), &mut p1)?
+        mul_generator::<C>(curve, u1.as_ref(), &mut p1)?
     };
     let second = if u2.is_zero() {
         None
     } else {
-        match tpm2::crypto::point_multiply(e, curve, u2.as_ref(), q, &mut p2)? {
+        match mul_point::<C>(curve, u2.as_ref(), q, &mut p2)? {
             Some(n) => Some(n),
             // An invalid public point (the product with a valid scalar is never infinity on a
             // prime-order curve).
@@ -164,8 +173,38 @@ fn mul_add<E: Ecc>(
     }
 }
 
+/// `[k]G` on `curve` as `x || y` (each coordinate the curve size) in `out` (untested: no ECDH
+/// self test). Returns the length, or `Ok(None)` if `k` is not in `[1, n - 1]`.
+fn mul_generator<C: Crypto>(
+    curve: TpmEccCurve,
+    k: &[u8],
+    out: &mut [u8; 2 * MAX],
+) -> Result<Option<usize>, CryptoError> {
+    let size = curve.key_bytes();
+    let (x, y) = out.split_at_mut(size);
+    Ok(tpm2::crypto::ecc_mul_generator::<C>(curve, k, x, &mut y[..size])?.map(|_| 2 * size))
+}
+
+/// `[k]P` on `curve` for the point `point` (`x || y`) as `x || y` in `out` (untested: no ECDH
+/// self test). Returns the length, or `Ok(None)` if `point` is not a point of `curve`, `k` is not
+/// in `[1, n - 1]` or the product is the point at infinity.
+fn mul_point<C: Crypto>(
+    curve: TpmEccCurve,
+    k: &[u8],
+    point: &[u8],
+    out: &mut [u8; 2 * MAX],
+) -> Result<Option<usize>, CryptoError> {
+    let Some(public) = crate::ecc_curves::load_point::<C>(curve, point)? else {
+        return Ok(None);
+    };
+    let size = curve.key_bytes();
+    let (x, y) = out.split_at_mut(size);
+    Ok(EccPublicKey::mul_point(&public, k, x, &mut y[..size])?.map(|_| 2 * size))
+}
+
 /// Draws a scalar `1 <= k < n` with the "extra random bits" method (FIPS 186-5 A.2.1, C
 /// `TpmEcc_GenPrivateScalar()`) from `nonce`.
+#[cfg(any(test, not(feature = "reference-rng")))]
 fn random_scalar(
     n: &[u8],
     nonce: &mut impl FnMut(&mut [u8]) -> Result<(), CryptoError>,
@@ -231,8 +270,8 @@ fn check_point<'q>(c: &CurveParams, q: &'q [u8]) -> Option<&'q [u8]> {
 /// Signs `digest` with ECDSA (SEC 1, 4.1.3) on `curve` with the private scalar `d`. Writes
 /// `r || s` to `out` and returns its length (twice the order size), or `Ok(None)` if `d` is not
 /// a valid private key.
-pub(crate) fn ecdsa_sign<E: Ecc>(
-    e: &E,
+#[cfg(any(test, not(feature = "reference-rng")))]
+pub(crate) fn ecdsa_sign<C: Crypto>(
     curve: TpmEccCurve,
     d: &[u8],
     digest: &[u8],
@@ -249,7 +288,7 @@ pub(crate) fn ecdsa_sign<E: Ecc>(
     for _ in 0..MAX_ATTEMPTS {
         let k = random_scalar(n, &mut nonce)?;
         let mut kg = [0u8; 2 * MAX];
-        if tpm2::crypto::point_multiply_generator(e, curve, k.as_ref(), &mut kg)?.is_none() {
+        if mul_generator::<C>(curve, k.as_ref(), &mut kg)?.is_none() {
             continue;
         }
         let r = x_mod_n(c, &kg);
@@ -273,8 +312,7 @@ pub(crate) fn ecdsa_sign<E: Ecc>(
 
 /// Verifies the ECDSA signature `(r, s)` over `digest` with the public point `q` (`x || y`) on
 /// `curve` (SEC 1, 4.1.4).
-pub(crate) fn ecdsa_verify<E: Ecc>(
-    e: &E,
+pub(crate) fn ecdsa_verify<C: Crypto>(
     curve: TpmEccCurve,
     q: &[u8],
     digest: &[u8],
@@ -292,7 +330,7 @@ pub(crate) fn ecdsa_verify<E: Ecc>(
     let u1 = mul(&ecdsa_e(digest, n), &w, n);
     let u2 = mul(&r, &w, n);
     let mut x = [0u8; 2 * MAX];
-    Ok(match mul_add(e, curve, c, &u1, &u2, q, &mut x)? {
+    Ok(match mul_add::<C>(curve, c, &u1, &u2, q, &mut x)? {
         Some(_) => x_mod_n(c, &x).as_ref() == r.as_ref(),
         None => false,
     })
@@ -302,8 +340,8 @@ pub(crate) fn ecdsa_verify<E: Ecc>(
 /// `Z_A || M`, computed by the caller) on `curve` with the private scalar `d`. Writes `r || s`
 /// to `out` and returns its length, or `Ok(None)` if `d` is not a valid private key (including
 /// `d = n - 1`, for which `1 + d` has no inverse).
-pub(crate) fn sm2_sign<E: Ecc>(
-    e: &E,
+#[cfg(any(test, not(feature = "reference-rng")))]
+pub(crate) fn sm2_sign<C: Crypto>(
     curve: TpmEccCurve,
     d: &[u8],
     digest: &[u8],
@@ -326,7 +364,7 @@ pub(crate) fn sm2_sign<E: Ecc>(
         // 1. 1 <= k <= n - 1; 2. (x1, y1) := [k]G
         let k = random_scalar(n, &mut nonce)?;
         let mut kg = [0u8; 2 * MAX];
-        if tpm2::crypto::point_multiply_generator(e, curve, k.as_ref(), &mut kg)?.is_none() {
+        if mul_generator::<C>(curve, k.as_ref(), &mut kg)?.is_none() {
             continue;
         }
         // 3. r := e + x1 (mod n); 4. retry if r = 0 or r + k = n
@@ -349,8 +387,7 @@ pub(crate) fn sm2_sign<E: Ecc>(
 
 /// Verifies the SM2 signature `(r, s)` over the digest `e` with the public point `q` on `curve`
 /// (TPM 2.0 Part 1, "SM2 Signature Verification", steps 1-6).
-pub(crate) fn sm2_verify<E: Ecc>(
-    e: &E,
+pub(crate) fn sm2_verify<C: Crypto>(
     curve: TpmEccCurve,
     q: &[u8],
     digest: &[u8],
@@ -370,7 +407,7 @@ pub(crate) fn sm2_verify<E: Ecc>(
     }
     // 4. (x, y) := [s]G + [t]Q
     let mut x = [0u8; 2 * MAX];
-    if mul_add(e, curve, c, &s, &t, q, &mut x)?.is_none() {
+    if mul_add::<C>(curve, c, &s, &t, q, &mut x)?.is_none() {
         return Ok(false);
     }
     // 5. r' := (e + x) mod n; 6. r' = r
@@ -381,8 +418,8 @@ pub(crate) fn sm2_verify<E: Ecc>(
 /// `TRUNC(H_hash(FE2BS(xE) || P), n)` of EC-Schnorr (TPM 2.0 Part 1, "EC Schnorr Sign" step 4):
 /// the digest of the x coordinate of `point` (as many octets as the order `n`) and the digest
 /// `p`, truncated from its less significant end to the octet size of `n`.
-fn schnorr_r<H: Hash>(
-    h: &H,
+fn schnorr_r<C: Crypto>(
+    h: &Tested<'_, C>,
     hash: TpmiAlgHash,
     c: &CurveParams,
     point: &[u8],
@@ -398,7 +435,7 @@ fn schnorr_r<H: Hash>(
     } else {
         return Err(CryptoError::Internal);
     };
-    let mut stream = HashStream::new(h, hash)?;
+    let mut stream = h.hash_stream(hash)?;
     stream.update(fe)?;
     stream.update(p)?;
     let mut buf = [0u8; MAX_DIGEST];
@@ -414,10 +451,9 @@ fn schnorr_r<H: Hash>(
 /// `hash` on `curve` with the private scalar `d`. Writes `r || s` to `out` (`r` is the truncated
 /// hash, padded to the order size) and returns its length, or `Ok(None)` if `d` is not a valid
 /// private key.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn schnorr_sign<E: Ecc, H: Hash>(
-    e: &E,
-    h: &H,
+#[cfg(any(test, not(feature = "reference-rng")))]
+pub(crate) fn schnorr_sign<C: Crypto>(
+    h: &Tested<'_, C>,
     curve: TpmEccCurve,
     hash: TpmiAlgHash,
     d: &[u8],
@@ -435,7 +471,7 @@ pub(crate) fn schnorr_sign<E: Ecc, H: Hash>(
         // 1. 0 < k < n; 2. E := [k]G (3. never infinity for 0 < k < n)
         let k = random_scalar(n, &mut nonce)?;
         let mut kg = [0u8; 2 * MAX];
-        if tpm2::crypto::point_multiply_generator(e, curve, k.as_ref(), &mut kg)?.is_none() {
+        if mul_generator::<C>(curve, k.as_ref(), &mut kg)?.is_none() {
             continue;
         }
         // 4. r := TRUNC(H(FE2BS(xE) || P), n)
@@ -460,10 +496,8 @@ pub(crate) fn schnorr_sign<E: Ecc, H: Hash>(
 
 /// Verifies the EC-Schnorr signature `(r, s)` over the digest `p` with the scheme hash `hash`
 /// and the public point `q` on `curve` (TPM 2.0 Part 1, "EC Schnorr Signature Validate").
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn schnorr_verify<E: Ecc, H: Hash>(
-    e: &E,
-    h: &H,
+pub(crate) fn schnorr_verify<C: Crypto>(
+    h: &Tested<'_, C>,
     curve: TpmEccCurve,
     hash: TpmiAlgHash,
     q: &[u8],
@@ -480,7 +514,7 @@ pub(crate) fn schnorr_verify<E: Ecc, H: Hash>(
     // 2. E := [s]G + [-r]Q
     let neg_r = sub(&Num::zero(n.len()), &r, n);
     let mut point = [0u8; 2 * MAX];
-    if mul_add(e, curve, c, &s, &neg_r, q, &mut point)?.is_none() {
+    if mul_add::<C>(curve, c, &s, &neg_r, q, &mut point)?.is_none() {
         return Ok(false);
     }
     // 3. r' := TRUNC(H(FE2BS(xE) || P), n); 4. r' = r (as numbers)
@@ -493,7 +527,9 @@ mod tests {
     extern crate std;
 
     use super::*;
-    use tpm2::crypto::{Asymmetric as _, AsymmetricSign as _, CryptoProvider as _};
+    use crate::self_test::SelfTestState;
+    use tpm2::crypto::{EccPrivateKey, Random as _, Rng as _, SignatureBuffer};
+    use tpm2::{Tpm2bEccParameter, TpmsSignatureEcc, TpmtSigScheme, TpmtSignature};
     #[cfg(feature = "dev_crypto_bssl")]
     use tpm2_crypto_bssl::BsslCryptoProvider as Crypto;
     #[cfg(feature = "dev_crypto_crux")]
@@ -503,66 +539,81 @@ mod tests {
 
     /// Every curve of the build.
     const CURVES: &[TpmEccCurve] = &[
-        #[cfg(feature = "ecc_curve_nist_p192")]
+        #[cfg(feature = "nist_p192")]
         TpmEccCurve::NistP192,
         TpmEccCurve::NistP224,
         TpmEccCurve::NistP256,
         TpmEccCurve::NistP384,
         TpmEccCurve::NistP521,
         TpmEccCurve::BNP256,
-        #[cfg(feature = "ecc_curve_bn_p638")]
+        #[cfg(feature = "bn_p638")]
         TpmEccCurve::BNP638,
-        #[cfg(feature = "ecc_curve_sm2_p256")]
+        #[cfg(feature = "sm2_p256")]
         TpmEccCurve::SM2P256,
     ];
 
     /// A key pair on `curve`: `(d, q, len)` with `d` the coordinate size and `q` twice that, or
     /// `None` if the backend cannot generate keys on `curve` (e.g. Crux without NIST P-224).
-    fn key_pair(c: &Crypto, curve: TpmEccCurve) -> Option<([u8; MAX], [u8; 2 * MAX], usize)> {
-        let (mut d, mut q) = ([0u8; MAX], [0u8; 2 * MAX]);
-        let (q_len, d_len) = match c.ecc_generate_key(curve, &mut q, &mut d, None) {
-            Ok(lens) => lens,
+    fn key_pair(curve: TpmEccCurve) -> Option<([u8; MAX], [u8; 2 * MAX], usize)> {
+        let mut rng = Crypto::from_entropy().unwrap();
+        let key = match EccPrivateKey::<Crypto>::generate(&mut rng, curve, None) {
+            Ok(key) => key,
             Err(CryptoError::Unsupported) => return None,
             Err(e) => panic!("{curve:?}: key generation: {e:?}"),
         };
-        assert_eq!(q_len, 2 * d_len);
-        Some((d, q, d_len))
+        let len = curve.key_bytes();
+        let (mut d, mut q) = ([0u8; MAX], [0u8; 2 * MAX]);
+        assert_eq!(key.scalar(&mut d).unwrap().as_slice().len(), len);
+        let (x, y) = q.split_at_mut(len);
+        let point = key.point(x, &mut y[..len]).unwrap();
+        assert_eq!(
+            (point.x.as_slice().len(), point.y.as_slice().len()),
+            (len, len)
+        );
+        Some((d, q, len))
     }
 
-    /// A nonce source from the provider's random number generator.
-    fn nonce(c: &Crypto) -> impl FnMut(&mut [u8]) -> Result<(), CryptoError> + '_ {
-        |buf| c.get_random(buf)
+    /// A nonce source from the backend's random number generator.
+    fn nonce() -> impl FnMut(&mut [u8]) -> Result<(), CryptoError> {
+        let mut rng = Crypto::from_entropy().unwrap();
+        move |buf| rng.fill_bytes(buf)
+    }
+
+    /// A [`Tested`] backend that runs no self test.
+    fn tested(state: &SelfTestState) -> Tested<'_, Crypto> {
+        Tested::new(state)
     }
 
     /// Signs and verifies with every scheme on every curve, and rejects a different digest, a
     /// modified signature, out-of-range components and another key.
     #[test]
     fn sign_and_verify_on_every_curve() {
-        let c = Crypto;
+        let state = SelfTestState::default();
+        let t = tested(&state);
         let hash = TpmiAlgHash::Sha256;
         let digest = [0x5a; 32];
         let other = [0xa5; 32];
         for &curve in CURVES {
-            let Some((d, q, len)) = key_pair(&c, curve) else {
+            let Some((d, q, len)) = key_pair(curve) else {
                 continue;
             };
             let (d, q) = (&d[..len], &q[..2 * len]);
-            let (_, q2, _) = key_pair(&c, curve).unwrap();
+            let (_, q2, _) = key_pair(curve).unwrap();
             let q2 = &q2[..2 * len];
             let n = curve_params(curve).unwrap().n;
             for scheme in ["ecdsa", "sm2", "schnorr"] {
                 let mut sig = [0u8; 2 * MAX];
                 let signed = match scheme {
-                    "ecdsa" => ecdsa_sign(&c, curve, d, &digest, nonce(&c), &mut sig),
-                    "sm2" => sm2_sign(&c, curve, d, &digest, nonce(&c), &mut sig),
-                    _ => schnorr_sign(&c, &c, curve, hash, d, &digest, nonce(&c), &mut sig),
+                    "ecdsa" => ecdsa_sign::<Crypto>(curve, d, &digest, nonce(), &mut sig),
+                    "sm2" => sm2_sign::<Crypto>(curve, d, &digest, nonce(), &mut sig),
+                    _ => schnorr_sign(&t, curve, hash, d, &digest, nonce(), &mut sig),
                 };
                 assert_eq!(signed, Ok(Some(2 * len)), "{curve:?} {scheme}");
                 let verify = |q: &[u8], digest: &[u8], r: &[u8], s: &[u8]| {
                     match scheme {
-                        "ecdsa" => ecdsa_verify(&c, curve, q, digest, r, s),
-                        "sm2" => sm2_verify(&c, curve, q, digest, r, s),
-                        _ => schnorr_verify(&c, &c, curve, hash, q, digest, r, s),
+                        "ecdsa" => ecdsa_verify::<Crypto>(curve, q, digest, r, s),
+                        "sm2" => sm2_verify::<Crypto>(curve, q, digest, r, s),
+                        _ => schnorr_verify(&t, curve, hash, q, digest, r, s),
                     }
                     .unwrap()
                 };
@@ -587,38 +638,54 @@ mod tests {
         }
     }
 
-    /// The generic ECDSA agrees with the provider's on the NIST curves (in both directions).
+    /// The generic ECDSA agrees with the backend's on the NIST curves (in both directions).
     #[test]
-    fn ecdsa_matches_the_provider() {
-        let c = Crypto;
+    fn ecdsa_matches_the_backend() {
         let digest = [0x11; 48];
-        let ha = tpm2::TpmtHa::new(TpmiAlgHash::Sha384, &digest).unwrap();
+        let mut rng = Crypto::from_entropy().unwrap();
         for curve in [
             TpmEccCurve::NistP224,
             TpmEccCurve::NistP256,
             TpmEccCurve::NistP384,
             TpmEccCurve::NistP521,
         ] {
-            let Some((d, q, len)) = key_pair(&c, curve) else {
+            let Some((d, q, len)) = key_pair(curve) else {
                 continue;
             };
             let (d, q) = (&d[..len], &q[..2 * len]);
-            let mut sig = [0u8; 2 * MAX];
-            match c.ecdsa_sign(d, ha, &mut sig) {
-                Ok(Some(signed)) if signed == 2 * len => {}
-                // A backend without (working) ECDSA on this curve (the Rust backend signs a
-                // NIST P-224 key as a P-256 key).
-                Ok(_) | Err(CryptoError::Unsupported) => continue,
-                Err(e) => panic!("{curve:?}: {e:?}"),
-            }
-            let (r, s) = sig[..2 * len].split_at(len);
+            let Some(public) = crate::ecc_curves::load_point::<Crypto>(curve, q).unwrap() else {
+                panic!("{curve:?}: generated point rejected");
+            };
+            let private = EccPrivateKey::load(public, Tpm2bEccParameter::new(d).unwrap()).unwrap();
+            let private = private.unwrap_or_else(|| panic!("{curve:?}: generated key rejected"));
+            let scheme = TpmtSigScheme::Ecdsa(TpmiAlgHash::Sha384);
+            let mut buf = [0u8; core::mem::size_of::<SignatureBuffer>()];
+            let (r, s) = match private.sign(&mut rng, scheme, &digest, &mut buf) {
+                Ok(TpmtSignature::Ecdsa(TpmsSignatureEcc {
+                    signature_r,
+                    signature_s,
+                    ..
+                })) => (signature_r, signature_s),
+                // A backend without ECDSA on this curve.
+                Err(CryptoError::Unsupported) => continue,
+                other => panic!("{curve:?}: {other:?}"),
+            };
             assert!(
-                ecdsa_verify(&c, curve, q, &digest, r, s).unwrap(),
+                ecdsa_verify::<Crypto>(curve, q, &digest, r.as_slice(), s.as_slice()).unwrap(),
                 "{curve:?}"
             );
             let mut sig = [0u8; 2 * MAX];
-            ecdsa_sign(&c, curve, d, &digest, nonce(&c), &mut sig).unwrap();
-            assert!(c.ecdsa_verify(q, ha, &sig[..2 * len]).unwrap(), "{curve:?}");
+            ecdsa_sign::<Crypto>(curve, d, &digest, nonce(), &mut sig).unwrap();
+            let (r, s) = sig[..2 * len].split_at(len);
+            let signature = TpmtSignature::Ecdsa(TpmsSignatureEcc {
+                hash: TpmiAlgHash::Sha384,
+                signature_r: Tpm2bEccParameter::new(r).unwrap(),
+                signature_s: Tpm2bEccParameter::new(s).unwrap(),
+            });
+            let public = crate::ecc_curves::load_point::<Crypto>(curve, q)
+                .unwrap()
+                .unwrap();
+            assert!(public.verify(&digest, signature).unwrap(), "{curve:?}");
         }
     }
 
@@ -627,7 +694,8 @@ mod tests {
     #[test]
     fn schnorr_known_answer_signatures_verify() {
         use crate::self_test::vectors::*;
-        let c = Crypto;
+        let state = SelfTestState::default();
+        let t = tested(&state);
         let mut q = [0u8; 64];
         q[..32].copy_from_slice(&EC_TEST_KEY_QS_X);
         q[32..].copy_from_slice(&EC_TEST_KEY_QS_Y);
@@ -641,7 +709,7 @@ mod tests {
             hex_literal::hex!("55202154e249074771f4991554f3ab14db8eda79b6020ee35e6f2cb605bd1410");
         let curve = TpmEccCurve::NistP256;
         let verify = |hash, r: &[u8], s: &[u8]| {
-            schnorr_verify(&c, &c, curve, hash, &q, &EC_TEST_VALUE, r, s).unwrap()
+            schnorr_verify(&t, curve, hash, &q, &EC_TEST_VALUE, r, s).unwrap()
         };
         assert!(verify(TpmiAlgHash::Sha384, &r384, &s384));
         assert!(!verify(TpmiAlgHash::Sha256, &r384, &s384));
@@ -673,28 +741,28 @@ mod tests {
     /// Invalid private keys (zero, not below n) are `Ok(None)`.
     #[test]
     fn invalid_private_keys_are_rejected() {
-        let c = Crypto;
+        let state = SelfTestState::default();
+        let t = tested(&state);
         let curve = TpmEccCurve::NistP256;
         let n = curve_params(curve).unwrap().n;
         let mut sig = [0u8; 2 * MAX];
         for d in [&[0u8; 32][..], n] {
             assert_eq!(
-                ecdsa_sign(&c, curve, d, &[1; 32], nonce(&c), &mut sig),
+                ecdsa_sign::<Crypto>(curve, d, &[1; 32], nonce(), &mut sig),
                 Ok(None)
             );
             assert_eq!(
-                sm2_sign(&c, curve, d, &[1; 32], nonce(&c), &mut sig),
+                sm2_sign::<Crypto>(curve, d, &[1; 32], nonce(), &mut sig),
                 Ok(None)
             );
             assert_eq!(
                 schnorr_sign(
-                    &c,
-                    &c,
+                    &t,
                     curve,
                     TpmiAlgHash::Sha256,
                     d,
                     &[1; 32],
-                    nonce(&c),
+                    nonce(),
                     &mut sig
                 ),
                 Ok(None)
@@ -705,7 +773,7 @@ mod tests {
         d.copy_from_slice(n);
         d[31] -= 1;
         assert_eq!(
-            sm2_sign(&c, curve, &d, &[1; 32], nonce(&c), &mut sig),
+            sm2_sign::<Crypto>(curve, &d, &[1; 32], nonce(), &mut sig),
             Ok(None)
         );
     }

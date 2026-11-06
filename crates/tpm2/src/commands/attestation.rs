@@ -92,7 +92,7 @@ impl<'a> UnmarshalMessage<'a> for CertifyRsp<'a> {
 /// [TPM2.0 1.83] 18.3 TPM2_CertifyCreation (Command)
 #[doc(alias = "TPM2_CertifyCreation")]
 #[doc(alias = "CertifyCreation_In")]
-#[derive(Clone, Copy, PartialEq, Debug, Default, Eq)]
+#[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct CertifyCreation<'a> {
     pub sign_handle: Handle,
     pub object_handle: Handle,

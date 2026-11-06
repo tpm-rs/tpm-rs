@@ -4,7 +4,7 @@ use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
 #[allow(unused_imports)]
 use tpm2::TpmCc;
 use tpm2::commands::Shutdown;
-use tpm2::crypto::{CryptoProvider, Rng};
+use tpm2::crypto::{Crypto, Rng};
 use tpm2::errors::{Position, TpmRc};
 
 /// Flag bit matching the TCG reference code implementation. It is combined with the orderly
@@ -16,7 +16,7 @@ const PRE_STARTUP_FLAG: u16 = 0x8000;
 /// state representation in NV storage to indicate that the startup command was processed at Locality 3.
 const STARTUP_LOCALITY_3: u16 = 0x4000;
 
-impl<'a, 'b, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync>
+impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     CommandHandler<'a, 'b, C, S, T, R>
 {
     /// Handles the [TpmCc::Shutdown] (`0x145`) command.

@@ -20,23 +20,27 @@ hmac = { version = "0.12.1", default-features = false }
 cmac = { version = "0.7.2", default-features = false }
 aes = { version = "0.8.4", default-features = false }
 camellia = { version = "0.1.0", default-features = false }
-cfb-mode = { version = "0.8.2", default-features = false }
-rsa = { version = "0.9.10", default-features = false, features = ["sha2", "sha1", "getrandom", "u64_digit"] }
+rsa = { version = "0.9.10", default-features = false, features = ["sha2", "sha1", "getrandom", "u64_digit", "hazmat"] }
 p256 = { version = "0.13.2", default-features = false, features = ["ecdsa", "arithmetic"] }
 p384 = { version = "0.13", default-features = false, features = ["ecdsa", "arithmetic"] }
 p521 = { version = "0.13", default-features = false, features = ["ecdsa", "arithmetic", "getrandom"] }
-rand = { version = "0.9.4", default-features = false, features = ["os_rng"] }
 rand_chacha = { version = "0.3.1", default-features = false }
 rand_core = { version = "0.6.4", default-features = false, features = ["getrandom"] }
-hex-literal = { workspace = true }
+subtle = { version = "2.6", default-features = false }
+zeroize = { version = "1.8", default-features = false }
 # ML-KEM (FIPS 203) and ML-DSA (FIPS 204). `hazmat` documents the derandomized
 # `EncapsulationKey::encapsulate_deterministic`; `rand_core` provides
 # `ExpandedSigningKey::sign_mu_randomized` (signing on an external `mu`).
 ml-kem = { version = "0.3.4", default-features = false, features = ["hazmat", "zeroize"] }
 ml-dsa = { version = "0.1.2", default-features = false, features = ["rand_core", "zeroize"] }
+# SHAKE256 (the `H` of FIPS 204), for the ML-DSA message representative `mu`.
+shake = { version = "0.1.0", default-features = false }
 
 [features]
 default = ["sha512"]
 # SHA-512 (the `sha512` feature of `tpm2`). A TPM without SHA-512 (like a C
 # reference built without `ALG_SHA512`) is built with every crate without it.
 sha512 = ["tpm2/sha512", "tpm2-crypto-weierstrass/sha512"]
+
+[dev-dependencies]
+hex-literal = { workspace = true }

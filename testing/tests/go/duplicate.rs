@@ -47,7 +47,8 @@ fn create_ecc_srk(sim: &mut Tpm, hierarchy: Handle) -> Handle {
             data: Tpm2bSensitiveData::default(),
         }),
         in_public: tpm2::Tpm2b(get_ecc_srk_template()),
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     let resp =
         execute_with_password_sessions(sim, &create_cmd, 1, &[]).expect("could not generate SRK");

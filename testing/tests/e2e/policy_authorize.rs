@@ -1,5 +1,6 @@
 //! TPM2_PolicyAuthorize: verification ticket checks and approved policy handling.
 
+use crate::_common::ClientCrypto;
 use crate::_common::*;
 use sha2::{Digest, Sha256};
 use testing::tpm::Tpm;
@@ -236,14 +237,9 @@ fn null_hierarchy_ticket_rejected() {
 
     // HMAC calculated using an empty key
     let mut hmac_buf = [0u8; tpm2::TpmtHa::MAX_DIGEST_SIZE];
-    let computed_hmac = tpm2::crypto::hmac(
-        CLIENT_CRYPTO,
-        TpmiAlgHash::Sha256,
-        &[],
-        &hmac_input,
-        &mut hmac_buf,
-    )
-    .unwrap();
+    let computed_hmac =
+        tpm2::crypto::hmac::<ClientCrypto>(TpmiAlgHash::Sha256, &[], &[&hmac_input], &mut hmac_buf)
+            .unwrap();
 
     let check_ticket = TpmtTkVerified::Verified(
         Handle(0x40000007),
@@ -316,14 +312,9 @@ fn policy_authorize_rejects_forged_null_hierarchy_ticket() {
     hmac_input.extend_from_slice(&ahash_digest); // digest
     hmac_input.extend_from_slice(&key_name); // keyName
     let mut hmac_buf = [0u8; tpm2::TpmtHa::MAX_DIGEST_SIZE];
-    let hmac_digest = tpm2::crypto::hmac(
-        CLIENT_CRYPTO,
-        TpmiAlgHash::Sha256,
-        &[],
-        &hmac_input,
-        &mut hmac_buf,
-    )
-    .unwrap();
+    let hmac_digest =
+        tpm2::crypto::hmac::<ClientCrypto>(TpmiAlgHash::Sha256, &[], &[&hmac_input], &mut hmac_buf)
+            .unwrap();
     let ticket = TpmtTkVerified::Verified(
         Handle::RH_NULL,
         Tpm2bDigest::from_bytes(leak_bytes(hmac_digest.digest())).unwrap(),
@@ -403,7 +394,7 @@ fn policy_authorize_rejects_key_sign_unknown_hash() {
         &[],
         &[],
         Tpm2bName::from_bytes(leak_bytes(&key_sign_bad_hash)).unwrap(),
-        TpmtTkVerified::default(),
+        TpmtTkVerified::Verified(Handle::RH_NULL, Tpm2bDigest::default()),
     );
     assert_eq!(
         res.err(),
@@ -426,7 +417,7 @@ fn policy_authorize_rejects_malformed_key_sign_size() {
         &[],
         &[],
         Tpm2bName::from_bytes(&[0]).unwrap(),
-        TpmtTkVerified::default(),
+        TpmtTkVerified::Verified(Handle::RH_NULL, Tpm2bDigest::default()),
     );
     assert_eq!(
         res.err(),
@@ -443,7 +434,7 @@ fn policy_authorize_rejects_malformed_key_sign_size() {
         &[],
         &[],
         Tpm2bName::from_bytes(leak_bytes(&key_sign_mismatched)).unwrap(),
-        TpmtTkVerified::default(),
+        TpmtTkVerified::Verified(Handle::RH_NULL, Tpm2bDigest::default()),
     );
     assert_eq!(
         res2.err(),
@@ -568,7 +559,7 @@ fn policy_authorize_trial_session_updates_digest() {
         &approved_policy,
         &policy_ref,
         key_sign,
-        TpmtTkVerified::default(),
+        TpmtTkVerified::Verified(Handle::RH_NULL, Tpm2bDigest::default()),
     );
     assert!(res.is_ok(), "PolicyAuthorize failed: {:?}", res.err());
 
@@ -657,7 +648,7 @@ fn verify_signature_ticket_authorizes_policy() {
         key_handle: sk,
         digest: Tpm2bDigest::from_bytes(&a_hash).unwrap(),
         in_scheme: Some(TpmtSigScheme::Ecdsa(TpmiAlgHash::Sha256)),
-        validation: TpmtTkHashcheck::default(),
+        validation: TpmtTkHashcheck::new(Handle::RH_NULL, Tpm2bDigest::default()),
     };
     let mut resp_buffer = [0u8; 4096];
     let sign_resp =

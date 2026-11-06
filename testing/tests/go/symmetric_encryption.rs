@@ -77,7 +77,8 @@ fn test_aes_encryption() {
             data: Tpm2bSensitiveData::default(),
         }),
         in_public: tpm2::Tpm2b(sym_template),
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     let create_primary_resp = execute_with_password_sessions(&mut sim, &create_primary_cmd, 1, &[])
         .expect("CreatePrimary failed");
@@ -149,7 +150,8 @@ fn test_aes_encryption_block() {
             data: Tpm2bSensitiveData::default(),
         }),
         in_public: tpm2::Tpm2b(sym_template),
-        ..Default::default()
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     let create_primary_resp = execute_with_password_sessions(&mut sim, &create_primary_cmd, 1, &[])
         .expect("CreatePrimary failed");

@@ -133,10 +133,7 @@ fn make_and_activate_credential_round_trip() {
             },
         )
         .unwrap();
-        assert_eq!(
-            rsp.secret.get_size() as usize,
-            parameter_set.ciphertext_bytes()
-        );
+        assert_eq!(rsp.secret.get_size() as usize, parameter_set.ct_bytes());
         assert_eq!(
             activate_credential(
                 &mut sim,

@@ -9,15 +9,13 @@
 )]
 
 use crate::_common::{
-    AES128_CFB, CLIENT_CRYPTO, create_primary_returning_public, ecc_decrypt_reference,
+    AES128_CFB, client_ecc_key, create_primary_returning_public, ecc_decrypt_reference,
     ecc_encrypt_reference, ecc_point_bytes, ecc_point_from_bytes, ecc_public,
     execute_with_password_sessions, flush_handle, load_external_ecc_key_on, load_public_only,
     rc_at, rc_bare, rsa_public_with_symmetric, sdo_user,
 };
 use testing::tpm::Tpm;
-use tpm2::Alg;
 use tpm2::commands::{ECCDecrypt, ECCEncrypt};
-use tpm2::crypto::asymmetric::{Asymmetric, KeyParams};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
     Handle, PublicParmsAndId, Tpm2bDigest, Tpm2bEccPoint, Tpm2bMaxBuffer, TpmEccCurve, TpmaObject,
@@ -163,19 +161,9 @@ fn decrypt_matches_client_encryption() {
         };
         let pb = ecc_point_bytes(&pb);
         for (hash, len) in [(TpmiAlgHash::Sha256, 0), (TpmiAlgHash::Sha384, 77)] {
-            let mut k = [0u8; 132];
-            let mut unused = [0u8; 132];
-            let (_, k_len) = CLIENT_CRYPTO
-                .generate_key(
-                    Alg::ECC,
-                    Some(KeyParams::Ecc(curve)),
-                    &mut unused,
-                    &mut k,
-                    None,
-                )
-                .unwrap();
+            let (k, _) = client_ecc_key(curve);
             let m: Vec<u8> = (0..len).map(|i| i as u8 ^ 0x5A).collect();
-            let (c1, c2, c3) = ecc_encrypt_reference(curve, hash, &pb, &k[..k_len], &m);
+            let (c1, c2, c3) = ecc_encrypt_reference(curve, hash, &pb, &k, &m);
             assert_eq!(
                 decrypt(
                     &mut sim,

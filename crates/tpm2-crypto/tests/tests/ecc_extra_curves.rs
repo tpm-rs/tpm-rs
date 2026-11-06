@@ -1,10 +1,11 @@
-//! NIST P-192, SM2 P-256 and BN P-638 through the `Ecc` contexts of the backend under test:
-//! known-answer scalar multiplications, `k * G` against `point_multiply(k, G)`, point
-//! validation, invalid scalars and the point at infinity.
+//! NIST P-192, SM2 P-256 and BN P-638 through the `Ecc` backend of the provider under test:
+//! known-answer scalar multiplications, `[k]G` (`mul_generator`) against `[k]G` by `mul_point`,
+//! point validation (`load_public`), invalid scalars and the point at infinity, and the key and
+//! signature operations of the curves.
 //!
-//! The curves are called through the trait methods (`nist_p192()`, `sm2_p256()`,
-//! `bn_p638()`), not through `TpmEccCurve`, whose variants for these curves exist only with
-//! the `tpm2` curve features, which this crate does not enable (they would widen the TPM).
+//! The curves are called through the backend trait (`<TestProvider as Ecc>::NistP192`,
+//! `SM2P256`, `BNP638`), not through `TpmEccCurve`, whose variants for these curves exist only
+//! with the `tpm2` curve features, which this crate does not enable (they would widen the TPM).
 //!
 //! The known answers were computed independently of the backends: with Python integer
 //! arithmetic (affine double-and-add), cross-checked against OpenSSL (`openssl ec` on SEC1
@@ -12,9 +13,13 @@
 //! GB/T 32918.5-2017.
 
 use hex_literal::hex;
+use tpm2::crypto::Random;
+use tpm2::crypto::backend::{Ecc, EccCurve};
 use tpm2::crypto::ecc_params::{BN_P638, EccCurveParams, NIST_P192, SM2_P256};
-use tpm2::crypto::{CryptoError, Ecc, EccCurve};
 use tpm2_crypto_tests::TestProvider;
+
+/// The RNG of the backend under test.
+type R = <TestProvider as Random>::Rng;
 
 /// Known answers on one curve: `k1 * G`, `k2 * (k1 * G)` and `2 * G`.
 struct Vectors<const N: usize> {
@@ -130,8 +135,42 @@ fn negate<const N: usize>(p: &[u8], value: &[u8; N]) -> [u8; N] {
     out
 }
 
-/// Runs every check on one curve context.
-fn check_curve<const N: usize>(c: &impl EccCurve<N>, v: &Vectors<N>) {
+/// `x || y`.
+fn point<const N: usize, const P: usize>(x: &[u8; N], y: &[u8; N]) -> [u8; P] {
+    let mut out = [0u8; P];
+    out[..N].copy_from_slice(x);
+    out[N..].copy_from_slice(y);
+    out
+}
+
+/// Point validation: `Some(public key)` for a point on the curve, `None` otherwise.
+fn load<K: EccCurve<N, P, R>, const N: usize, const P: usize>(
+    x: &[u8; N],
+    y: &[u8; N],
+) -> Option<K::PublicKey> {
+    K::load_public((), &point(x, y)).unwrap()
+}
+
+/// Whether `(x, y)` is a valid public point.
+fn is_valid<K: EccCurve<N, P, R>, const N: usize, const P: usize>(
+    x: &[u8; N],
+    y: &[u8; N],
+) -> bool {
+    load::<K, N, P>(x, y).is_some()
+}
+
+/// `[k](x, y)` for a valid point `(x, y)`.
+fn mul<K: EccCurve<N, P, R>, const N: usize, const P: usize>(
+    k: &[u8; N],
+    (px, py): (&[u8; N], &[u8; N]),
+    out: (&mut [u8; N], &mut [u8; N]),
+) -> Option<()> {
+    let public = load::<K, N, P>(px, py).expect("valid point");
+    K::mul_point(&public, k, out.0, out.1).unwrap()
+}
+
+/// Runs every check on one curve.
+fn check_curve<K: EccCurve<N, P, R>, const N: usize, const P: usize>(v: &Vectors<N>) {
     let params = v.params;
     let gx: [u8; N] = params.gx.try_into().unwrap();
     let gy: [u8; N] = params.gy.try_into().unwrap();
@@ -140,62 +179,47 @@ fn check_curve<const N: usize>(c: &impl EccCurve<N>, v: &Vectors<N>) {
     let mut two = [0u8; N];
     two[N - 1] = 2;
     let (mut x, mut y) = ([0u8; N], [0u8; N]);
+    let g = (&gx, &gy);
+    let k1_g = (&v.k1_g.0, &v.k1_g.1);
 
     // Known answers: k1 * G, 2 * G, and k2 * (k1 * G) both ways.
-    assert_eq!(
-        c.point_multiply_generator(&v.k1, &mut x, &mut y),
-        Ok(Some(()))
-    );
+    assert_eq!(K::mul_generator(&v.k1, &mut x, &mut y), Ok(Some(())));
     assert_eq!((x, y), v.k1_g);
-    assert_eq!(
-        c.point_multiply_generator(&two, &mut x, &mut y),
-        Ok(Some(()))
-    );
+    assert_eq!(K::mul_generator(&two, &mut x, &mut y), Ok(Some(())));
     assert_eq!((x, y), v.g2);
-    assert_eq!(
-        c.point_multiply(&v.k2, &v.k1_g.0, &v.k1_g.1, &mut x, &mut y),
-        Ok(Some(()))
-    );
+    assert_eq!(mul::<K, N, P>(&v.k2, k1_g, (&mut x, &mut y)), Some(()));
     assert_eq!((x, y), v.k2_k1_g);
-    assert_eq!(
-        c.point_multiply(&v.k1, &gx, &gy, &mut x, &mut y),
-        Ok(Some(()))
-    );
+    assert_eq!(mul::<K, N, P>(&v.k1, g, (&mut x, &mut y)), Some(()));
     assert_eq!((x, y), v.k1_g);
-    assert_eq!(
-        c.point_multiply(&two, &gx, &gy, &mut x, &mut y),
-        Ok(Some(()))
-    );
+    assert_eq!(mul::<K, N, P>(&two, g, (&mut x, &mut y)), Some(()));
     assert_eq!((x, y), v.g2);
 
     // (n - 1) * G = -G, the largest valid scalar.
     let n_minus_1 = sub_small::<N>(&n, 1);
-    assert_eq!(
-        c.point_multiply_generator(&n_minus_1, &mut x, &mut y),
-        Ok(Some(()))
-    );
+    assert_eq!(K::mul_generator(&n_minus_1, &mut x, &mut y), Ok(Some(())));
     assert_eq!((x, y), (gx, negate(&p, &gy)));
-    assert_eq!(
-        c.point_multiply(&n_minus_1, &gx, &gy, &mut x, &mut y),
-        Ok(Some(()))
-    );
+    assert_eq!(mul::<K, N, P>(&n_minus_1, g, (&mut x, &mut y)), Some(()));
     assert_eq!((x, y), (gx, negate(&p, &gy)));
 
-    // Point validation.
+    // Point validation; a validated point is stored back unchanged.
     for (px, py) in [(gx, gy), v.k1_g, v.k2_k1_g, v.g2, (gx, negate(&p, &gy))] {
-        assert_eq!(c.validate_point(&px, &py), Ok(true));
+        let public = load::<K, N, P>(&px, &py).expect("valid point");
+        let mut stored = [0u8; P];
+        K::store_public(&public, &mut stored).unwrap();
+        assert_eq!(stored, point::<N, P>(&px, &py));
     }
     let mut off_curve = v.k1_g.1;
     off_curve[N - 1] ^= 1;
-    assert_eq!(c.validate_point(&v.k1_g.0, &off_curve), Ok(false));
-    assert_eq!(c.validate_point(&[0; N], &[0; N]), Ok(false));
-    assert_eq!(c.validate_point(&p, &gy), Ok(false));
-    assert_eq!(c.validate_point(&gx, &p), Ok(false));
-    assert_eq!(c.validate_point(&[0xff; N], &gy), Ok(false));
+    assert!(!is_valid::<K, N, P>(&v.k1_g.0, &off_curve));
+    assert!(!is_valid::<K, N, P>(&[0; N], &[0; N]));
+    assert!(!is_valid::<K, N, P>(&p, &gy));
+    assert!(!is_valid::<K, N, P>(&gx, &p));
+    assert!(!is_valid::<K, N, P>(&[0xff; N], &gy));
 
-    // Invalid input points give no result.
+    // Invalid input points give no result: `load_public` rejects them, so `mul_point` (which
+    // takes a validated public key) cannot be called with them.
     for (px, py) in [(v.k1_g.0, off_curve), (p, gy), (gx, p), ([0; N], [0; N])] {
-        assert_eq!(c.point_multiply(&v.k1, &px, &py, &mut x, &mut y), Ok(None));
+        assert!(load::<K, N, P>(&px, &py).is_none());
     }
 
     // Invalid scalars (0, n, n + 1 for the larger curves, all ones) give no result; n * P
@@ -207,59 +231,106 @@ fn check_curve<const N: usize>(c: &impl EccCurve<N>, v: &Vectors<N>) {
         bad_scalars.push(n_plus_1);
     }
     for k in &bad_scalars {
-        assert_eq!(c.point_multiply_generator(k, &mut x, &mut y), Ok(None));
-        assert_eq!(c.point_multiply(k, &gx, &gy, &mut x, &mut y), Ok(None));
-        assert_eq!(
-            c.point_multiply(k, &v.k1_g.0, &v.k1_g.1, &mut x, &mut y),
-            Ok(None)
-        );
+        assert_eq!(K::mul_generator(k, &mut x, &mut y), Ok(None));
+        assert_eq!(mul::<K, N, P>(k, g, (&mut x, &mut y)), None);
+        assert_eq!(mul::<K, N, P>(k, k1_g, (&mut x, &mut y)), None);
     }
 
-    // k * G = point_multiply(k, G) for a range of scalars.
+    // k * G = mul_point(k, G) for a range of scalars.
     let mut k = v.k2;
     for i in 0..8u8 {
         k[0] = k[0].wrapping_add(i) & (n[0] >> 1);
         k[N - 1] ^= i;
         let (mut x1, mut y1, mut x2, mut y2) = ([0u8; N], [0u8; N], [0u8; N], [0u8; N]);
-        assert_eq!(
-            c.point_multiply_generator(&k, &mut x1, &mut y1),
-            Ok(Some(()))
-        );
-        assert_eq!(
-            c.point_multiply(&k, &gx, &gy, &mut x2, &mut y2),
-            Ok(Some(()))
-        );
+        assert_eq!(K::mul_generator(&k, &mut x1, &mut y1), Ok(Some(())));
+        assert_eq!(mul::<K, N, P>(&k, g, (&mut x2, &mut y2)), Some(()));
         assert_eq!((x1, y1), (x2, y2));
-        assert_eq!(c.validate_point(&x1, &y1), Ok(true));
+        assert!(is_valid::<K, N, P>(&x1, &y1));
     }
 
-    // ECDAA signing is computed by the engine.
-    assert_eq!(
-        c.ecdaa_sign(&v.k1, &[], &[], &v.k2, &[0; 32], &mut x, &mut y),
-        Err(CryptoError::Unsupported)
-    );
+    // (The old provider's `ecdaa_sign` returned `Unsupported` here; it no longer exists, ECDAA
+    // is computed by the engine on `mul_generator`/`mul_point`.) In its place, the key and
+    // signature operations of the curve, which the engine uses for keys on these curves:
+    check_keys::<K, N, P>(v);
 }
 
-/// NIST P-192: known answers, validation, invalid scalars and points.
+/// The private key `k1` loads with its public key `k1 * G` and is stored back unchanged; another
+/// scalar or an invalid scalar does not load with it; ECDH of two known keys is the known
+/// `k2 * (k1 * G)`; ECDSA and SM2 signatures verify under the signer's key only.
+fn check_keys<K: EccCurve<N, P, R>, const N: usize, const P: usize>(v: &Vectors<N>) {
+    let public = || load::<K, N, P>(&v.k1_g.0, &v.k1_g.1).unwrap();
+    let key = K::load(public(), &v.k1)
+        .unwrap()
+        .expect("k1 matches k1 * G");
+    let mut d = [0u8; N];
+    key.store(&mut d).unwrap();
+    assert_eq!(d, v.k1);
+    let mut stored = [0u8; P];
+    K::store_public(key.as_public(), &mut stored).unwrap();
+    assert_eq!(stored, point::<N, P>(&v.k1_g.0, &v.k1_g.1));
+    assert!(matches!(K::load(public(), &v.k2), Ok(None)));
+    assert!(matches!(K::load(public(), &[0; N]), Ok(None)));
+
+    // ECDH (cofactor 1 on these curves): [k1](k2 * G) = [k2](k1 * G).
+    let (mut x, mut y) = ([0u8; N], [0u8; N]);
+    K::mul_generator(&v.k2, &mut x, &mut y).unwrap().unwrap();
+    let peer = load::<K, N, P>(&x, &y).unwrap();
+    assert_eq!(key.ecdh(&peer, &mut x, &mut y), Ok(Some(())));
+    assert_eq!((x, y), v.k2_k1_g);
+
+    let mut rng = <TestProvider as Random>::from_seed(b"ecc_extra_curves").unwrap();
+    let other = K::generate(&mut rng, ()).unwrap();
+    for digest in [&[0x5au8; 20][..], &[0x6b; 32], &[0x7c; 64]] {
+        let (mut r, mut s) = ([0u8; N], [0u8; N]);
+        key.sign(&mut rng, digest, &mut r, &mut s).unwrap();
+        assert_eq!(K::verify(&public(), digest, &r, &s), Ok(true));
+        assert_eq!(K::verify(other.as_public(), digest, &r, &s), Ok(false));
+        let mut bad_s = s;
+        bad_s[N - 1] ^= 1;
+        assert_eq!(K::verify(&public(), digest, &r, &bad_s), Ok(false));
+        assert_eq!(K::verify(&public(), digest, &[0; N], &s), Ok(false));
+
+        key.sm2_sign(&mut rng, digest, &mut r, &mut s).unwrap();
+        assert_eq!(K::sm2_verify(&public(), digest, &r, &s), Ok(true));
+        assert_eq!(K::sm2_verify(other.as_public(), digest, &r, &s), Ok(false));
+        let mut bad_s = s;
+        bad_s[N - 1] ^= 1;
+        assert_eq!(K::sm2_verify(&public(), digest, &r, &bad_s), Ok(false));
+        assert_eq!(K::sm2_verify(&public(), digest, &r, &[0; N]), Ok(false));
+    }
+    // A fresh key from the RNG differs from the known key.
+    let mut d2 = [0u8; N];
+    other.store(&mut d2).unwrap();
+    assert_ne!(d2, v.k1);
+}
+
+/// NIST P-192: known answers, validation, invalid scalars and points, keys and signatures.
 #[test]
 fn nist_p192_point_operations() {
-    check_curve(&TestProvider.nist_p192().unwrap(), &P192);
+    check_curve::<<TestProvider as Ecc>::NistP192, 24, 48>(&P192);
+}
+
+/// The GB/T 32918.5 example key pair: `d * G` is the example public key, and the pair loads as
+/// a key.
+fn check_sm2_example_key<K: EccCurve<32, 64, R>>() {
+    let (d, qx, qy) = SM2_EXAMPLE_KEY;
+    let (mut x, mut y) = ([0u8; 32], [0u8; 32]);
+    assert_eq!(K::mul_generator(&d, &mut x, &mut y), Ok(Some(())));
+    assert_eq!((x, y), (qx, qy));
+    let public = load::<K, 32, 64>(&qx, &qy).unwrap();
+    assert!(K::load(public, &d).unwrap().is_some());
 }
 
 /// SM2 P-256: known answers (including the GB/T 32918.5 example key pair), validation,
-/// invalid scalars and points.
+/// invalid scalars and points, keys and signatures.
 #[test]
 fn sm2_p256_point_operations() {
-    let c = TestProvider.sm2_p256().unwrap();
-    check_curve(&c, &SM2);
-    let (d, qx, qy) = SM2_EXAMPLE_KEY;
-    let (mut x, mut y) = ([0u8; 32], [0u8; 32]);
-    assert_eq!(c.point_multiply_generator(&d, &mut x, &mut y), Ok(Some(())));
-    assert_eq!((x, y), (qx, qy));
+    check_curve::<<TestProvider as Ecc>::SM2P256, 32, 64>(&SM2);
+    check_sm2_example_key::<<TestProvider as Ecc>::SM2P256>();
 }
 
-/// BN P-638: known answers, validation, invalid scalars and points.
+/// BN P-638: known answers, validation, invalid scalars and points, keys and signatures.
 #[test]
 fn bn_p638_point_operations() {
-    check_curve(&TestProvider.bn_p638().unwrap(), &BN638);
+    check_curve::<<TestProvider as Ecc>::BNP638, 80, 160>(&BN638);
 }

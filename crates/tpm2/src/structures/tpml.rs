@@ -15,8 +15,7 @@ pub const TPM2_MAX_PCR_PROPERTIES: usize = TPM2_MAX_CAP_DATA / TpmsTaggedPcrSele
 pub const TPM2_MAX_ECC_CURVES: usize = TPM2_MAX_CAP_DATA / TpmEccCurve::MAX_SIZE;
 pub const TPM2_MAX_TAGGED_POLICIES: usize = TPM2_MAX_CAP_DATA / TpmsTaggedPolicy::MAX_SIZE;
 pub const TPM2_MAX_ACT_DATA: usize = TPM2_MAX_CAP_DATA / TpmsActData::MAX_SIZE;
-pub const TPM2_MAX_PUB_KEYS: usize =
-    crate::marshal::max(&[TPM2_MAX_CAP_DATA / Tpm2bPublic::MAX_SIZE, 1]);
+pub const TPM2_MAX_PUB_KEYS: usize = max!(TPM2_MAX_CAP_DATA / Tpm2bPublic::MAX_SIZE, 1);
 pub const TPM2_MAX_SPDM_SESSION_INFO: usize = TPM2_MAX_CAP_DATA / TpmsSpdmSessionInfo::MAX_SIZE;
 pub const TPM2_MAX_VENDOR_PROPERTY: usize = if TPM2_MAX_CAP_DATA / Tpm2bVendorProperty::MAX_SIZE > 0
 {
@@ -350,11 +349,15 @@ impl<const CAP: usize> Tpml<TpmsTaggedPcrSelect, CAP> {
 /// Holds a count and an array of ECC curve identifiers (`TPM_ECC_CURVE`).
 /// Returned in response to `TPM2_GetCapability(TPM_CAP_ECC_CURVES)`.
 #[doc(alias = "TPML_ECC_CURVE")]
+#[cfg(feature = "ecc")]
 pub type TpmlEccCurve = Tpml<TpmEccCurve, { TPM2_MAX_CAP_DATA / TpmEccCurve::MAX_SIZE }>;
+#[cfg(feature = "ecc")]
 impl_marshal!(TpmlEccCurve);
+#[cfg(feature = "ecc")]
 impl TpmlElement for TpmEccCurve {
-    const DEFAULT: Self = Self::None;
+    const DEFAULT: Self = Self::ALL[0];
 }
+#[cfg(feature = "ecc")]
 impl<const CAP: usize> Tpml<TpmEccCurve, CAP> {
     pub const fn ecc_curves(&self) -> &[TpmEccCurve] {
         self.as_slice()
@@ -418,6 +421,7 @@ impl<'a, const CAP: usize> Tpml<TpmtHa<'a>, CAP> {
 /// Holds a count and an array of ACT data structures (`TPMS_ACT_DATA`).
 /// Returned in response to `TPM2_GetCapability(TPM_CAP_ACT)`.
 #[doc(alias = "TPML_ACT_DATA")]
+#[doc(alias = "MAX_ACT_DATA")]
 pub type TpmlActData = Tpml<TpmsActData, TPM2_MAX_ACT_DATA>;
 impl_marshal!(TpmlActData);
 impl TpmlElement for TpmsActData {

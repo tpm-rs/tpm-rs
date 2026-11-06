@@ -10,6 +10,7 @@ use crate::_common::{
     execute_with_password_sessions_status, flush_context, hmac_sign_template, make_template,
     marshal_to_slice, marshal_to_vec, qualified_name, rsa_template, rsassa_signer_template,
 };
+use crate::_common::{ClientCrypto, client_rsa_verify};
 use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};
 use testing::tpm::Tpm;
@@ -23,7 +24,6 @@ use tpm2::{
     TpmsEccPoint, TpmsRsaParms, TpmsSchemeEcdaa, TpmsSensitiveCreate, TpmtEccScheme, TpmtPublic,
     TpmtRsaScheme, TpmtSigScheme, TpmtSignature, TpmuAttest, Unmarshal,
 };
-use tpm2_platform_linux::PlatformCryptoProvider;
 
 /// TPM2_Certify with one instead of two auth sessions fails with TPM_RC_AUTH_MISSING
 #[test]
@@ -212,7 +212,7 @@ fn certify_signature_verifies_only_with_signer_and_hash() {
     let rsa_parms = TpmsRsaParms {
         symmetric: None,
         scheme: Some(TpmtRsaScheme::Rsassa(TpmiAlgHash::Sha256)),
-        key_bits: TpmiRsaKeyBits(2048),
+        key_bits: TpmiRsaKeyBits::Rsa2048,
         exponent: 0,
     };
     let pub_area = TpmtPublic {
@@ -242,7 +242,7 @@ fn certify_signature_verifies_only_with_signer_and_hash() {
         in_sensitive,
         in_public,
         creation_pcr: pcr_selection,
-        ..Default::default()
+        outside_info: Default::default(),
     };
     let signer_rsp = execute_with_password_sessions(&mut sim, &create_signer_cmd, 1, &[]).unwrap();
     let signer_handle = signer_rsp.object_handle;
@@ -263,7 +263,7 @@ fn certify_signature_verifies_only_with_signer_and_hash() {
         }),
         in_public: other_in_public,
         creation_pcr: pcr_selection,
-        ..Default::default()
+        outside_info: Default::default(),
     };
     let other_signer_rsp =
         execute_with_password_sessions(&mut sim, &create_other_signer_cmd, 1, &[]).unwrap();
@@ -282,7 +282,7 @@ fn certify_signature_verifies_only_with_signer_and_hash() {
         in_sensitive,
         in_public: subject_in_public,
         creation_pcr: pcr_selection,
-        ..Default::default()
+        outside_info: Default::default(),
     };
     let subject_rsp_handles =
         execute_with_password_sessions(&mut sim, &create_subject_cmd, 1, &[]).unwrap();
@@ -306,24 +306,17 @@ fn certify_signature_verifies_only_with_signer_and_hash() {
     let attest_len = marshal_to_slice(&certify_info, &mut attest_buf);
     let attest_bytes = &attest_buf[..attest_len];
 
-    let provider = PlatformCryptoProvider;
-    use tpm2::crypto::Asymmetric;
     let mut sha256_buf = [0u8; tpm2::TpmtHa::MAX_DIGEST_SIZE];
-    let digest_sha256 = tpm2::crypto::hash(
-        &provider,
+    let digest_sha256 = tpm2::crypto::hash::<ClientCrypto>(
         tpm2::TpmiAlgHash::Sha256,
-        attest_bytes,
+        &[attest_bytes],
         &mut sha256_buf,
     )
     .unwrap();
     let mut sha1_buf = [0u8; tpm2::TpmtHa::MAX_DIGEST_SIZE];
-    let digest_sha1 = tpm2::crypto::hash(
-        &provider,
-        tpm2::TpmiAlgHash::Sha1,
-        attest_bytes,
-        &mut sha1_buf,
-    )
-    .unwrap();
+    let digest_sha1 =
+        tpm2::crypto::hash::<ClientCrypto>(tpm2::TpmiAlgHash::Sha1, &[attest_bytes], &mut sha1_buf)
+            .unwrap();
 
     let pub_struct = signer_rsp.out_public.0;
     let other_pub_struct = other_signer_rsp.out_public.0;
@@ -340,49 +333,48 @@ fn certify_signature_verifies_only_with_signer_and_hash() {
         };
 
         // 1. Correct verification should pass
-        let verify_res = provider.verify_inner(
-            sig_alg,
+        let verify_res = client_rsa_verify(
             rsa_unique.get_buffer(),
             0,
+            sig_alg,
             digest_sha256,
             sig_bytes,
         );
-        assert_eq!(verify_res, Ok(true));
+        assert!(verify_res);
 
         // 2. Verification with incorrect hash algorithm (SHA1 instead of SHA256) should fail
         let verify_res_wrong_hash =
-            provider.verify_inner(sig_alg, rsa_unique.get_buffer(), 0, digest_sha1, sig_bytes);
-        assert_eq!(verify_res_wrong_hash, Ok(false));
+            client_rsa_verify(rsa_unique.get_buffer(), 0, sig_alg, digest_sha1, sig_bytes);
+        assert!(!verify_res_wrong_hash);
 
         // 3. Verification with wrong key (other signer key) should fail
-        let verify_res_wrong_key = provider.verify_inner(
-            sig_alg,
+        let verify_res_wrong_key = client_rsa_verify(
             other_rsa_unique.get_buffer(),
             0,
+            sig_alg,
             digest_sha256,
             sig_bytes,
         );
-        assert_eq!(verify_res_wrong_key, Ok(false));
+        assert!(!verify_res_wrong_key);
 
         // 4. Verification with modified attestation data should fail
         let mut modified_attest_bytes = attest_bytes.to_vec();
         modified_attest_bytes[0] ^= 0xFF; // Modify a byte
         let mut mod_buf = [0u8; tpm2::TpmtHa::MAX_DIGEST_SIZE];
-        let modified_digest = tpm2::crypto::hash(
-            &provider,
+        let modified_digest = tpm2::crypto::hash::<ClientCrypto>(
             tpm2::TpmiAlgHash::Sha256,
-            &modified_attest_bytes,
+            &[&modified_attest_bytes],
             &mut mod_buf,
         )
         .unwrap();
-        let verify_res_modified_attest = provider.verify_inner(
-            sig_alg,
+        let verify_res_modified_attest = client_rsa_verify(
             rsa_unique.get_buffer(),
             0,
+            sig_alg,
             modified_digest,
             sig_bytes,
         );
-        assert_eq!(verify_res_modified_attest, Ok(false));
+        assert!(!verify_res_modified_attest);
     } else {
         panic!("Expected RSA public parameters");
     }
@@ -648,7 +640,7 @@ fn qualified_names_accumulate_along_hierarchy() {
                 TpmsRsaParms {
                     symmetric: None,
                     scheme: Some(TpmtRsaScheme::Rsassa(TpmiAlgHash::Sha256)),
-                    key_bits: TpmiRsaKeyBits(2048),
+                    key_bits: TpmiRsaKeyBits::Rsa2048,
                     exponent: 0,
                 },
                 Tpm2bPublicKeyRsa::default(),

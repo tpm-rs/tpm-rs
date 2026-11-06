@@ -62,7 +62,7 @@ mod ecc_curve_keys;
 mod ecc_encrypt_decrypt;
 mod ecc_key_binding;
 mod ecc_parameters;
-#[cfg(feature = "ecc_curve_bn_p638")]
+#[cfg(feature = "bn_p638")]
 mod ecdaa_bn_p638;
 mod ecdh;
 mod ecschnorr_signature;

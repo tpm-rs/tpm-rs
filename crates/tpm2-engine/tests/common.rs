@@ -4,9 +4,10 @@ extern crate alloc;
 extern crate std;
 
 use alloc::vec::Vec;
-use tpm2::Alg;
-use tpm2::crypto::{Asymmetric, AsymmetricSign, Cmac, ConstantTimeEq, Random, Rng, Symmetric};
-use tpm2::crypto::{CryptoError, CryptoProvider, Direction, ModeIv};
+use tpm2::crypto::backend::{
+    CmacState, EccCurve, HashState, HmacState, PrivateKey, RsaKey, SymmetricState, default_crypt,
+};
+use tpm2::crypto::{Block, CipherInput, CryptoError, Direction, Random, Rng};
 use tpm2::{Handle, TpmSe};
 use tpm2::{Tpm2bNonce, TpmiAlgHash};
 use tpm2_engine::handler::SessionState;
@@ -92,7 +93,8 @@ pub fn make_test_session_state(
 ///
 /// [`TpmPlatform`](tpm2_engine::TpmPlatform) borrows its RNG mutably, so pass `&mut rng`. A
 /// `FakeRng` that is reused for several engines one after the other keeps counting where the
-/// previous engine stopped.
+/// previous engine stopped. It is also the RNG of [`FakeCrypto`] (a separate instance per
+/// [`Random::from_entropy`] call).
 pub struct FakeRng {
     counter: u8,
 }
@@ -118,32 +120,49 @@ impl Rng for FakeRng {
         Ok(())
     }
 
-    /// Ignores `data` (like the default `stir_random` of the previous `Rng` trait).
-    fn reseed(&mut self, _data: &[u8]) -> Result<(), CryptoError> {
+    /// Ignores `data`.
+    fn stir_bytes(&mut self, _data: &[u8]) -> Result<(), CryptoError> {
         Ok(())
     }
 }
 
+/// An RNG that fills every buffer with the octet `B` (and ignores stirred data).
+#[derive(Default)]
+pub struct ConstRng<const B: u8>;
+
+impl<const B: u8> Rng for ConstRng<B> {
+    fn fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), CryptoError> {
+        dest.fill(B);
+        Ok(())
+    }
+
+    fn stir_bytes(&mut self, _data: &[u8]) -> Result<(), CryptoError> {
+        Ok(())
+    }
+}
+
+/// The fake crypto backend of most white-box tests (see [`impl_fake_crypto!`]), with
+/// [`FakeRng`] as its RNG.
 pub struct FakeCrypto;
 
 /// A fake hash: XOR-folds the data into the output.
 #[derive(Default)]
 pub struct FakeHashCtx(pub Vec<u8>);
 
-impl tpm2::crypto::Update for FakeHashCtx {
+impl<const N: usize> HashState<N> for FakeHashCtx {
+    fn init() -> Result<Self, CryptoError> {
+        Ok(Self::default())
+    }
+
     fn update(&mut self, data: &[u8]) -> Result<(), CryptoError> {
         self.0.extend_from_slice(data);
         Ok(())
     }
-}
 
-impl<const N: usize> tpm2::crypto::Finalize<N> for FakeHashCtx {
-    fn finalize(self, out: &mut [u8; N]) -> Result<(), CryptoError> {
+    fn finalize(&mut self, out: &mut [u8; N]) -> Result<(), CryptoError> {
         *out = [0u8; N];
-        if !self.0.is_empty() {
-            for (i, &b) in self.0.iter().enumerate() {
-                out[i % N] ^= b;
-            }
+        for (i, &b) in self.0.iter().enumerate() {
+            out[i % N] ^= b;
         }
         Ok(())
     }
@@ -153,893 +172,448 @@ impl<const N: usize> tpm2::crypto::Finalize<N> for FakeHashCtx {
 /// mixes in their total length.
 pub struct FakeHmacCtx(pub Vec<u8>);
 
-impl tpm2::crypto::Update for FakeHmacCtx {
+impl FakeHmacCtx {
+    fn fold<const N: usize>(&self, out: &mut [u8; N]) {
+        *out = [0u8; N];
+        for (i, &b) in self.0.iter().enumerate() {
+            out[i % N] ^= b;
+        }
+        out[1] ^= self.0.len() as u8;
+    }
+}
+
+impl<const N: usize> HmacState<N> for FakeHmacCtx {
+    fn init(key: &[u8]) -> Result<Self, CryptoError> {
+        Ok(Self(key.to_vec()))
+    }
+
     fn update(&mut self, data: &[u8]) -> Result<(), CryptoError> {
         self.0.extend_from_slice(data);
         Ok(())
     }
-}
 
-impl<const N: usize> tpm2::crypto::Finalize<N> for FakeHmacCtx {
-    fn finalize(self, out: &mut [u8; N]) -> Result<(), CryptoError> {
-        *out = [0u8; N];
-        if !self.0.is_empty() {
-            for (i, &b) in self.0.iter().enumerate() {
-                out[i % N] ^= b;
-            }
-        }
-        out[1] ^= self.0.len() as u8;
+    fn finalize(&mut self, out: &mut [u8; N]) -> Result<(), CryptoError> {
+        self.fold(out);
         Ok(())
     }
 }
 
-/// The fake symmetric cipher, for both directions and every mode: XORs `data` with the repeated
-/// key and the repeated IV (all zeros for ECB, which has no IV). The IV is left unchanged, so the
-/// chaining value returned (`ivOut`) equals the IV passed in.
-pub fn fake_sym_xor(key: &[u8], mode: ModeIv<'_>, data: &mut [u8]) -> Result<(), CryptoError> {
-    let iv = match mode {
-        ModeIv::Ctr(iv) | ModeIv::Ofb(iv) | ModeIv::Cbc(iv) | ModeIv::Cfb(iv) => *iv,
-        ModeIv::Ecb => [0u8; 16],
-    };
-    for (i, b) in data.iter_mut().enumerate() {
-        *b ^= key[i % key.len()] ^ iv[i % 16];
+impl<const K: usize> CmacState<K> for FakeHmacCtx {
+    fn init(key: &[u8; K]) -> Result<Self, CryptoError> {
+        Ok(Self(key.to_vec()))
     }
-    Ok(())
+
+    fn update(&mut self, data: &[u8]) -> Result<(), CryptoError> {
+        self.0.extend_from_slice(data);
+        Ok(())
+    }
+
+    fn finalize(&mut self, out: &mut Block) -> Result<(), CryptoError> {
+        self.fold(out);
+        Ok(())
+    }
 }
 
-/// Implements the fake [`Hash`](tpm2::crypto::Hash) ([`FakeHashCtx`]),
-/// [`Hmac`](tpm2::crypto::Hmac) and [`Cmac`] ([`FakeHmacCtx`]), [`Symmetric`] (AES only, via
-/// [`fake_sym_xor`]), [`Ecc`](tpm2::crypto::Ecc) (accepts every point and reports success
-/// without writing any output), [`ConstantTimeEq`] and [`Random`] (no RNG factory) for `$t`.
+/// The fake symmetric cipher (AES), for both directions and every mode: XORs the data with the
+/// repeated key and the repeated IV (all zeros for ECB, which has no IV). The IV is left
+/// unchanged (also after a partial final CFB block), so the chaining value returned (`ivOut`)
+/// equals the IV passed in.
+pub struct FakeSym<const K: usize>([u8; K]);
+
+impl<const K: usize> FakeSym<K> {
+    fn xor(&self, iv: &Block, data: &mut [u8]) -> Result<(), CryptoError> {
+        for (i, b) in data.iter_mut().enumerate() {
+            *b ^= self.0[i % K] ^ iv[i % 16];
+        }
+        Ok(())
+    }
+}
+
+impl<const K: usize> SymmetricState<K> for FakeSym<K> {
+    fn init(key: &[u8; K]) -> Result<Self, CryptoError> {
+        Ok(Self(*key))
+    }
+    fn ctr(&self, iv: &mut Block, data: &mut [u8]) -> Result<(), CryptoError> {
+        self.xor(iv, data)
+    }
+    fn ofb(&self, iv: &mut Block, data: &mut [u8]) -> Result<(), CryptoError> {
+        self.xor(iv, data)
+    }
+    fn cbc(&self, _dir: Direction, iv: &mut Block, data: &mut [Block]) -> Result<(), CryptoError> {
+        self.xor(iv, data.as_flattened_mut())
+    }
+    fn cfb(&self, _dir: Direction, iv: &mut Block, data: &mut [u8]) -> Result<(), CryptoError> {
+        self.xor(iv, data)
+    }
+    fn ecb(&self, _dir: Direction, data: &mut [Block]) -> Result<(), CryptoError> {
+        self.xor(&[0; 16], data.as_flattened_mut())
+    }
+    /// Like [`default_crypt`], but without zeroing the IV after a partial final CFB block.
+    fn crypt(&self, dir: Direction, input: CipherInput<'_>) -> Result<(), CryptoError> {
+        match input {
+            CipherInput::Cfb(iv, data) => self.cfb(dir, iv, data),
+            input => default_crypt(self, dir, input),
+        }
+    }
+}
+
+/// The fake signature of `digest` in `out`: `0x5a` octets XORed with the digest folded into
+/// `out`.
+fn fake_signature(digest: &[u8], out: &mut [u8]) {
+    out.fill(0x5a);
+    let len = out.len();
+    for (i, &b) in digest.iter().enumerate() {
+        out[i % len] ^= b;
+    }
+}
+
+/// A fake RSA public key: the modulus and the exponent, accepted as they are.
+#[derive(Clone)]
+pub struct FakeRsaPublic<const M: usize> {
+    pub n: [u8; M],
+    pub e: u32,
+}
+
+/// A fake RSA private key: every modulus/prime pair is accepted.
 ///
-/// The caller still implements [`Asymmetric`], [`AsymmetricSign`] and [`CryptoProvider`] (with
-/// its `get_random`). Invoke it at the crate root, after `mod common;`.
-#[macro_export]
-macro_rules! impl_fake_hash {
-    ($t:ty) => {
-        impl tpm2::crypto::Hash for $t {
-            type Sha1Context = common::FakeHashCtx;
-            type Sha256Context = common::FakeHashCtx;
-            type Sha384Context = common::FakeHashCtx;
-            type Sha512Context = common::FakeHashCtx;
-            type Sm3_256Context = common::FakeHashCtx;
-            type Sha3_256Context = common::FakeHashCtx;
-            type Sha3_384Context = common::FakeHashCtx;
-            type Sha3_512Context = common::FakeHashCtx;
-
-            fn sha1(&self) -> Result<Self::Sha1Context, tpm2::crypto::CryptoError> {
-                Ok(common::FakeHashCtx::default())
-            }
-            fn sha256(&self) -> Result<Self::Sha256Context, tpm2::crypto::CryptoError> {
-                Ok(common::FakeHashCtx::default())
-            }
-            fn sha384(&self) -> Result<Self::Sha384Context, tpm2::crypto::CryptoError> {
-                Ok(common::FakeHashCtx::default())
-            }
-            fn sha512(&self) -> Result<Self::Sha512Context, tpm2::crypto::CryptoError> {
-                Ok(common::FakeHashCtx::default())
-            }
-            fn sm3_256(&self) -> Result<Self::Sm3_256Context, tpm2::crypto::CryptoError> {
-                Ok(common::FakeHashCtx::default())
-            }
-            fn sha3_256(&self) -> Result<Self::Sha3_256Context, tpm2::crypto::CryptoError> {
-                Ok(common::FakeHashCtx::default())
-            }
-            fn sha3_384(&self) -> Result<Self::Sha3_384Context, tpm2::crypto::CryptoError> {
-                Ok(common::FakeHashCtx::default())
-            }
-            fn sha3_512(&self) -> Result<Self::Sha3_512Context, tpm2::crypto::CryptoError> {
-                Ok(common::FakeHashCtx::default())
-            }
-        }
-        impl tpm2::crypto::Hmac for $t {
-            type Sha1Context = common::FakeHmacCtx;
-            type Sha256Context = common::FakeHmacCtx;
-            type Sha384Context = common::FakeHmacCtx;
-            type Sha512Context = common::FakeHmacCtx;
-            type Sm3_256Context = common::FakeHmacCtx;
-            type Sha3_256Context = common::FakeHmacCtx;
-            type Sha3_384Context = common::FakeHmacCtx;
-            type Sha3_512Context = common::FakeHmacCtx;
-
-            fn sha1(&self, key: &[u8]) -> Result<Self::Sha1Context, tpm2::crypto::CryptoError> {
-                Ok(common::FakeHmacCtx(key.to_vec()))
-            }
-            fn sha256(&self, key: &[u8]) -> Result<Self::Sha256Context, tpm2::crypto::CryptoError> {
-                Ok(common::FakeHmacCtx(key.to_vec()))
-            }
-            fn sha384(&self, key: &[u8]) -> Result<Self::Sha384Context, tpm2::crypto::CryptoError> {
-                Ok(common::FakeHmacCtx(key.to_vec()))
-            }
-            fn sha512(&self, key: &[u8]) -> Result<Self::Sha512Context, tpm2::crypto::CryptoError> {
-                Ok(common::FakeHmacCtx(key.to_vec()))
-            }
-            fn sm3_256(
-                &self,
-                key: &[u8],
-            ) -> Result<Self::Sm3_256Context, tpm2::crypto::CryptoError> {
-                Ok(common::FakeHmacCtx(key.to_vec()))
-            }
-            fn sha3_256(
-                &self,
-                key: &[u8],
-            ) -> Result<Self::Sha3_256Context, tpm2::crypto::CryptoError> {
-                Ok(common::FakeHmacCtx(key.to_vec()))
-            }
-            fn sha3_384(
-                &self,
-                key: &[u8],
-            ) -> Result<Self::Sha3_384Context, tpm2::crypto::CryptoError> {
-                Ok(common::FakeHmacCtx(key.to_vec()))
-            }
-            fn sha3_512(
-                &self,
-                key: &[u8],
-            ) -> Result<Self::Sha3_512Context, tpm2::crypto::CryptoError> {
-                Ok(common::FakeHmacCtx(key.to_vec()))
-            }
-        }
-        impl tpm2::crypto::Cmac for $t {
-            type Aes128Context = common::FakeHmacCtx;
-            type Aes192Context = common::FakeHmacCtx;
-            type Aes256Context = common::FakeHmacCtx;
-            type Sm4_128Context = common::FakeHmacCtx;
-            type Camellia128Context = common::FakeHmacCtx;
-            type Camellia192Context = common::FakeHmacCtx;
-            type Camellia256Context = common::FakeHmacCtx;
-
-            fn aes128(
-                &self,
-                key: &[u8; 16],
-            ) -> Result<Self::Aes128Context, tpm2::crypto::CryptoError> {
-                Ok(common::FakeHmacCtx(key.to_vec()))
-            }
-            fn aes192(
-                &self,
-                key: &[u8; 24],
-            ) -> Result<Self::Aes192Context, tpm2::crypto::CryptoError> {
-                Ok(common::FakeHmacCtx(key.to_vec()))
-            }
-            fn aes256(
-                &self,
-                key: &[u8; 32],
-            ) -> Result<Self::Aes256Context, tpm2::crypto::CryptoError> {
-                Ok(common::FakeHmacCtx(key.to_vec()))
-            }
-            fn sm4_128(
-                &self,
-                key: &[u8; 16],
-            ) -> Result<Self::Sm4_128Context, tpm2::crypto::CryptoError> {
-                Ok(common::FakeHmacCtx(key.to_vec()))
-            }
-            fn camellia128(
-                &self,
-                key: &[u8; 16],
-            ) -> Result<Self::Camellia128Context, tpm2::crypto::CryptoError> {
-                Ok(common::FakeHmacCtx(key.to_vec()))
-            }
-            fn camellia192(
-                &self,
-                key: &[u8; 24],
-            ) -> Result<Self::Camellia192Context, tpm2::crypto::CryptoError> {
-                Ok(common::FakeHmacCtx(key.to_vec()))
-            }
-            fn camellia256(
-                &self,
-                key: &[u8; 32],
-            ) -> Result<Self::Camellia256Context, tpm2::crypto::CryptoError> {
-                Ok(common::FakeHmacCtx(key.to_vec()))
-            }
-        }
-        impl tpm2::crypto::Ecc for $t {
-            type NistP192Context = !;
-            type NistP224Context = !;
-            type NistP256Context = !;
-            type NistP384Context = !;
-            type NistP521Context = !;
-            type BnP256Context = !;
-            type BnP638Context = !;
-            type Sm2P256Context = !;
-            type BpP256R1Context = !;
-            type BpP384R1Context = !;
-            type BpP512R1Context = !;
-            type Curve25519Context = !;
-            type Curve448Context = !;
-
-            fn validate_point(
-                &self,
-                _curve: tpm2::TpmEccCurve,
-                _public_key: &[u8],
-            ) -> Result<bool, tpm2::crypto::CryptoError> {
-                Ok(true)
-            }
-            fn point_multiply_generator(
-                &self,
-                _curve: tpm2::TpmEccCurve,
-                _scalar: &[u8],
-                public_key_out: &mut [u8],
-            ) -> Result<Option<usize>, tpm2::crypto::CryptoError> {
-                Ok(Some(public_key_out.len()))
-            }
-            fn point_multiply(
-                &self,
-                _curve: tpm2::TpmEccCurve,
-                _scalar: &[u8],
-                _public_point: &[u8],
-                derived_point_out: &mut [u8],
-            ) -> Result<Option<usize>, tpm2::crypto::CryptoError> {
-                Ok(Some(derived_point_out.len()))
-            }
-            fn ecdaa_sign(
-                &self,
-                _curve: tpm2::TpmEccCurve,
-                _commit_r: &[u8],
-                _commit_x: &[u8],
-                _commit_p1: &[u8],
-                _private_key_d: &[u8],
-                _digest: &[u8],
-                _nonce_k_out: &mut [u8],
-                s_out: &mut [u8],
-            ) -> Result<Option<usize>, tpm2::crypto::CryptoError> {
-                Ok(Some(s_out.len()))
-            }
-        }
-        impl tpm2::crypto::Symmetric for $t {
-            fn aes128(
-                &self,
-                key: &[u8; 16],
-                mode: tpm2::crypto::ModeIv<'_>,
-                _dir: tpm2::crypto::Direction,
-                data: &mut [u8],
-            ) -> Result<(), tpm2::crypto::CryptoError> {
-                common::fake_sym_xor(key, mode, data)
-            }
-            fn aes192(
-                &self,
-                key: &[u8; 24],
-                mode: tpm2::crypto::ModeIv<'_>,
-                _dir: tpm2::crypto::Direction,
-                data: &mut [u8],
-            ) -> Result<(), tpm2::crypto::CryptoError> {
-                common::fake_sym_xor(key, mode, data)
-            }
-            fn aes256(
-                &self,
-                key: &[u8; 32],
-                mode: tpm2::crypto::ModeIv<'_>,
-                _dir: tpm2::crypto::Direction,
-                data: &mut [u8],
-            ) -> Result<(), tpm2::crypto::CryptoError> {
-                common::fake_sym_xor(key, mode, data)
-            }
-        }
-        impl tpm2::crypto::ConstantTimeEq for $t {
-            fn constant_time_eq<const N: usize>(&self, a: &[u8; N], b: &[u8; N]) -> bool {
-                a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
-            }
-        }
-        impl tpm2::crypto::Random for $t {
-            type Rng = !;
-        }
-    };
+/// * Generated keys have the modulus `0xcc..` and the prime `0xdd..`.
+/// * `TPM_ALG_NULL` and RSAES encryption copy the message, left-aligned and zero padded to the
+///   modulus size; OAEP encryption does the same, and OAEP decryption returns the first
+///   32 octets (at most) of the ciphertext, i.e. a message of up to 32 octets (a seed) round
+///   trips. The other decryptions copy the whole ciphertext.
+/// * Signatures (RSASSA, RSAPSS) are [`fake_signature`]s of the modulus size; verification
+///   accepts exactly those.
+pub struct FakeRsaKey<const M: usize, const P: usize> {
+    public: FakeRsaPublic<M>,
+    pub p: [u8; P],
 }
 
-/// Implements [`Hash`](tpm2::crypto::Hash), [`Hmac`](tpm2::crypto::Hmac), [`Cmac`],
-/// [`Ecc`](tpm2::crypto::Ecc), [`Symmetric`] (AES only), [`ConstantTimeEq`] and [`Random`] for
-/// `$t` by delegating to its [`TestCryptoProvider`] field `$field`.
-///
-/// The caller still implements [`Asymmetric`], [`AsymmetricSign`] and [`CryptoProvider`] (with
-/// its `get_random`). Invoke it at the crate root, after `mod common;`.
-#[macro_export]
-macro_rules! impl_delegate_hash {
-    ($t:ty, $field:ident) => {
-        impl tpm2::crypto::Hash for $t {
-            type Sha1Context =
-                <$crate::common::TestCryptoProvider as tpm2::crypto::Hash>::Sha1Context;
-            type Sha256Context =
-                <$crate::common::TestCryptoProvider as tpm2::crypto::Hash>::Sha256Context;
-            type Sha384Context =
-                <$crate::common::TestCryptoProvider as tpm2::crypto::Hash>::Sha384Context;
-            type Sha512Context =
-                <$crate::common::TestCryptoProvider as tpm2::crypto::Hash>::Sha512Context;
-            type Sm3_256Context =
-                <$crate::common::TestCryptoProvider as tpm2::crypto::Hash>::Sm3_256Context;
-            type Sha3_256Context =
-                <$crate::common::TestCryptoProvider as tpm2::crypto::Hash>::Sha3_256Context;
-            type Sha3_384Context =
-                <$crate::common::TestCryptoProvider as tpm2::crypto::Hash>::Sha3_384Context;
-            type Sha3_512Context =
-                <$crate::common::TestCryptoProvider as tpm2::crypto::Hash>::Sha3_512Context;
-
-            fn sha1(&self) -> Result<Self::Sha1Context, tpm2::crypto::CryptoError> {
-                tpm2::crypto::Hash::sha1(&self.$field)
-            }
-            fn sha256(&self) -> Result<Self::Sha256Context, tpm2::crypto::CryptoError> {
-                tpm2::crypto::Hash::sha256(&self.$field)
-            }
-            fn sha384(&self) -> Result<Self::Sha384Context, tpm2::crypto::CryptoError> {
-                tpm2::crypto::Hash::sha384(&self.$field)
-            }
-            fn sha512(&self) -> Result<Self::Sha512Context, tpm2::crypto::CryptoError> {
-                tpm2::crypto::Hash::sha512(&self.$field)
-            }
-            fn sm3_256(&self) -> Result<Self::Sm3_256Context, tpm2::crypto::CryptoError> {
-                tpm2::crypto::Hash::sm3_256(&self.$field)
-            }
-            fn sha3_256(&self) -> Result<Self::Sha3_256Context, tpm2::crypto::CryptoError> {
-                tpm2::crypto::Hash::sha3_256(&self.$field)
-            }
-            fn sha3_384(&self) -> Result<Self::Sha3_384Context, tpm2::crypto::CryptoError> {
-                tpm2::crypto::Hash::sha3_384(&self.$field)
-            }
-            fn sha3_512(&self) -> Result<Self::Sha3_512Context, tpm2::crypto::CryptoError> {
-                tpm2::crypto::Hash::sha3_512(&self.$field)
-            }
-        }
-        impl tpm2::crypto::Hmac for $t {
-            type Sha1Context =
-                <$crate::common::TestCryptoProvider as tpm2::crypto::Hmac>::Sha1Context;
-            type Sha256Context =
-                <$crate::common::TestCryptoProvider as tpm2::crypto::Hmac>::Sha256Context;
-            type Sha384Context =
-                <$crate::common::TestCryptoProvider as tpm2::crypto::Hmac>::Sha384Context;
-            type Sha512Context =
-                <$crate::common::TestCryptoProvider as tpm2::crypto::Hmac>::Sha512Context;
-            type Sm3_256Context =
-                <$crate::common::TestCryptoProvider as tpm2::crypto::Hmac>::Sm3_256Context;
-            type Sha3_256Context =
-                <$crate::common::TestCryptoProvider as tpm2::crypto::Hmac>::Sha3_256Context;
-            type Sha3_384Context =
-                <$crate::common::TestCryptoProvider as tpm2::crypto::Hmac>::Sha3_384Context;
-            type Sha3_512Context =
-                <$crate::common::TestCryptoProvider as tpm2::crypto::Hmac>::Sha3_512Context;
-
-            fn sha1(&self, key: &[u8]) -> Result<Self::Sha1Context, tpm2::crypto::CryptoError> {
-                tpm2::crypto::Hmac::sha1(&self.$field, key)
-            }
-            fn sha256(&self, key: &[u8]) -> Result<Self::Sha256Context, tpm2::crypto::CryptoError> {
-                tpm2::crypto::Hmac::sha256(&self.$field, key)
-            }
-            fn sha384(&self, key: &[u8]) -> Result<Self::Sha384Context, tpm2::crypto::CryptoError> {
-                tpm2::crypto::Hmac::sha384(&self.$field, key)
-            }
-            fn sha512(&self, key: &[u8]) -> Result<Self::Sha512Context, tpm2::crypto::CryptoError> {
-                tpm2::crypto::Hmac::sha512(&self.$field, key)
-            }
-            fn sm3_256(
-                &self,
-                key: &[u8],
-            ) -> Result<Self::Sm3_256Context, tpm2::crypto::CryptoError> {
-                tpm2::crypto::Hmac::sm3_256(&self.$field, key)
-            }
-            fn sha3_256(
-                &self,
-                key: &[u8],
-            ) -> Result<Self::Sha3_256Context, tpm2::crypto::CryptoError> {
-                tpm2::crypto::Hmac::sha3_256(&self.$field, key)
-            }
-            fn sha3_384(
-                &self,
-                key: &[u8],
-            ) -> Result<Self::Sha3_384Context, tpm2::crypto::CryptoError> {
-                tpm2::crypto::Hmac::sha3_384(&self.$field, key)
-            }
-            fn sha3_512(
-                &self,
-                key: &[u8],
-            ) -> Result<Self::Sha3_512Context, tpm2::crypto::CryptoError> {
-                tpm2::crypto::Hmac::sha3_512(&self.$field, key)
-            }
-        }
-        impl tpm2::crypto::Cmac for $t {
-            type Aes128Context =
-                <$crate::common::TestCryptoProvider as tpm2::crypto::Cmac>::Aes128Context;
-            type Aes192Context =
-                <$crate::common::TestCryptoProvider as tpm2::crypto::Cmac>::Aes192Context;
-            type Aes256Context =
-                <$crate::common::TestCryptoProvider as tpm2::crypto::Cmac>::Aes256Context;
-            type Sm4_128Context =
-                <$crate::common::TestCryptoProvider as tpm2::crypto::Cmac>::Sm4_128Context;
-            type Camellia128Context =
-                <$crate::common::TestCryptoProvider as tpm2::crypto::Cmac>::Camellia128Context;
-            type Camellia192Context =
-                <$crate::common::TestCryptoProvider as tpm2::crypto::Cmac>::Camellia192Context;
-            type Camellia256Context =
-                <$crate::common::TestCryptoProvider as tpm2::crypto::Cmac>::Camellia256Context;
-
-            fn aes128(
-                &self,
-                key: &[u8; 16],
-            ) -> Result<Self::Aes128Context, tpm2::crypto::CryptoError> {
-                tpm2::crypto::Cmac::aes128(&self.$field, key)
-            }
-            fn aes192(
-                &self,
-                key: &[u8; 24],
-            ) -> Result<Self::Aes192Context, tpm2::crypto::CryptoError> {
-                tpm2::crypto::Cmac::aes192(&self.$field, key)
-            }
-            fn aes256(
-                &self,
-                key: &[u8; 32],
-            ) -> Result<Self::Aes256Context, tpm2::crypto::CryptoError> {
-                tpm2::crypto::Cmac::aes256(&self.$field, key)
-            }
-            fn sm4_128(
-                &self,
-                key: &[u8; 16],
-            ) -> Result<Self::Sm4_128Context, tpm2::crypto::CryptoError> {
-                tpm2::crypto::Cmac::sm4_128(&self.$field, key)
-            }
-            fn camellia128(
-                &self,
-                key: &[u8; 16],
-            ) -> Result<Self::Camellia128Context, tpm2::crypto::CryptoError> {
-                tpm2::crypto::Cmac::camellia128(&self.$field, key)
-            }
-            fn camellia192(
-                &self,
-                key: &[u8; 24],
-            ) -> Result<Self::Camellia192Context, tpm2::crypto::CryptoError> {
-                tpm2::crypto::Cmac::camellia192(&self.$field, key)
-            }
-            fn camellia256(
-                &self,
-                key: &[u8; 32],
-            ) -> Result<Self::Camellia256Context, tpm2::crypto::CryptoError> {
-                tpm2::crypto::Cmac::camellia256(&self.$field, key)
-            }
-        }
-        impl tpm2::crypto::Ecc for $t {
-            type NistP192Context =
-                <$crate::common::TestCryptoProvider as tpm2::crypto::Ecc>::NistP192Context;
-            type NistP224Context =
-                <$crate::common::TestCryptoProvider as tpm2::crypto::Ecc>::NistP224Context;
-            type NistP256Context =
-                <$crate::common::TestCryptoProvider as tpm2::crypto::Ecc>::NistP256Context;
-            type NistP384Context =
-                <$crate::common::TestCryptoProvider as tpm2::crypto::Ecc>::NistP384Context;
-            type NistP521Context =
-                <$crate::common::TestCryptoProvider as tpm2::crypto::Ecc>::NistP521Context;
-            type BnP256Context =
-                <$crate::common::TestCryptoProvider as tpm2::crypto::Ecc>::BnP256Context;
-            type BnP638Context =
-                <$crate::common::TestCryptoProvider as tpm2::crypto::Ecc>::BnP638Context;
-            type Sm2P256Context =
-                <$crate::common::TestCryptoProvider as tpm2::crypto::Ecc>::Sm2P256Context;
-            type BpP256R1Context =
-                <$crate::common::TestCryptoProvider as tpm2::crypto::Ecc>::BpP256R1Context;
-            type BpP384R1Context =
-                <$crate::common::TestCryptoProvider as tpm2::crypto::Ecc>::BpP384R1Context;
-            type BpP512R1Context =
-                <$crate::common::TestCryptoProvider as tpm2::crypto::Ecc>::BpP512R1Context;
-            type Curve25519Context =
-                <$crate::common::TestCryptoProvider as tpm2::crypto::Ecc>::Curve25519Context;
-            type Curve448Context =
-                <$crate::common::TestCryptoProvider as tpm2::crypto::Ecc>::Curve448Context;
-
-            fn nist_p192(&self) -> Result<Self::NistP192Context, tpm2::crypto::CryptoError> {
-                tpm2::crypto::Ecc::nist_p192(&self.$field)
-            }
-            fn nist_p224(&self) -> Result<Self::NistP224Context, tpm2::crypto::CryptoError> {
-                tpm2::crypto::Ecc::nist_p224(&self.$field)
-            }
-            fn nist_p256(&self) -> Result<Self::NistP256Context, tpm2::crypto::CryptoError> {
-                tpm2::crypto::Ecc::nist_p256(&self.$field)
-            }
-            fn nist_p384(&self) -> Result<Self::NistP384Context, tpm2::crypto::CryptoError> {
-                tpm2::crypto::Ecc::nist_p384(&self.$field)
-            }
-            fn nist_p521(&self) -> Result<Self::NistP521Context, tpm2::crypto::CryptoError> {
-                tpm2::crypto::Ecc::nist_p521(&self.$field)
-            }
-            fn bn_p256(&self) -> Result<Self::BnP256Context, tpm2::crypto::CryptoError> {
-                tpm2::crypto::Ecc::bn_p256(&self.$field)
-            }
-            fn bn_p638(&self) -> Result<Self::BnP638Context, tpm2::crypto::CryptoError> {
-                tpm2::crypto::Ecc::bn_p638(&self.$field)
-            }
-            fn sm2_p256(&self) -> Result<Self::Sm2P256Context, tpm2::crypto::CryptoError> {
-                tpm2::crypto::Ecc::sm2_p256(&self.$field)
-            }
-            fn bp_p256_r1(&self) -> Result<Self::BpP256R1Context, tpm2::crypto::CryptoError> {
-                tpm2::crypto::Ecc::bp_p256_r1(&self.$field)
-            }
-            fn bp_p384_r1(&self) -> Result<Self::BpP384R1Context, tpm2::crypto::CryptoError> {
-                tpm2::crypto::Ecc::bp_p384_r1(&self.$field)
-            }
-            fn bp_p512_r1(&self) -> Result<Self::BpP512R1Context, tpm2::crypto::CryptoError> {
-                tpm2::crypto::Ecc::bp_p512_r1(&self.$field)
-            }
-            fn curve25519(&self) -> Result<Self::Curve25519Context, tpm2::crypto::CryptoError> {
-                tpm2::crypto::Ecc::curve25519(&self.$field)
-            }
-            fn curve448(&self) -> Result<Self::Curve448Context, tpm2::crypto::CryptoError> {
-                tpm2::crypto::Ecc::curve448(&self.$field)
-            }
-        }
-        impl tpm2::crypto::Symmetric for $t {
-            fn aes128(
-                &self,
-                key: &[u8; 16],
-                mode: tpm2::crypto::ModeIv<'_>,
-                dir: tpm2::crypto::Direction,
-                data: &mut [u8],
-            ) -> Result<(), tpm2::crypto::CryptoError> {
-                tpm2::crypto::Symmetric::aes128(&self.$field, key, mode, dir, data)
-            }
-            fn aes192(
-                &self,
-                key: &[u8; 24],
-                mode: tpm2::crypto::ModeIv<'_>,
-                dir: tpm2::crypto::Direction,
-                data: &mut [u8],
-            ) -> Result<(), tpm2::crypto::CryptoError> {
-                tpm2::crypto::Symmetric::aes192(&self.$field, key, mode, dir, data)
-            }
-            fn aes256(
-                &self,
-                key: &[u8; 32],
-                mode: tpm2::crypto::ModeIv<'_>,
-                dir: tpm2::crypto::Direction,
-                data: &mut [u8],
-            ) -> Result<(), tpm2::crypto::CryptoError> {
-                tpm2::crypto::Symmetric::aes256(&self.$field, key, mode, dir, data)
-            }
-        }
-        impl tpm2::crypto::ConstantTimeEq for $t {
-            fn constant_time_eq<const N: usize>(&self, a: &[u8; N], b: &[u8; N]) -> bool {
-                tpm2::crypto::ConstantTimeEq::constant_time_eq(&self.$field, a, b)
-            }
-        }
-        impl tpm2::crypto::Random for $t {
-            type Rng = <$crate::common::TestCryptoProvider as tpm2::crypto::Random>::Rng;
-
-            fn rng(&self) -> Result<Self::Rng, tpm2::crypto::CryptoError> {
-                tpm2::crypto::Random::rng(&self.$field)
-            }
-            fn rng_seeded(&self, seed: &[u8]) -> Result<Self::Rng, tpm2::crypto::CryptoError> {
-                tpm2::crypto::Random::rng_seeded(&self.$field, seed)
-            }
-        }
-    };
+fn fake_rsa_pad<const M: usize>(m: &[u8], out: &mut [u8; M]) -> Result<Option<()>, CryptoError> {
+    if m.len() > M {
+        return Ok(None);
+    }
+    out.fill(0);
+    out[..m.len()].copy_from_slice(m);
+    Ok(Some(()))
 }
 
-impl tpm2::crypto::Hash for FakeCrypto {
-    type Sha1Context = FakeHashCtx;
-    type Sha256Context = FakeHashCtx;
-    type Sha384Context = FakeHashCtx;
-    type Sha512Context = FakeHashCtx;
-    type Sm3_256Context = FakeHashCtx;
-    type Sha3_256Context = FakeHashCtx;
-    type Sha3_384Context = FakeHashCtx;
-    type Sha3_512Context = FakeHashCtx;
+impl<const M: usize, const P: usize, R: Rng> PrivateKey<M, P, R, u32> for FakeRsaKey<M, P> {
+    type PublicKey = FakeRsaPublic<M>;
 
-    fn sha1(&self) -> Result<Self::Sha1Context, CryptoError> {
-        Ok(FakeHashCtx(Vec::new()))
+    fn generate(_rng: &mut R, e: u32) -> Result<Self, CryptoError> {
+        Ok(Self {
+            public: FakeRsaPublic { n: [0xcc; M], e },
+            p: [0xdd; P],
+        })
     }
-    fn sha256(&self) -> Result<Self::Sha256Context, CryptoError> {
-        Ok(FakeHashCtx(Vec::new()))
+    fn load(public: FakeRsaPublic<M>, p: &[u8; P]) -> Result<Option<Self>, CryptoError> {
+        Ok(Some(Self { public, p: *p }))
     }
-    fn sha384(&self) -> Result<Self::Sha384Context, CryptoError> {
-        Ok(FakeHashCtx(Vec::new()))
+    fn store(&self, out: &mut [u8; P]) -> Result<(), CryptoError> {
+        *out = self.p;
+        Ok(())
     }
-    fn sha512(&self) -> Result<Self::Sha512Context, CryptoError> {
-        Ok(FakeHashCtx(Vec::new()))
+    fn as_public(&self) -> &FakeRsaPublic<M> {
+        &self.public
     }
-    fn sm3_256(&self) -> Result<Self::Sm3_256Context, CryptoError> {
-        Ok(FakeHashCtx(Vec::new()))
+    fn load_public(e: u32, n: &[u8; M]) -> Result<Option<FakeRsaPublic<M>>, CryptoError> {
+        Ok(Some(FakeRsaPublic { n: *n, e }))
     }
-    fn sha3_256(&self) -> Result<Self::Sha3_256Context, CryptoError> {
-        Ok(FakeHashCtx(Vec::new()))
-    }
-    fn sha3_384(&self) -> Result<Self::Sha3_384Context, CryptoError> {
-        Ok(FakeHashCtx(Vec::new()))
-    }
-    fn sha3_512(&self) -> Result<Self::Sha3_512Context, CryptoError> {
-        Ok(FakeHashCtx(Vec::new()))
+    fn store_public(public: &FakeRsaPublic<M>, out: &mut [u8; M]) -> Result<(), CryptoError> {
+        *out = public.n;
+        Ok(())
     }
 }
 
-impl tpm2::crypto::Hmac for FakeCrypto {
-    type Sha1Context = FakeHmacCtx;
-    type Sha256Context = FakeHmacCtx;
-    type Sha384Context = FakeHmacCtx;
-    type Sha512Context = FakeHmacCtx;
-    type Sm3_256Context = FakeHmacCtx;
-    type Sha3_256Context = FakeHmacCtx;
-    type Sha3_384Context = FakeHmacCtx;
-    type Sha3_512Context = FakeHmacCtx;
-
-    fn sha1(&self, key: &[u8]) -> Result<Self::Sha1Context, CryptoError> {
-        Ok(FakeHmacCtx(key.to_vec()))
+impl<const M: usize, const P: usize, R: Rng> RsaKey<M, P, R> for FakeRsaKey<M, P> {
+    fn exponent(public: &FakeRsaPublic<M>) -> u32 {
+        public.e
     }
-    fn sha256(&self, key: &[u8]) -> Result<Self::Sha256Context, CryptoError> {
-        Ok(FakeHmacCtx(key.to_vec()))
+    fn raw_encrypt(
+        _public: &FakeRsaPublic<M>,
+        m: &[u8; M],
+        out: &mut [u8; M],
+    ) -> Result<Option<()>, CryptoError> {
+        *out = *m;
+        Ok(Some(()))
     }
-    fn sha384(&self, key: &[u8]) -> Result<Self::Sha384Context, CryptoError> {
-        Ok(FakeHmacCtx(key.to_vec()))
-    }
-    fn sha512(&self, key: &[u8]) -> Result<Self::Sha512Context, CryptoError> {
-        Ok(FakeHmacCtx(key.to_vec()))
-    }
-    fn sm3_256(&self, key: &[u8]) -> Result<Self::Sm3_256Context, CryptoError> {
-        Ok(FakeHmacCtx(key.to_vec()))
-    }
-    fn sha3_256(&self, key: &[u8]) -> Result<Self::Sha3_256Context, CryptoError> {
-        Ok(FakeHmacCtx(key.to_vec()))
-    }
-    fn sha3_384(&self, key: &[u8]) -> Result<Self::Sha3_384Context, CryptoError> {
-        Ok(FakeHmacCtx(key.to_vec()))
-    }
-    fn sha3_512(&self, key: &[u8]) -> Result<Self::Sha3_512Context, CryptoError> {
-        Ok(FakeHmacCtx(key.to_vec()))
-    }
-}
-
-/// AES only (via [`fake_sym_xor`]); the other ciphers keep the default
-/// [`CryptoError::Unsupported`].
-impl Symmetric for FakeCrypto {
-    fn aes128(
+    fn raw_decrypt(
         &self,
-        key: &[u8; 16],
-        mode: ModeIv<'_>,
-        _dir: Direction,
-        data: &mut [u8],
-    ) -> Result<(), CryptoError> {
-        fake_sym_xor(key, mode, data)
+        _rng: &mut R,
+        c: &[u8; M],
+        out: &mut [u8; M],
+    ) -> Result<Option<()>, CryptoError> {
+        *out = *c;
+        Ok(Some(()))
     }
-    fn aes192(
-        &self,
-        key: &[u8; 24],
-        mode: ModeIv<'_>,
-        _dir: Direction,
-        data: &mut [u8],
-    ) -> Result<(), CryptoError> {
-        fake_sym_xor(key, mode, data)
+    fn oaep_encrypt(
+        _public: &FakeRsaPublic<M>,
+        _rng: &mut R,
+        _hash: TpmiAlgHash,
+        _label: &[u8],
+        m: &[u8],
+        out: &mut [u8; M],
+    ) -> Result<Option<()>, CryptoError> {
+        fake_rsa_pad(m, out)
     }
-    fn aes256(
+    fn oaep_decrypt(
         &self,
-        key: &[u8; 32],
-        mode: ModeIv<'_>,
-        _dir: Direction,
-        data: &mut [u8],
-    ) -> Result<(), CryptoError> {
-        fake_sym_xor(key, mode, data)
-    }
-}
-
-impl AsymmetricSign for FakeCrypto {
-    /// Writes `0x5a` bytes XORed with the folded digest: 64 bytes for ECDSA, otherwise as many as
-    /// fit in `signature_out` (up to 256). A `signature_out` that is too small (fewer than 64
-    /// bytes for ECDSA, fewer than 32 otherwise) fails with [`CryptoError::Internal`] (formerly
-    /// `BufferTooSmall`).
-    fn sign_inner(
-        &self,
-        sign_alg: Alg,
-        _private_key: &[u8],
-        digest: tpm2::TpmtHa<'_>,
-        signature_out: &mut [u8],
+        _rng: &mut R,
+        _hash: TpmiAlgHash,
+        _label: &[u8],
+        c: &[u8; M],
+        out: &mut [u8; M],
     ) -> Result<Option<usize>, CryptoError> {
-        let len = match sign_alg {
-            Alg::ECDSA => {
-                if signature_out.len() < 64 {
-                    return Err(CryptoError::Internal);
-                }
-                signature_out[..64].fill(0x5a);
-                for (i, &b) in digest.digest().iter().enumerate() {
-                    signature_out[i % 64] ^= b;
-                }
-                64
-            }
-            _ => {
-                let l = std::cmp::min(256, signature_out.len());
-                if l < 32 {
-                    return Err(CryptoError::Internal);
-                }
-                signature_out[..l].fill(0x5a);
-                for (i, &b) in digest.digest().iter().enumerate() {
-                    signature_out[i % l] ^= b;
-                }
-                l
-            }
-        };
+        let len = M.min(32);
+        out[..len].copy_from_slice(&c[..len]);
         Ok(Some(len))
     }
-}
-
-impl Asymmetric for FakeCrypto {
-    /// Accepts exactly the signatures [`FakeCrypto::sign_inner`] produces for `digest`; anything
-    /// else (including an empty or wrongly sized signature) is `Ok(false)` (formerly
-    /// `InvalidData`).
-    fn verify_inner(
+    fn rsaes_encrypt(
+        _public: &FakeRsaPublic<M>,
+        _rng: &mut R,
+        m: &[u8],
+        out: &mut [u8; M],
+    ) -> Result<Option<()>, CryptoError> {
+        fake_rsa_pad(m, out)
+    }
+    fn rsaes_decrypt(
         &self,
-        sign_alg: Alg,
-        _public_key: &[u8],
-        _rsa_exponent: u32,
+        _rng: &mut R,
+        c: &[u8; M],
+        out: &mut [u8; M],
+    ) -> Result<Option<usize>, CryptoError> {
+        *out = *c;
+        Ok(Some(M))
+    }
+    fn rsassa_sign(
+        &self,
+        _rng: &mut R,
         digest: tpm2::TpmtHa<'_>,
-        signature: &[u8],
+        out: &mut [u8; M],
+    ) -> Result<(), CryptoError> {
+        fake_signature(digest.digest(), out);
+        Ok(())
+    }
+    fn rsassa_verify(
+        _public: &FakeRsaPublic<M>,
+        digest: tpm2::TpmtHa<'_>,
+        sig: &[u8; M],
     ) -> Result<bool, CryptoError> {
-        let len = match sign_alg {
-            Alg::ECDSA => 64,
-            _ => signature.len(),
-        };
-        if signature.len() != len || len == 0 {
-            return Ok(false);
-        }
-        let mut expected = vec![0x5a; len];
-        for (i, &b) in digest.digest().iter().enumerate() {
-            expected[i % len] ^= b;
-        }
-        Ok(signature == expected)
+        let mut expected = [0u8; M];
+        fake_signature(digest.digest(), &mut expected);
+        Ok(*sig == expected)
     }
-    fn encrypt(
+    fn rsapss_sign(
         &self,
-        _scheme: Alg,
-        _hash_alg: Alg,
-        _public_key: &[u8],
-        _rsa_exponent: u32,
-        _data: &[u8],
-        _ciphertext: &mut [u8],
-        _label: &[u8],
-    ) -> Result<Option<usize>, CryptoError> {
-        todo!()
+        rng: &mut R,
+        digest: tpm2::TpmtHa<'_>,
+        out: &mut [u8; M],
+    ) -> Result<(), CryptoError> {
+        <Self as RsaKey<M, P, R>>::rsassa_sign(self, rng, digest, out)
     }
-    /// Copies `ciphertext` to `plaintext`. An empty private key fails with
-    /// [`CryptoError::Internal`] (formerly `HardwareFailure`), and so does a `plaintext` buffer
-    /// that is too small (formerly `BufferTooSmall`).
-    fn decrypt(
-        &self,
-        _scheme: Alg,
-        _hash_alg: Alg,
-        private_key: &[u8],
-        ciphertext: &[u8],
-        plaintext: &mut [u8],
-        _label: &[u8],
-    ) -> Result<Option<usize>, CryptoError> {
-        if private_key.is_empty() {
-            return Err(CryptoError::Internal);
-        }
-        let len = ciphertext.len();
-        if plaintext.len() < len {
-            return Err(CryptoError::Internal);
-        }
-        plaintext[..len].copy_from_slice(ciphertext);
-        Ok(Some(len))
+    fn rsapss_verify(
+        public: &FakeRsaPublic<M>,
+        digest: tpm2::TpmtHa<'_>,
+        sig: &[u8; M],
+    ) -> Result<bool, CryptoError> {
+        <Self as RsaKey<M, P, R>>::rsassa_verify(public, digest, sig)
     }
-    fn generate_key(
+}
+
+/// A fake ECC public key: the point `x || y`, accepted as it is.
+#[derive(Clone)]
+pub struct FakeEccPublic<const P: usize>(pub [u8; P]);
+
+/// A fake ECC private key on a short-Weierstrass curve: every point and scalar is accepted.
+///
+/// * Generated keys have the point `0xcc..` and the scalar `0xdd..`.
+/// * ECDH and the point multiplications report success without writing any output.
+/// * ECDSA signatures are [`fake_signature`]s of `r || s`; verification accepts exactly those.
+pub struct FakeEccKey<const C: usize, const P: usize> {
+    public: FakeEccPublic<P>,
+    pub d: [u8; C],
+}
+
+impl<const C: usize, const P: usize, R: Rng> PrivateKey<P, C, R> for FakeEccKey<C, P> {
+    type PublicKey = FakeEccPublic<P>;
+
+    fn generate(_rng: &mut R, _params: ()) -> Result<Self, CryptoError> {
+        Ok(Self {
+            public: FakeEccPublic([0xcc; P]),
+            d: [0xdd; C],
+        })
+    }
+    fn load(public: FakeEccPublic<P>, d: &[u8; C]) -> Result<Option<Self>, CryptoError> {
+        Ok(Some(Self { public, d: *d }))
+    }
+    fn store(&self, out: &mut [u8; C]) -> Result<(), CryptoError> {
+        *out = self.d;
+        Ok(())
+    }
+    fn as_public(&self) -> &FakeEccPublic<P> {
+        &self.public
+    }
+    fn load_public(_params: (), point: &[u8; P]) -> Result<Option<FakeEccPublic<P>>, CryptoError> {
+        Ok(Some(FakeEccPublic(*point)))
+    }
+    fn store_public(public: &FakeEccPublic<P>, out: &mut [u8; P]) -> Result<(), CryptoError> {
+        *out = public.0;
+        Ok(())
+    }
+}
+
+impl<const C: usize, const P: usize, R: Rng> EccCurve<C, P, R> for FakeEccKey<C, P> {
+    fn ecdh(
         &self,
-        scheme: Alg,
-        _params: Option<tpm2::crypto::asymmetric::KeyParams>,
-        public_key: &mut [u8],
-        private_key: &mut [u8],
-        _seed: Option<&[u8]>,
-    ) -> Result<(usize, usize), CryptoError> {
-        match scheme {
-            Alg::RSA => {
-                public_key[..256].fill(0xcc);
-                private_key[..256].fill(0xdd);
-                Ok((256, 256))
+        _peer_public: &FakeEccPublic<P>,
+        _out_x: &mut [u8; C],
+        _out_y: &mut [u8; C],
+    ) -> Result<Option<()>, CryptoError> {
+        Ok(Some(()))
+    }
+    fn sign(
+        &self,
+        _rng: &mut R,
+        digest: &[u8],
+        out_r: &mut [u8; C],
+        out_s: &mut [u8; C],
+    ) -> Result<(), CryptoError> {
+        let mut sig = [0u8; P];
+        fake_signature(digest, &mut sig);
+        out_r.copy_from_slice(&sig[..C]);
+        out_s.copy_from_slice(&sig[C..]);
+        Ok(())
+    }
+    fn verify(
+        _public: &FakeEccPublic<P>,
+        digest: &[u8],
+        sig_r: &[u8; C],
+        sig_s: &[u8; C],
+    ) -> Result<bool, CryptoError> {
+        let mut expected = [0u8; P];
+        fake_signature(digest, &mut expected);
+        Ok(expected[..C] == sig_r[..] && expected[C..] == sig_s[..])
+    }
+    fn mul_generator(
+        _k: &[u8; C],
+        _out_x: &mut [u8; C],
+        _out_y: &mut [u8; C],
+    ) -> Result<Option<()>, CryptoError> {
+        Ok(Some(()))
+    }
+    fn mul_point(
+        _point: &FakeEccPublic<P>,
+        _k: &[u8; C],
+        _out_x: &mut [u8; C],
+        _out_y: &mut [u8; C],
+    ) -> Result<Option<()>, CryptoError> {
+        Ok(Some(()))
+    }
+}
+
+/// Implements a fake crypto backend for `$t` with the RNG `$rng` (`Default + Rng`; both
+/// [`Random::from_entropy`] and [`Random::from_seed`] return `<$rng>::default()`), where `$m`
+/// names this module at the invocation site (`common` at a test crate root, `self` here):
+/// [`Hash`] ([`FakeHashCtx`]), [`Hmac`] and [`Cmac`] ([`FakeHmacCtx`]), [`Symmetric`] (AES only,
+/// [`FakeSym`]), [`Rsa`] ([`FakeRsaKey`]), [`Ecc`] (the short-Weierstrass curves,
+/// [`FakeEccKey`]), no ML-DSA/ML-KEM, and [`Crypto`] (`KNOWN_ANSWER_TESTS = false`: the fake
+/// algorithms fail the known-answer self tests).
+#[macro_export]
+macro_rules! impl_fake_crypto {
+    ($m:ident, $t:ty, $rng:ty) => {
+        impl tpm2::crypto::backend::Hash for $t {
+            type Sha1 = $m::FakeHashCtx;
+            type Sha256 = $m::FakeHashCtx;
+            type Sha384 = $m::FakeHashCtx;
+            type Sha512 = $m::FakeHashCtx;
+            type Sm3_256 = $m::FakeHashCtx;
+            type Sha3_256 = $m::FakeHashCtx;
+            type Sha3_384 = $m::FakeHashCtx;
+            type Sha3_512 = $m::FakeHashCtx;
+        }
+        impl tpm2::crypto::backend::Hmac for $t {
+            type Sha1 = $m::FakeHmacCtx;
+            type Sha256 = $m::FakeHmacCtx;
+            type Sha384 = $m::FakeHmacCtx;
+            type Sha512 = $m::FakeHmacCtx;
+            type Sm3_256 = $m::FakeHmacCtx;
+            type Sha3_256 = $m::FakeHmacCtx;
+            type Sha3_384 = $m::FakeHmacCtx;
+            type Sha3_512 = $m::FakeHmacCtx;
+        }
+        impl tpm2::crypto::backend::Cmac for $t {
+            type Aes128 = $m::FakeHmacCtx;
+            type Aes192 = $m::FakeHmacCtx;
+            type Aes256 = $m::FakeHmacCtx;
+            type Sm4_128 = $m::FakeHmacCtx;
+            type Camellia128 = $m::FakeHmacCtx;
+            type Camellia192 = $m::FakeHmacCtx;
+            type Camellia256 = $m::FakeHmacCtx;
+        }
+        impl tpm2::crypto::backend::Symmetric for $t {
+            type Aes128 = $m::FakeSym<16>;
+            type Aes192 = $m::FakeSym<24>;
+            type Aes256 = $m::FakeSym<32>;
+            type Sm4_128 = !;
+            type Camellia128 = !;
+            type Camellia192 = !;
+            type Camellia256 = !;
+        }
+        impl tpm2::crypto::backend::Rsa for $t {
+            type Rsa1024 = $m::FakeRsaKey<128, 64>;
+            type Rsa2048 = $m::FakeRsaKey<256, 128>;
+            type Rsa3072 = $m::FakeRsaKey<384, 192>;
+            type Rsa4096 = $m::FakeRsaKey<512, 256>;
+        }
+        impl tpm2::crypto::backend::Ecc for $t {
+            type NistP192 = $m::FakeEccKey<24, 48>;
+            type NistP224 = $m::FakeEccKey<28, 56>;
+            type NistP256 = $m::FakeEccKey<32, 64>;
+            type NistP384 = $m::FakeEccKey<48, 96>;
+            type NistP521 = $m::FakeEccKey<66, 132>;
+            type BNP256 = $m::FakeEccKey<32, 64>;
+            type BNP638 = $m::FakeEccKey<80, 160>;
+            type SM2P256 = $m::FakeEccKey<32, 64>;
+            type BpP256R1 = $m::FakeEccKey<32, 64>;
+            type BpP384R1 = $m::FakeEccKey<48, 96>;
+            type BpP512R1 = $m::FakeEccKey<64, 128>;
+            type Ed25519 = !;
+            type Ed448 = !;
+            type X25519 = !;
+            type X448 = !;
+        }
+        impl tpm2::crypto::backend::Mldsa for $t {
+            type Mldsa44 = !;
+            type Mldsa65 = !;
+            type Mldsa87 = !;
+        }
+        impl tpm2::crypto::backend::Mlkem for $t {
+            type Mlkem512 = !;
+            type Mlkem768 = !;
+            type Mlkem1024 = !;
+        }
+        impl tpm2::crypto::Random for $t {
+            type Rng = $rng;
+
+            fn from_entropy() -> Result<$rng, tpm2::crypto::CryptoError> {
+                Ok(<$rng>::default())
             }
-            Alg::ECC => {
-                public_key[..64].fill(0xcc);
-                private_key[..32].fill(0xdd);
-                Ok((64, 32))
+            fn from_seed(_seed: &[u8]) -> Result<$rng, tpm2::crypto::CryptoError> {
+                Ok(<$rng>::default())
             }
-            _ => Ok((0, 0)),
         }
-    }
+        impl tpm2::crypto::Crypto for $t {
+            /// Its algorithms are fakes, which fail the known-answer self tests.
+            const KNOWN_ANSWER_TESTS: bool = false;
+
+            fn ct_eq(a: &[u8], b: &[u8]) -> bool {
+                a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+            }
+        }
+    };
 }
 
-impl Cmac for FakeCrypto {
-    type Aes128Context = FakeHmacCtx;
-    type Aes192Context = FakeHmacCtx;
-    type Aes256Context = FakeHmacCtx;
-    type Sm4_128Context = FakeHmacCtx;
-    type Camellia128Context = FakeHmacCtx;
-    type Camellia192Context = FakeHmacCtx;
-    type Camellia256Context = FakeHmacCtx;
-
-    fn aes128(&self, key: &[u8; 16]) -> Result<Self::Aes128Context, CryptoError> {
-        Ok(FakeHmacCtx(key.to_vec()))
-    }
-    fn aes192(&self, key: &[u8; 24]) -> Result<Self::Aes192Context, CryptoError> {
-        Ok(FakeHmacCtx(key.to_vec()))
-    }
-    fn aes256(&self, key: &[u8; 32]) -> Result<Self::Aes256Context, CryptoError> {
-        Ok(FakeHmacCtx(key.to_vec()))
-    }
-    fn sm4_128(&self, key: &[u8; 16]) -> Result<Self::Sm4_128Context, CryptoError> {
-        Ok(FakeHmacCtx(key.to_vec()))
-    }
-    fn camellia128(&self, key: &[u8; 16]) -> Result<Self::Camellia128Context, CryptoError> {
-        Ok(FakeHmacCtx(key.to_vec()))
-    }
-    fn camellia192(&self, key: &[u8; 24]) -> Result<Self::Camellia192Context, CryptoError> {
-        Ok(FakeHmacCtx(key.to_vec()))
-    }
-    fn camellia256(&self, key: &[u8; 32]) -> Result<Self::Camellia256Context, CryptoError> {
-        Ok(FakeHmacCtx(key.to_vec()))
-    }
-}
-
-impl ConstantTimeEq for FakeCrypto {
-    fn constant_time_eq<const N: usize>(&self, a: &[u8; N], b: &[u8; N]) -> bool {
-        a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
-    }
-}
-
-impl Random for FakeCrypto {
-    type Rng = !;
-}
-
-/// The fake ECC operations accept every input and report success without writing any output.
-/// The output lengths reported are those of the output buffers.
-impl tpm2::crypto::Ecc for FakeCrypto {
-    type NistP192Context = !;
-    type NistP224Context = !;
-    type NistP256Context = !;
-    type NistP384Context = !;
-    type NistP521Context = !;
-    type BnP256Context = !;
-    type BnP638Context = !;
-    type Sm2P256Context = !;
-    type BpP256R1Context = !;
-    type BpP384R1Context = !;
-    type BpP512R1Context = !;
-    type Curve25519Context = !;
-    type Curve448Context = !;
-
-    fn validate_point(
-        &self,
-        _curve: tpm2::TpmEccCurve,
-        _public_key: &[u8],
-    ) -> Result<bool, tpm2::crypto::CryptoError> {
-        Ok(true)
-    }
-    fn point_multiply_generator(
-        &self,
-        _curve: tpm2::TpmEccCurve,
-        _scalar: &[u8],
-        public_key_out: &mut [u8],
-    ) -> Result<Option<usize>, tpm2::crypto::CryptoError> {
-        Ok(Some(public_key_out.len()))
-    }
-    fn point_multiply(
-        &self,
-        _curve: tpm2::TpmEccCurve,
-        _scalar: &[u8],
-        _public_point: &[u8],
-        derived_point_out: &mut [u8],
-    ) -> Result<Option<usize>, tpm2::crypto::CryptoError> {
-        Ok(Some(derived_point_out.len()))
-    }
-    fn ecdaa_sign(
-        &self,
-        _curve: tpm2::TpmEccCurve,
-        _commit_r: &[u8],
-        _commit_x: &[u8],
-        _commit_p1: &[u8],
-        _private_key_d: &[u8],
-        _digest: &[u8],
-        _nonce_k_out: &mut [u8],
-        s_out: &mut [u8],
-    ) -> Result<Option<usize>, tpm2::crypto::CryptoError> {
-        Ok(Some(s_out.len()))
-    }
-}
-
-impl tpm2::crypto::Mlkem for FakeCrypto {}
-impl tpm2::crypto::Mldsa for FakeCrypto {}
-
-impl CryptoProvider for FakeCrypto {
-    /// Its algorithms are fakes, which fail the known-answer self tests.
-    const KNOWN_ANSWER_TESTS: bool = false;
-
-    fn get_random(&self, _dest: &mut [u8]) -> Result<(), CryptoError> {
-        todo!()
-    }
-}
+impl_fake_crypto!(self, FakeCrypto, FakeRng);
 
 pub struct FakeStorage {
     data: std::vec::Vec<u8>,
@@ -1123,7 +697,7 @@ where
     len
 }
 
-/// A [`tpm2_engine::TpmEngine`] backed by the real test crypto provider and the
+/// A [`tpm2_engine::TpmEngine`] backed by the real test crypto backend and the
 /// fake storage/timer/RNG.
 pub type RealCryptoEngine<'a> =
     tpm2_engine::TpmEngine<'a, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng>;

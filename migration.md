@@ -31,7 +31,7 @@ Two directions:
 - **A**: `tpm-rs` → `PersistedTpmState` → converter → v974 (and back);
 - **B**: v974 → converter → `PersistedTpmState` → `tpm-rs` (and back).
 
-A migration is **sound** if the target TPM shows the same observable behaviour as the source would have for every future command sequence: the same responses, the same keys from the same seeds, the same tickets, counters and lockout decisions. Byte equality of the two states is not required: a converter may re-encode freely (marshalled vs. C-struct public areas, PKCS#8 vs. a single RSA prime, `StreamingHashState` vs. BoringSSL hash contexts) and synthesize what v974 derives (`s_evictNvEnd`, `s_freeSessionSlots`, `s_oldestSavedSession`, `g_implementedAlgorithms`, `s_tpmTime`, the NV `gc.pcrSave` copy, which equals the live PCRs 0-15 while orderly is `TPM_SU_STATE` because a change to a state-saved PCR clears orderly).
+A migration is **sound** if the target TPM shows the same observable behaviour as the source would have for every future command sequence: the same responses, the same keys from the same seeds, the same tickets, counters and lockout decisions. Byte equality of the two states is not required: a converter may re-encode freely (marshalled vs. C-struct public areas, `StreamingHashState` vs. BoringSSL hash contexts) and synthesize what v974 derives (`s_evictNvEnd`, `s_freeSessionSlots`, `s_oldestSavedSession`, `g_implementedAlgorithms`, `s_tpmTime`, the NV `gc.pcrSave` copy, which equals the live PCRs 0-15 while orderly is `TPM_SU_STATE` because a change to a state-saved PCR clears orderly).
 
 The blockers below are differences of **profile or semantics**: v974 cannot hold the value, or the two engines behave differently on the same state. A converter can only refuse such states; fixing them needs a `tpm-rs` profile that matches v974.
 
@@ -80,7 +80,7 @@ The time epoch and the session epochs (`CLOCK_NONCE`) are 32-bit in both: `tpm-r
   - Commands: v974 implements TPM2_PP_Commands, TPM2_PolicyPhysicalPresence and TPM2_SetAlgorithmSet, which are the `tpm-rs` features `cc-pp-commands`, `cc-policy-physical-presence` and `cc-set-algorithm-set`.
   - Constants: `NV_CLOCK_UPDATE_INTERVAL` is 22 in `tpm-rs` (`crates/tpm2-engine/src/engine.rs`) and 12 in v974; `MAX_CONTEXT_SIZE` is 2264 and 2474; the NV space accounting of `crates/tpm2-engine/src/storage/nv_capacity.rs` (`SIZEOF_OBJECT`, `SIZEOF_NV_INDEX`) models tcgtpm, not v974's `OBJECT`/`NV_INDEX`, so `TPM_RC_NV_SPACE` and the `TPM_PT_*_AVAIL` values differ.
 - **Why no converter can bridge it.** An object, key, scheme, PCR bank, self-test bit or audit/ppList bit of an algorithm or command the other side lacks has no representation there, and the constants change responses for the same state.
-- **When it is harmless.** The `tpm-rs` build matches v974's sets (`--no-default-features` without `sha512`, `ecdaa` and `ecc_curve_bn_p256`, plus the three `cc-*` features above), no TDES entity exists on the v974 side, and no client depends on the constants above.
+- **When it is harmless.** The `tpm-rs` build matches v974's sets (`--no-default-features` without `sha512`, `ecdaa` and `bn_p256`, plus the three `cc-*` features above), no TDES entity exists on the v974 side, and no client depends on the constants above.
 - **Fix.** A v974 profile (features and constants), plus TDES in `tpm-rs` if v974 states with TDES entities must migrate.
 
 ### D6. Orderly NV indices
@@ -135,7 +135,7 @@ Refuse to migrate unless all of these hold.
 
 **Both directions**
 
-- [ ] The `tpm-rs` build has v974's algorithm and command sets (D5): no `sha512`, `ecdaa`, `ecc_curve_bn_p256`; with `cc-pp-commands`, `cc-policy-physical-presence`, `cc-set-algorithm-set`.
+- [ ] The `tpm-rs` build has v974's algorithm and command sets (D5): no `sha512`, `ecdaa`, `bn_p256`; with `cc-pp-commands`, `cc-policy-physical-presence`, `cc-set-algorithm-set`.
 - [ ] No ticket, saved context or ECDAA commit is outstanding (D3, D7), and clients will not re-create and compare primary keys (D7).
 - [ ] The Rust-only features F1-F9 are at their harmless values.
 - [ ] The TPM is not in Failure mode.

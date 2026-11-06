@@ -156,7 +156,7 @@ mod tests {
     }
 
     #[test]
-    fn generated_key_matches_the_provider_point() {
+    fn generated_key_matches_the_backend_point() {
         for (curve, len) in [(TpmEccCurve::NistP256, 32), (TpmEccCurve::NistP384, 48)] {
             let mut seeded = drbg::instantiate_seeded(b"seed", b"ecc\0", b"", b"").unwrap();
             let (mut d, mut q) = ([0u8; 66], [0u8; 132]);
@@ -170,11 +170,13 @@ mod tests {
             )
             .unwrap();
             assert_eq!(n, len);
-            let mut expected = [0u8; 132];
-            tpm2::crypto::point_multiply_generator(&Crypto, curve, &d[..n], &mut expected[..2 * n])
-                .unwrap()
-                .unwrap();
-            assert_eq!(q[..2 * n], expected[..2 * n]);
+            let (mut x, mut y) = ([0u8; 66], [0u8; 66]);
+            let expected =
+                tpm2::crypto::ecc_mul_generator::<Crypto>(curve, &d[..n], &mut x, &mut y)
+                    .unwrap()
+                    .unwrap();
+            assert_eq!(q[..n], *expected.x.as_slice());
+            assert_eq!(q[n..2 * n], *expected.y.as_slice());
         }
     }
 
@@ -217,7 +219,8 @@ mod tests {
     /// verification (`ecc_schemes`), for every implemented hash.
     #[test]
     fn sm2_and_schnorr_signatures_verify_with_the_engine() {
-        let crypto = Crypto;
+        let self_test = crate::self_test::SelfTestState::default();
+        let tested = crate::self_test::Tested::<Crypto>::new(&self_test);
         let mut state = tpm_drbg();
         let (mut d, mut q) = ([0u8; 32], [0u8; 64]);
         new_key_pair(&mut tpm(&mut state), TpmEccCurve::NistP256, &mut d, &mut q).unwrap();
@@ -246,8 +249,7 @@ mod tests {
                 .unwrap_or_else(|e| panic!("{scheme:?} {hash:?}: {e:?}"));
                 assert_eq!(len, 32);
                 let verified = if scheme == tpm2::Alg::SM2 {
-                    crate::ecc_schemes::sm2_verify(
-                        &crypto,
+                    crate::ecc_schemes::sm2_verify::<Crypto>(
                         TpmEccCurve::NistP256,
                         &q,
                         &digest,
@@ -256,8 +258,7 @@ mod tests {
                     )
                 } else {
                     crate::ecc_schemes::schnorr_verify(
-                        &crypto,
-                        &crypto,
+                        &tested,
                         TpmEccCurve::NistP256,
                         hash,
                         &q,
@@ -320,13 +321,10 @@ mod tests {
             ),
             Err(TpmRc::FAILURE)
         );
+        // `TPM_ECC_NONE` (no longer a `TpmEccCurve`), passed to the C code directly.
+        let (mut x, mut y) = ([0; 80], [0; 80]);
         assert_eq!(
-            new_key_pair(
-                &mut tpm(&mut state),
-                TpmEccCurve::None,
-                &mut [0; 80],
-                &mut [0; 160]
-            ),
+            ffi::ecc_new_key_pair(&mut tpm(&mut state), 0, &mut [0; 80], &mut x, &mut y),
             Err(TpmRc::CURVE.to_rc())
         );
     }

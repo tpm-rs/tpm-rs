@@ -21,7 +21,7 @@
 //! The tests run when:
 //! - a hash or HMAC computation starts with an untested hash algorithm, a KDFa derivation starts,
 //!   a symmetric encryption or decryption uses an untested block cipher, or an ECC point
-//!   multiplication runs ([`Tested`], the hooked crypto provider of the engine, see
+//!   multiplication runs ([`Tested`], the hooked crypto backend of the engine, see
 //!   [`crate::engine::TpmEngine::crypto`]);
 //! - an RSA encryption, decryption, signature or signature verification uses an untested scheme,
 //!   an ECC key is generated, an ECDSA signature is computed, or an ML-KEM or ML-DSA key is
@@ -35,6 +35,7 @@
 //! A failed test puts the TPM into Failure mode ([`SelfTestState::failed`]).
 
 mod algorithm_tests;
+#[cfg(any(feature = "mlkem", feature = "mldsa"))]
 mod pqc_vectors;
 mod tested;
 pub(crate) mod vectors;
@@ -45,7 +46,7 @@ pub use tested::kdfa_bits;
 
 use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
-use tpm2::crypto::{CryptoProvider, Rng};
+use tpm2::crypto::{Crypto, Rng};
 use tpm2::errors::TpmRc;
 use tpm2::{Alg, TpmiAlgHash};
 
@@ -137,7 +138,7 @@ pub(crate) fn default_test_hash() -> TpmiAlgHash {
 /// The self-test state of the TPM: `g_toTest` (the algorithms that still need a test) and whether
 /// a test has failed (Failure mode, until the next `_TPM_Init`).
 ///
-/// It is shared by the hooked crypto provider ([`Tested`]), which runs the tests of the
+/// It is shared by the hooked crypto backend ([`Tested`]), which runs the tests of the
 /// algorithms it is used with through a shared reference, so its fields are atomics (only loads
 /// and stores are used).
 pub struct SelfTestState {
@@ -178,6 +179,16 @@ impl core::fmt::Debug for SelfTestState {
 }
 
 impl SelfTestState {
+    /// A state in which every algorithm has been tested and no test has failed: a [`Tested`]
+    /// with it runs no self test (for unit tests of code that takes a [`Tested`]).
+    #[cfg(test)]
+    pub(crate) const fn nothing_to_test() -> Self {
+        Self {
+            to_test: [const { AtomicU8::new(0) }; VECTOR_BYTES],
+            failed: AtomicBool::new(false),
+        }
+    }
+
     /// `CryptInitializeToTest()` (`CryptInit()`, at manufacture and on every `_TPM_Init`): every
     /// implemented algorithm that has a test needs one, and no test has failed (Failure mode
     /// ends at `_TPM_Init`).
@@ -241,19 +252,19 @@ impl SelfTestState {
     }
 }
 
-impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<'a, C, S, T, R> {
-    /// The crypto provider with the on-demand self tests of the algorithms it is used with
+impl<'a, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<'a, C, S, T, R> {
+    /// The crypto backend with the on-demand self tests of the algorithms it is used with
     /// ([`Tested`]). Every cryptographic operation of the engine and the command handlers uses
     /// it.
     pub fn crypto(&self) -> Tested<'_, C> {
-        Tested::new(&*self.platform.crypto, &self.self_test)
+        Tested::new(&self.self_test)
     }
 
     /// The runner of the algorithm self tests, with the TPM's DRBG for the tests that draw random
     /// values.
     pub(crate) fn self_tester(&mut self) -> SelfTester<'_, C> {
         SelfTester {
-            crypto: Tested::new(&*self.platform.crypto, &self.self_test),
+            crypto: Tested::new(&self.self_test),
             #[cfg(feature = "reference-rng")]
             rng: Some(crate::reference_rng::RefRng {
                 drbg: Some(&mut self.state.drbg_state),
@@ -266,7 +277,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
     /// `CryptHashStart()`/`CryptHmacStart()` calls in `ObjectCreateHashSequence()`,
     /// `ObjectCreateHMACSequence()` and `ObjectCreateEventSequence()`, the last one for every
     /// implemented hash). The sequences hash with the engine's own streaming hash state
-    /// ([`crate::hash_state`]), which the hooked crypto provider does not see.
+    /// ([`crate::hash_state`]), which the hooked crypto backend does not see.
     pub(crate) fn self_test_sequence_start(
         &self,
         sequence_type: &crate::SequenceType,
@@ -306,7 +317,7 @@ impl<'a, C: CryptoProvider, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<
     }
 
     /// `TPM_DO_SELF_TEST(alg)`: tests `alg` if it still needs a test, for the operations the
-    /// hooked crypto provider ([`Self::crypto`]) cannot see (RSA encryption, decryption,
+    /// hooked crypto backend ([`Self::crypto`]) cannot see (RSA encryption, decryption,
     /// signatures and signature verification, ECC key generation, ECDSA signatures, and the
     /// hashes computed inside the RSA encodings). Fails with `TPM_RC_FAILURE` (Failure mode) if
     /// the test fails.

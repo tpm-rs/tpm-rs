@@ -663,7 +663,7 @@ impl<'a> UnmarshalMessage<'a> for NVCertifyRsp<'a> {
 /// attributes.
 #[doc(alias = "TPM2_NV_DefineSpace2")]
 #[doc(alias = "NV_DefineSpace2_In")]
-#[derive(Clone, Copy, PartialEq, Debug, Default, Eq)]
+#[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct NVDefineSpace2<'a> {
     pub auth_handle: Handle,
     pub auth: Tpm2bAuth<'a>,
@@ -708,13 +708,13 @@ impl<'a> UnmarshalMessage<'a> for NVDefineSpace2<'a> {
 /// expanded attributes.
 #[doc(alias = "TPM2_NV_ReadPublic2")]
 #[doc(alias = "NV_ReadPublic2_In")]
-#[derive(Clone, Copy, PartialEq, Debug, Default, Eq)]
+#[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct NVReadPublic2 {
     pub nv_index: Handle,
 }
 /// [TPM2.0 1.83] 31.18 TPM2_NV_ReadPublic2 (Response)
 #[doc(alias = "NV_ReadPublic2_Out")]
-#[derive(Clone, Copy, PartialEq, Debug, Default, Eq)]
+#[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct NVReadPublic2Rsp<'a> {
     pub nv_public: Tpm2bNvPublic2<'a>,
     pub nv_name: Tpm2bName<'a>,

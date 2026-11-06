@@ -25,7 +25,7 @@ use tpm2::platform::{SimulatedFirmware, SimulatedSecureChannel};
 use tpm2_engine::persistence::{
     DeserializeError, PersistedPlatformState, PersistedTpmState, SerializeError,
 };
-use tpm2_engine::{GlobalState, InternalError, TpmEngine};
+use tpm2_engine::{InternalError, TpmEngine};
 pub use tpm2_engine::{NO_STREAM, PlatformConnection, SimulatorPlatformSignal};
 use tpm2_platform_linux::{LinuxRng, LinuxTimer, PlatformCryptoProvider, create_linux_platform};
 
@@ -149,13 +149,15 @@ impl<'a> Simulator<'a> {
     }
 
     /// Returns the simulator to the state of a new one built from its own
-    /// crypto provider, fresh empty NV storage, `timer` and `platform_rng`,
+    /// crypto backend, fresh empty NV storage, `timer` and `platform_rng`,
     /// powered on, NV enabled and `TPM2_Startup(TPM_SU_CLEAR)` done, reusing
     /// the simulator's allocations (the components it borrows are
     /// overwritten in place, so nothing is leaked).
     ///
     /// # Panics
-    /// If the power-on, NV enable or `TPM2_Startup` fails.
+    /// If the power-on, NV enable or `TPM2_Startup` fails, or the crypto
+    /// backend's entropy source fails.
+    #[cfg(feature = "reference-rng")]
     fn restart_with(&mut self, timer: LinuxTimer, platform_rng: LinuxRng) {
         let platform = &mut self.context.platform;
         *platform.storage = RamStorageMock::new();
@@ -167,7 +169,9 @@ impl<'a> Simulator<'a> {
         self.firmware
             .set_firmware_svn(SimulatedFirmware::DEFAULT_SVN);
         // What `TpmEngine::new` + `Simulator::new` do.
-        self.context.state = GlobalState::default();
+        self.context.state = tpm2_engine::GlobalState::default();
+        self.context.crypto_rng = <PlatformCryptoProvider as tpm2::crypto::Random>::from_entropy()
+            .expect("the crypto backend's entropy source failed");
         self.context.init_storage();
         self.is_power_on = false;
         self.is_nv_on = false;
@@ -623,7 +627,7 @@ pub fn __new_simulator() -> Simulator<'static> {
 /// Creates a fresh, self-contained in-process [`Simulator`] that has been
 /// powered on, had NV enabled, and received `TPM2_Startup(TPM_SU_CLEAR)`.
 ///
-/// Every invocation allocates its own crypto provider, RAM-backed NV storage,
+/// Every invocation allocates its own crypto backend, RAM-backed NV storage,
 /// timer and platform RNG (leaked to obtain a `'static` lifetime), so
 /// simulators created by different tests — or by repeated calls of the same
 /// helper — never share TPM state.

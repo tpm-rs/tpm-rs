@@ -128,7 +128,7 @@ fn certify_creation_rejects_bad_ticket() {
     let rsa_parms = TpmsRsaParms {
         symmetric: None,
         scheme: Some(TpmtRsaScheme::Rsassa(TpmiAlgHash::Sha256)),
-        key_bits: TpmiRsaKeyBits(2048),
+        key_bits: TpmiRsaKeyBits::Rsa2048,
         exponent: 0,
     };
     let pub_area = TpmtPublic {
@@ -158,7 +158,7 @@ fn certify_creation_rejects_bad_ticket() {
         in_sensitive,
         in_public,
         creation_pcr: pcr_selection,
-        ..Default::default()
+        outside_info: Default::default(),
     };
     let create_rsp = execute_with_password_sessions(&mut sim, &create_cmd, 1, &[]).unwrap();
     let object_handle = create_rsp.object_handle;
@@ -256,7 +256,7 @@ fn ticket_and_auth_validation() {
     let rsa_parms = tpm2::TpmsRsaParms {
         symmetric: None,
         scheme: Some(tpm2::TpmtRsaScheme::Rsassa(TpmiAlgHash::Sha256)),
-        key_bits: tpm2::TpmiRsaKeyBits(2048),
+        key_bits: tpm2::TpmiRsaKeyBits::Rsa2048,
         exponent: 0,
     };
     let pubkey = tpm2::Tpm2bPublicKeyRsa::default();

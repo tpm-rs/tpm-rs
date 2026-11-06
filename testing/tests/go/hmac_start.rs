@@ -57,7 +57,9 @@ fn hmac_key_create_primary() -> CreatePrimary<'static> {
             data: tpm2::Tpm2bSensitiveData::default(),
         }),
         in_public: tpm2::Tpm2b(pub_area),
-        ..Default::default()
+        primary_handle: Default::default(),
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     }
 }
 

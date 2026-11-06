@@ -1,22 +1,21 @@
 #![forbid(unsafe_code)]
 // Ported from go-tpm/tpm2/test/activate_credential_test.go
 
+use crate::_common::{ClientCrypto, client_ecc_key, client_ecc_mul_point, client_rsa_encrypt};
 use crate::audit::{SessionAuth, create_primary_pw, execute_mixed};
 use crate::test_utils::{flush_context, marshal_to_slice, start_auth_session, sym_encrypt};
 use testing::tpm::Tpm;
 use tpm2::Handle;
 use tpm2::commands::{ActivateCredential, CreatePrimary, MakeCredential, PolicySecret};
 use tpm2::crypto::Rng;
-use tpm2::crypto::asymmetric::KeyParams;
-use tpm2::crypto::kdf::kdfa_bits;
-use tpm2::crypto::{Asymmetric, Ecc};
+use tpm2::crypto::{RsaEncryptScheme, kdfa_bits};
 use tpm2::{
-    Alg, AlgSym, PublicParmsAndId, Tpm2bAuth, Tpm2bDigest, Tpm2bEccParameter, Tpm2bEncryptedSecret,
+    AlgSym, PublicParmsAndId, Tpm2bAuth, Tpm2bDigest, Tpm2bEccParameter, Tpm2bEncryptedSecret,
     Tpm2bIdObject, Tpm2bNonce, Tpm2bPublicKeyRsa, Tpm2bSensitiveData, TpmSe, TpmaObject,
     TpmiAlgCipherMode, TpmiAlgHash, TpmiAlgSymMode, TpmiRsaKeyBits, TpmsEccParms, TpmsEccPoint,
     TpmsRsaParms, TpmsSensitiveCreate, TpmtPublic, TpmtSymDefObject,
 };
-use tpm2_platform_linux::{LinuxRng, PlatformCryptoProvider};
+use tpm2_platform_linux::LinuxRng;
 
 /// Returns go-tpm's `ECCEKTemplate`: the TCG reference ECC-P256 EK template
 /// (SHA-256 name algorithm, PolicyA auth policy, zero-filled 32-byte unique).
@@ -105,7 +104,7 @@ fn get_rsa_srk_template() -> TpmtPublic<'static> {
                     mode: Some(TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb)),
                 }),
                 scheme: None,
-                key_bits: TpmiRsaKeyBits(2048),
+                key_bits: TpmiRsaKeyBits::Rsa2048,
                 exponent: 0,
             },
             Tpm2bPublicKeyRsa::from_bytes(&[0u8; 256]).unwrap(),
@@ -153,7 +152,6 @@ fn create_credential_software(
     subject_name: &[u8],
     plaintext: &[u8],
 ) -> (Tpm2bIdObject<'static>, Tpm2bEncryptedSecret<'static>) {
-    let crypto = PlatformCryptoProvider;
     let mut rng = LinuxRng::new();
 
     let name_alg = ek_pub.name_alg.unwrap();
@@ -164,23 +162,15 @@ fn create_credential_software(
             let mut seed = [0u8; 64];
             rng.fill_bytes(&mut seed[..digest_size]).unwrap();
 
-            let mut encrypted_seed = [0u8; 512];
-            let encrypted_seed_len = crypto
-                .encrypt(
-                    Alg::OAEP,
-                    Alg::from(name_alg),
-                    pub_key.get_buffer(),
-                    0,
-                    &seed[..digest_size],
-                    &mut encrypted_seed,
-                    b"IDENTITY\0",
-                )
-                .unwrap()
-                .unwrap();
-            let secret = Tpm2bEncryptedSecret::from_bytes(crate::test_utils::leak_bytes(
-                &encrypted_seed[..encrypted_seed_len],
-            ))
-            .unwrap();
+            let scheme = RsaEncryptScheme::Oaep {
+                hash: name_alg,
+                label: Some(c"IDENTITY"),
+            };
+            let encrypted_seed =
+                client_rsa_encrypt(pub_key.get_buffer(), 0, scheme, &seed[..digest_size]).unwrap();
+            let secret =
+                Tpm2bEncryptedSecret::from_bytes(crate::test_utils::leak_bytes(&encrypted_seed))
+                    .unwrap();
             (seed, secret)
         }
         PublicParmsAndId::Ecc(parms, point) => {
@@ -189,6 +179,8 @@ fn create_credential_software(
                 tpm2::TpmEccCurve::NistP256 | tpm2::TpmEccCurve::BNP256 => 32,
                 tpm2::TpmEccCurve::NistP384 => 48,
                 tpm2::TpmEccCurve::NistP521 => 66,
+                // Reachable only with the optional curve features.
+                #[allow(unreachable_patterns)]
                 _ => panic!("Unsupported curve {:?}", parms.curve_id),
             };
 
@@ -196,28 +188,13 @@ fn create_credential_software(
             parent_ecc_pub_point[0..param_size].copy_from_slice(point.x.get_buffer());
             parent_ecc_pub_point[param_size..param_size * 2].copy_from_slice(point.y.get_buffer());
 
-            let mut eph_pub = [0u8; 256];
-            let mut eph_priv = [0u8; 128];
-            let (_pub_len, priv_len) = crypto
-                .generate_key(
-                    Alg::ECDH,
-                    Some(KeyParams::Ecc(parms.curve_id)),
-                    &mut eph_pub,
-                    &mut eph_priv,
-                    None,
-                )
-                .unwrap();
-
-            let mut ecdh_point = [0u8; 256];
-            crypto
-                .point_multiply(
-                    parms.curve_id,
-                    &eph_priv[..priv_len],
-                    &parent_ecc_pub_point[..param_size * 2],
-                    &mut ecdh_point[..param_size * 2],
-                )
-                .unwrap()
-                .unwrap();
+            let (eph_priv, eph_pub) = client_ecc_key(parms.curve_id);
+            let ecdh_point = client_ecc_mul_point(
+                parms.curve_id,
+                &eph_priv,
+                &parent_ecc_pub_point[..param_size * 2],
+            )
+            .unwrap();
 
             let mut ex = [0u8; 128];
             ex[..param_size].copy_from_slice(&eph_pub[0..param_size]);
@@ -238,13 +215,11 @@ fn create_credential_software(
 
             let mut seed = [0u8; 64];
             let total_bits = (digest_size * 8) as u32;
-            tpm2::crypto::kdf::kdfe_bits(
-                &crypto,
+            tpm2::crypto::kdfe_bits::<ClientCrypto>(
                 name_alg,
                 &ecdh_point[..param_size],
                 b"IDENTITY",
-                &eph_pub[..param_size],
-                &parent_ecc_pub_point[..param_size],
+                (&eph_pub[..param_size], &parent_ecc_pub_point[..param_size]),
                 total_bits,
                 &mut seed,
             )
@@ -275,24 +250,20 @@ fn create_credential_software(
     let mut sym_key_iv = [0u8; 64];
     let mut integrity_key = [0u8; 64];
 
-    kdfa_bits(
-        &crypto,
+    kdfa_bits::<ClientCrypto>(
         name_alg,
         &seed[..digest_size],
         b"STORAGE",
-        subject_name,
-        &[],
+        (subject_name, &[]),
         sym_key_bits,
         &mut sym_key_iv,
     )
     .unwrap();
-    kdfa_bits(
-        &crypto,
+    kdfa_bits::<ClientCrypto>(
         name_alg,
         &seed[..digest_size],
         b"INTEGRITY",
-        &[],
-        &[],
+        (&[], &[]),
         (digest_size * 8) as u32,
         &mut integrity_key,
     )
@@ -310,7 +281,6 @@ fn create_credential_software(
     let mut iv = [0u8; 16];
     let sym_alg = sym_alg.expect("Unsupported symmetric algorithm");
     sym_encrypt(
-        &crypto,
         sym_alg,
         &sym_key_iv[..outer_key_len],
         &mut iv,
@@ -319,7 +289,8 @@ fn create_credential_software(
     .unwrap();
 
     let mut hmac_state =
-        tpm2::crypto::HmacStream::new(&crypto, name_alg, &integrity_key[..digest_size]).unwrap();
+        tpm2::crypto::HmacContext::<ClientCrypto>::new(name_alg, &integrity_key[..digest_size])
+            .unwrap();
     hmac_state
         .update(&credential_to_encrypt[..encrypt_len])
         .unwrap();
@@ -351,7 +322,9 @@ fn test_activate_tpm_credential() {
     let ek_create = CreatePrimary {
         in_sensitive,
         in_public: tpm2::Tpm2b(get_ecc_ek_template()),
-        ..Default::default()
+        primary_handle: Default::default(),
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     let ek_create_rsp = create_primary_pw(&mut sim, Handle::RH_ENDORSEMENT, &ek_create)
         .expect("could not generate EK");
@@ -359,7 +332,9 @@ fn test_activate_tpm_credential() {
     let srk_create = CreatePrimary {
         in_sensitive,
         in_public: tpm2::Tpm2b(get_ecc_srk_template()),
-        ..Default::default()
+        primary_handle: Default::default(),
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     let srk_create_rsp =
         create_primary_pw(&mut sim, Handle::RH_OWNER, &srk_create).expect("could not generate SRK");
@@ -457,7 +432,9 @@ fn run_activate_sw_credential_test(pub_template: TpmtPublic, sub_template: TpmtP
         &CreatePrimary {
             in_sensitive,
             in_public: tpm2::Tpm2b(pub_template),
-            ..Default::default()
+            primary_handle: Default::default(),
+            outside_info: Default::default(),
+            creation_pcr: Default::default(),
         },
     )
     .expect("CreatePrimary() failed");
@@ -471,7 +448,9 @@ fn run_activate_sw_credential_test(pub_template: TpmtPublic, sub_template: TpmtP
         &CreatePrimary {
             in_sensitive,
             in_public: tpm2::Tpm2b(sub_template),
-            ..Default::default()
+            primary_handle: Default::default(),
+            outside_info: Default::default(),
+            creation_pcr: Default::default(),
         },
     )
     .expect("CreatePrimary() failed");

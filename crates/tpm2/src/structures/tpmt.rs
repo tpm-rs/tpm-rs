@@ -1,14 +1,11 @@
-use crate::{
-    errors::UnmarshalError,
-    marshal::{marshal_helper, max},
-    *,
-};
+use crate::{errors::UnmarshalError, marshal::marshal_helper, *};
 use TpmiAlgHash::*;
 
 /// `TPMT_HA` structure defined in TPM 2.0 Part 2: Structures, Section 10.3.3 (Table 86).
 ///
 /// A tagged hash-agile structure containing a hash algorithm identifier (`TPMI_ALG_HASH`) and the corresponding hash digest.
 /// Used throughout the TPM stack to provide hash agility.
+#[doc(alias = "TPMT_HA")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(u16)]
 pub enum TpmtHa<'a> {
@@ -250,6 +247,7 @@ impl<'a> Unmarshal<'a> for Option<TpmtHa<'a>> {
 /// `TPMT_KEYEDHASH_SCHEME` structure defined in TPM 2.0 Part 2: Structures, Section 11.1.10 (Table 164).
 ///
 /// Tagged structure selecting a scheme for a keyed hash object (HMAC or XOR).
+#[doc(alias = "TPMT_KEYEDHASH_SCHEME")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(u16)]
 pub enum TpmtKeyedHashScheme {
@@ -276,7 +274,7 @@ impl<'a> Unmarshal<'a> for TpmtKeyedHashScheme {
 }
 
 impl Marshal for Option<TpmtKeyedHashScheme> {
-    const MAX_SIZE: usize = Alg::MAX_SIZE + max(&[TpmiAlgHash::MAX_SIZE, TpmsSchemeXor::MAX_SIZE]);
+    const MAX_SIZE: usize = Alg::MAX_SIZE + max!(TpmiAlgHash::MAX_SIZE, TpmsSchemeXor::MAX_SIZE);
     type MaxBuffer = [u8; Self::MAX_SIZE];
 
     fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
@@ -348,14 +346,15 @@ pub enum AlgSym {
 compile_error!("at least one symmetric algorithm feature must be enabled");
 
 impl AlgSym {
-    pub const MAX_KEY_BITS: usize = max(&[
+    pub const MAX_KEY_BITS: usize = max!(
+        0,
         #[cfg(any(feature = "aes128", feature = "sm4_128", feature = "camellia128"))]
         128,
         #[cfg(any(feature = "aes192", feature = "camellia192"))]
         192,
         #[cfg(any(feature = "aes256", feature = "camellia256"))]
         256,
-    ]);
+    );
     pub const MAX_KEY_BYTES: usize = Self::MAX_KEY_BITS.div_ceil(8);
 
     /// All symmetric encryption algorithms have a block size of 16.
@@ -623,6 +622,7 @@ impl<'a> Unmarshal<'a> for Option<TpmtSymDefObject> {
 /// `TPMT_SYM_DEF` structure defined in TPM 2.0 Part 2: Structures, Section 11.1.4 (Table 151).
 ///
 /// Tagged structure selecting a symmetric block cipher or XOR mode.
+#[doc(alias = "TPMT_SYM_DEF")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TpmtSymDef {
     Cipher(TpmtSymDefObject),
@@ -660,10 +660,10 @@ impl From<TpmtSymDefObject> for TpmtSymDef {
 }
 
 impl Marshal for Option<TpmtSymDef> {
-    const MAX_SIZE: usize = max(&[
+    const MAX_SIZE: usize = max!(
         TpmtSymDefObject::MAX_SIZE,
         Alg::MAX_SIZE + TpmiAlgHash::MAX_SIZE,
-    ]);
+    );
     type MaxBuffer = [u8; Self::MAX_SIZE];
 
     fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
@@ -724,6 +724,18 @@ pub enum TpmtSignature<'a> {
 }
 
 impl<'a> TpmtSignature<'a> {
+    /// Maximum size of a `TPM2B_SIGNATURE_CTX` across the enabled signature
+    /// schemes (`sizeof(TPMU_SIGNATURE_CTX)`, see
+    /// [`TPM2_MAX_SIGNATURE_CTX_SIZE`](crate::TPM2_MAX_SIGNATURE_CTX_SIZE)): 2-byte
+    /// ECDAA `commitCount`s, SM2 user IDs, and 255-byte ML-DSA/HashML-DSA context
+    /// strings.
+    #[doc(alias = "TPMU_SIGNATURE_CTX")]
+    pub const MAX_CTX_BYTES: usize = crate::constants::TPM2_MAX_SIGNATURE_CTX_SIZE;
+    /// Maximum size of a `TPM2B_SIGNATURE_HINT` across the enabled signature
+    /// schemes (see [`TPM2_MAX_SIGNATURE_HINT_SIZE`](crate::TPM2_MAX_SIGNATURE_HINT_SIZE)).
+    #[doc(alias = "MAX_SIGNATURE_HINT_SIZE")]
+    pub const MAX_HINT_BYTES: usize = crate::constants::TPM2_MAX_SIGNATURE_HINT_SIZE;
+
     #[doc(alias = "TPMI_ALG_SIG_SCHEME")]
     pub const fn sig_alg(self) -> Alg {
         match self {
@@ -771,14 +783,14 @@ impl<'a> TpmtSignature<'a> {
 
 impl Marshal for TpmtSignature<'_> {
     const MAX_SIZE: usize = Alg::MAX_SIZE
-        + max(&[
+        + max!(
             TpmsSignatureRsa::MAX_SIZE,
             TpmsSignatureEcc::MAX_SIZE,
             Tpm2bSignatureEddsa::MAX_SIZE,
             TpmtHa::MAX_SIZE,
             Tpm2bSignatureMldsa::MAX_SIZE,
             TpmsSignatureHashMldsa::MAX_SIZE,
-        ]);
+        );
     type MaxBuffer = [u8; TpmtSignature::MAX_SIZE];
 
     fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
@@ -990,8 +1002,7 @@ impl TpmtSigScheme {
 }
 
 impl Marshal for TpmtSigScheme {
-    const MAX_SIZE: usize =
-        Alg::MAX_SIZE + max(&[TpmiAlgHash::MAX_SIZE, TpmsSchemeEcdaa::MAX_SIZE]);
+    const MAX_SIZE: usize = Alg::MAX_SIZE + max!(TpmiAlgHash::MAX_SIZE, TpmsSchemeEcdaa::MAX_SIZE);
     type MaxBuffer = [u8; Self::MAX_SIZE];
 
     fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
@@ -1025,8 +1036,7 @@ impl<'a> Unmarshal<'a> for TpmtSigScheme {
 }
 
 impl Marshal for Option<TpmtSigScheme> {
-    const MAX_SIZE: usize =
-        Alg::MAX_SIZE + max(&[TpmiAlgHash::MAX_SIZE, TpmsSchemeEcdaa::MAX_SIZE]);
+    const MAX_SIZE: usize = Alg::MAX_SIZE + max!(TpmiAlgHash::MAX_SIZE, TpmsSchemeEcdaa::MAX_SIZE);
     type MaxBuffer = [u8; Self::MAX_SIZE];
 
     fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
@@ -1120,7 +1130,7 @@ impl<'a> Unmarshal<'a> for Option<TpmtSigScheme> {
     any(
         feature = "rsassa",
         feature = "rsapss",
-        feature = "oaep",
+        feature = "rsa",
         feature = "rsaes"
     ),
     repr(u16)
@@ -1130,7 +1140,7 @@ pub enum TpmtRsaScheme {
     Rsassa(TpmiAlgHash) = Alg::RSASSA.tag(),
     #[cfg(feature = "rsapss")]
     Rsapss(TpmiAlgHash) = Alg::RSAPSS.tag(),
-    #[cfg(feature = "oaep")]
+    #[cfg(feature = "rsa")]
     Oaep(TpmiAlgHash) = Alg::OAEP.tag(),
     #[cfg(feature = "rsaes")]
     Rsaes = Alg::RSAES.tag(),
@@ -1143,7 +1153,7 @@ impl TpmtRsaScheme {
             Self::Rsassa(_) => Alg::RSASSA,
             #[cfg(feature = "rsapss")]
             Self::Rsapss(_) => Alg::RSAPSS,
-            #[cfg(feature = "oaep")]
+            #[cfg(feature = "rsa")]
             Self::Oaep(_) => Alg::OAEP,
             #[cfg(feature = "rsaes")]
             Self::Rsaes => Alg::RSAES,
@@ -1156,7 +1166,7 @@ impl TpmtRsaScheme {
             Self::Rsassa(h) => Some(h),
             #[cfg(feature = "rsapss")]
             Self::Rsapss(h) => Some(h),
-            #[cfg(feature = "oaep")]
+            #[cfg(feature = "rsa")]
             Self::Oaep(h) => Some(h),
             #[cfg(feature = "rsaes")]
             Self::Rsaes => None,
@@ -1172,7 +1182,7 @@ impl Marshal for TpmtRsaScheme {
         not(any(
             feature = "rsassa",
             feature = "rsapss",
-            feature = "oaep",
+            feature = "rsa",
             feature = "rsaes"
         )),
         allow(unused_variables)
@@ -1189,7 +1199,7 @@ impl Marshal for TpmtRsaScheme {
                 let count = marshal_helper(&Alg::RSAPSS, dst, 0);
                 marshal_helper(x, dst, count)
             }
-            #[cfg(feature = "oaep")]
+            #[cfg(feature = "rsa")]
             Self::Oaep(ref x) => {
                 let count = marshal_helper(&Alg::OAEP, dst, 0);
                 marshal_helper(x, dst, count)
@@ -1230,7 +1240,7 @@ impl<'a> Unmarshal<'a> for Option<TpmtRsaScheme> {
             Alg::RSASSA => Ok(Some(TpmtRsaScheme::Rsassa(Unmarshal::unmarshal(src)?))),
             #[cfg(feature = "rsapss")]
             Alg::RSAPSS => Ok(Some(TpmtRsaScheme::Rsapss(Unmarshal::unmarshal(src)?))),
-            #[cfg(feature = "oaep")]
+            #[cfg(feature = "rsa")]
             Alg::OAEP => Ok(Some(TpmtRsaScheme::Oaep(Unmarshal::unmarshal(src)?))),
             #[cfg(feature = "rsaes")]
             Alg::RSAES => Ok(Some(TpmtRsaScheme::Rsaes)),
@@ -1244,10 +1254,11 @@ impl<'a> Unmarshal<'a> for Option<TpmtRsaScheme> {
 /// Tagged RSA decrypt scheme structure specifying an RSA decryption scheme (`TPM_ALG_OAEP`, `TPM_ALG_RSAES`)
 /// and associated hash algorithm. Its selector is `TPMI_ALG_RSA_DECRYPT` (Section 11.2.4.4, Table 183),
 /// which returns `TPM_RC_VALUE` (`UnmarshalError::VALUE`) for unsupported scheme selectors.
+#[doc(alias = "TPMT_RSA_DECRYPT")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-#[cfg_attr(any(feature = "oaep", feature = "rsaes"), repr(u16))]
+#[cfg_attr(any(feature = "rsa", feature = "rsaes"), repr(u16))]
 pub enum TpmtRsaDecrypt {
-    #[cfg(feature = "oaep")]
+    #[cfg(feature = "rsa")]
     Oaep(TpmiAlgHash) = Alg::OAEP.tag(),
     #[cfg(feature = "rsaes")]
     Rsaes = Alg::RSAES.tag(),
@@ -1256,7 +1267,7 @@ pub enum TpmtRsaDecrypt {
 impl TpmtRsaDecrypt {
     pub const fn scheme(&self) -> Alg {
         match *self {
-            #[cfg(feature = "oaep")]
+            #[cfg(feature = "rsa")]
             Self::Oaep(_) => Alg::OAEP,
             #[cfg(feature = "rsaes")]
             Self::Rsaes => Alg::RSAES,
@@ -1265,7 +1276,7 @@ impl TpmtRsaDecrypt {
 
     pub const fn hash_alg(&self) -> Option<TpmiAlgHash> {
         match *self {
-            #[cfg(feature = "oaep")]
+            #[cfg(feature = "rsa")]
             Self::Oaep(h) => Some(h),
             #[cfg(feature = "rsaes")]
             Self::Rsaes => None,
@@ -1277,10 +1288,10 @@ impl Marshal for TpmtRsaDecrypt {
     const MAX_SIZE: usize = Alg::MAX_SIZE + TpmiAlgHash::MAX_SIZE;
     type MaxBuffer = [u8; Self::MAX_SIZE];
 
-    #[cfg_attr(not(any(feature = "oaep", feature = "rsaes")), allow(unused_variables))]
+    #[cfg_attr(not(any(feature = "rsa", feature = "rsaes")), allow(unused_variables))]
     fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
         match *self {
-            #[cfg(feature = "oaep")]
+            #[cfg(feature = "rsa")]
             Self::Oaep(ref x) => {
                 let count = marshal_helper(&Alg::OAEP, dst, 0);
                 marshal_helper(x, dst, count)
@@ -1295,7 +1306,7 @@ impl<'a> Unmarshal<'a> for TpmtRsaDecrypt {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         let selector = Alg::unmarshal(src)?;
         match selector {
-            #[cfg(feature = "oaep")]
+            #[cfg(feature = "rsa")]
             Alg::OAEP => Ok(Self::Oaep(Unmarshal::unmarshal(src)?)),
             #[cfg(feature = "rsaes")]
             Alg::RSAES => Ok(Self::Rsaes),
@@ -1321,7 +1332,7 @@ impl<'a> Unmarshal<'a> for Option<TpmtRsaDecrypt> {
         let selector = Alg::unmarshal(src)?;
         match selector {
             Alg::NULL => Ok(None),
-            #[cfg(feature = "oaep")]
+            #[cfg(feature = "rsa")]
             Alg::OAEP => Ok(Some(TpmtRsaDecrypt::Oaep(Unmarshal::unmarshal(src)?))),
             #[cfg(feature = "rsaes")]
             Alg::RSAES => Ok(Some(TpmtRsaDecrypt::Rsaes)),
@@ -1349,7 +1360,7 @@ pub enum TpmtEccScheme {
     Ecschnorr(TpmiAlgHash) = Alg::ECSCHNORR.tag(),
     Eddsa = Alg::EDDSA.tag(),
     HashEddsa = Alg::HASH_EDDSA.tag(),
-    #[cfg(feature = "ecdh")]
+    #[cfg(feature = "ecc")]
     Ecdh(TpmiAlgHash) = Alg::ECDH.tag(),
     #[cfg(feature = "ecmqv")]
     Ecmqv(TpmiAlgHash) = Alg::ECMQV.tag(),
@@ -1368,7 +1379,7 @@ impl TpmtEccScheme {
             Self::Ecschnorr(_) => Alg::ECSCHNORR,
             Self::Eddsa => Alg::EDDSA,
             Self::HashEddsa => Alg::HASH_EDDSA,
-            #[cfg(feature = "ecdh")]
+            #[cfg(feature = "ecc")]
             Self::Ecdh(_) => Alg::ECDH,
             #[cfg(feature = "ecmqv")]
             Self::Ecmqv(_) => Alg::ECMQV,
@@ -1383,7 +1394,7 @@ impl TpmtEccScheme {
             Self::Sm2(h) => Some(h),
             #[cfg(feature = "ecschnorr")]
             Self::Ecschnorr(h) => Some(h),
-            #[cfg(feature = "ecdh")]
+            #[cfg(feature = "ecc")]
             Self::Ecdh(h) => Some(h),
             #[cfg(feature = "ecmqv")]
             Self::Ecmqv(h) => Some(h),
@@ -1395,8 +1406,7 @@ impl TpmtEccScheme {
 }
 
 impl Marshal for TpmtEccScheme {
-    const MAX_SIZE: usize =
-        Alg::MAX_SIZE + max(&[TpmiAlgHash::MAX_SIZE, TpmsSchemeEcdaa::MAX_SIZE]);
+    const MAX_SIZE: usize = Alg::MAX_SIZE + max!(TpmiAlgHash::MAX_SIZE, TpmsSchemeEcdaa::MAX_SIZE);
     type MaxBuffer = [u8; Self::MAX_SIZE];
 
     fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
@@ -1414,8 +1424,7 @@ impl<'a> Unmarshal<'a> for TpmtEccScheme {
 }
 
 impl Marshal for Option<TpmtEccScheme> {
-    const MAX_SIZE: usize =
-        Alg::MAX_SIZE + max(&[TpmiAlgHash::MAX_SIZE, TpmsSchemeEcdaa::MAX_SIZE]);
+    const MAX_SIZE: usize = Alg::MAX_SIZE + max!(TpmiAlgHash::MAX_SIZE, TpmsSchemeEcdaa::MAX_SIZE);
     type MaxBuffer = [u8; Self::MAX_SIZE];
 
     fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
@@ -1442,7 +1451,7 @@ impl Marshal for Option<TpmtEccScheme> {
             }
             Some(TpmtEccScheme::Eddsa) => marshal_helper(&Alg::EDDSA, dst, 0),
             Some(TpmtEccScheme::HashEddsa) => marshal_helper(&Alg::HASH_EDDSA, dst, 0),
-            #[cfg(feature = "ecdh")]
+            #[cfg(feature = "ecc")]
             Some(TpmtEccScheme::Ecdh(x)) => {
                 let count = marshal_helper(&Alg::ECDH, dst, 0);
                 marshal_helper(x, dst, count)
@@ -1472,9 +1481,9 @@ impl<'a> Unmarshal<'a> for Option<TpmtEccScheme> {
             Alg::ECSCHNORR => Ok(Some(TpmtEccScheme::Ecschnorr(Unmarshal::unmarshal(src)?))),
             #[cfg(feature = "eddsa")]
             Alg::EDDSA => Ok(Some(TpmtEccScheme::Eddsa)),
-            #[cfg(feature = "eddsa")]
+            #[cfg(feature = "hash_eddsa")]
             Alg::HASH_EDDSA => Ok(Some(TpmtEccScheme::HashEddsa)),
-            #[cfg(feature = "ecdh")]
+            #[cfg(feature = "ecc")]
             Alg::ECDH => Ok(Some(TpmtEccScheme::Ecdh(Unmarshal::unmarshal(src)?))),
             #[cfg(feature = "ecmqv")]
             Alg::ECMQV => Ok(Some(TpmtEccScheme::Ecmqv(Unmarshal::unmarshal(src)?))),
@@ -1492,7 +1501,7 @@ impl TryFrom<TpmtRsaScheme> for TpmtSigScheme {
             TpmtRsaScheme::Rsapss(s) => Ok(Self::Rsapss(s)),
             #[cfg(feature = "rsassa")]
             TpmtRsaScheme::Rsassa(s) => Ok(Self::Rsassa(s)),
-            #[cfg(feature = "oaep")]
+            #[cfg(feature = "rsa")]
             TpmtRsaScheme::Oaep(_) => Err(()),
             #[cfg(feature = "rsaes")]
             TpmtRsaScheme::Rsaes => Err(()),
@@ -1515,7 +1524,7 @@ impl TryFrom<TpmtEccScheme> for TpmtSigScheme {
             TpmtEccScheme::Ecschnorr(s) => Ok(Self::Ecschnorr(s)),
             TpmtEccScheme::Eddsa => Ok(Self::Eddsa),
             TpmtEccScheme::HashEddsa => Ok(Self::HashEddsa),
-            #[cfg(feature = "ecdh")]
+            #[cfg(feature = "ecc")]
             TpmtEccScheme::Ecdh(_) => Err(()),
             #[cfg(feature = "ecmqv")]
             TpmtEccScheme::Ecmqv(_) => Err(()),
@@ -1526,6 +1535,7 @@ impl TryFrom<TpmtEccScheme> for TpmtSigScheme {
 /// `TPMT_KDF_SCHEME` structure defined in TPM 2.0 Part 2: Structures, Section 11.1.11 (Table 177).
 ///
 /// Tagged KDF scheme structure specifying a key derivation function algorithm and associated hash algorithm.
+#[doc(alias = "TPMT_KDF_SCHEME")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(u16)]
 pub enum TpmtKdfScheme {
@@ -1645,14 +1655,14 @@ pub enum TpmtPublicParms {
 
 impl TpmtPublicParms {
     pub const MAX_SHARED_SECRET_BYTES: usize = TpmEccCurve::MAX_ECC_KEY_BYTES;
-    pub const MAX_KEM_CIPHERTEXT_BYTES: usize = max(&[
+    pub const MAX_KEM_CIPHERTEXT_BYTES: usize = max!(
         TpmsEccPoint::MAX_SIZE,
         crate::constants::TPM2_MAX_MLKEM_CT_SIZE,
-    ]);
+    );
     /// `sizeof(TPMU_ENCRYPTED_SECRET)`: "ecc\[sizeof(TPMS_ECC_POINT)\]", "rsa\[MAX_RSA_KEY_BYTES\]",
     /// "symmetric\[sizeof(TPM2B_DIGEST)\]", "keyedHash\[sizeof(TPM2B_DIGEST)\]" and, with the
     /// `mlkem` Cargo feature, "mlkem\[MAX_MLKEM_CT_SIZE\]".
-    pub const MAX_ENCRYPTED_SECRET_BYTES: usize = max(&[
+    pub const MAX_ENCRYPTED_SECRET_BYTES: usize = max!(
         TpmsEccPoint::MAX_SIZE,
         crate::constants::TPM2_MAX_RSA_KEY_BYTES as usize,
         Tpm2bDigest::MAX_SIZE,
@@ -1661,7 +1671,7 @@ impl TpmtPublicParms {
         } else {
             0
         },
-    ]);
+    );
 
     #[doc(alias = "TPMI_ALG_PUBLIC")]
     pub const fn algorithm(self) -> Alg {
@@ -1679,7 +1689,7 @@ impl TpmtPublicParms {
 
 impl Marshal for TpmtPublicParms {
     const MAX_SIZE: usize = Alg::MAX_SIZE
-        + max(&[
+        + max!(
             <Option<TpmtKeyedHashScheme>>::MAX_SIZE,
             TpmtSymDefObject::MAX_SIZE,
             TpmsRsaParms::MAX_SIZE,
@@ -1687,7 +1697,7 @@ impl Marshal for TpmtPublicParms {
             TpmsMldsaParms::MAX_SIZE,
             TpmsHashMldsaParms::MAX_SIZE,
             TpmsMlkemParms::MAX_SIZE,
-        ]);
+        );
     type MaxBuffer = [u8; Self::MAX_SIZE];
 
     fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
@@ -1742,12 +1752,6 @@ impl<'a> Unmarshal<'a> for TpmtPublicParms {
             Alg::MLKEM => Ok(Self::Mlkem(Unmarshal::unmarshal(src)?)),
             _ => Err(UnmarshalError::TYPE),
         }
-    }
-}
-
-impl Default for TpmtPublicParms {
-    fn default() -> Self {
-        Self::KeyedHash(None)
     }
 }
 
@@ -1836,12 +1840,6 @@ impl<'a> Unmarshal<'a> for TpmtTkCreation<'a> {
         let hierarchy = TpmiRhHierarchy::unmarshal(src)?.0;
         let digest = Tpm2bDigest::unmarshal(src)?;
         Ok(Self::Creation(hierarchy, digest))
-    }
-}
-
-impl Default for TpmtTkCreation<'_> {
-    fn default() -> Self {
-        Self::Creation(Handle::RH_NULL, Tpm2bDigest::default())
     }
 }
 
@@ -2057,12 +2055,6 @@ impl<'a> Unmarshal<'a> for TpmtTkVerified<'a> {
     }
 }
 
-impl Default for TpmtTkVerified<'_> {
-    fn default() -> Self {
-        Self::Verified(Handle::RH_NULL, Tpm2bDigest::default())
-    }
-}
-
 /// `TPMT_TK_HASHCHECK` structure defined in TPM 2.0 Part 2: Structures, Section 10.4.8 (Table 107).
 ///
 /// Hash check ticket produced by `TPM2_Hash` or `TPM2_SequenceComplete` proving that a hash digest was computed by the TPM.
@@ -2134,16 +2126,11 @@ impl<'a> Unmarshal<'a> for TpmtTkHashcheck<'a> {
     }
 }
 
-impl Default for TpmtTkHashcheck<'_> {
-    fn default() -> Self {
-        Self::Hashcheck(Handle::RH_NULL, Tpm2bDigest::default())
-    }
-}
-
 /// `TPMT_PUBLIC` structure defined in TPM 2.0 Part 2: Structures, Section 12.2.4 (Table 211).
 ///
 /// Defines the public area of a TPM object (object type, name algorithm, object attributes, auth policy, parameters, and public key data).
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[doc(alias = "TPMT_PUBLIC")]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct TpmtPublic<'a> {
     pub name_alg: Option<TpmiAlgHash>,
     pub object_attributes: TpmaObject,
@@ -2249,6 +2236,7 @@ impl<'a> Unmarshal<'a> for TpmtPublic<'a> {
 /// `TPMT_SENSITIVE` structure defined in TPM 2.0 Part 2: Structures, Section 12.2.5 (Table 216).
 ///
 /// Defines the sensitive/private area of a TPM object (sensitive type, auth value, seed value, and private key composite).
+#[doc(alias = "TPMT_SENSITIVE")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct TpmtSensitive<'a> {
     pub auth_value: Tpm2bAuth<'a>,

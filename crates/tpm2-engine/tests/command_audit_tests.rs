@@ -40,10 +40,11 @@ fn test_get_command_audit_digest_with_zeroed_audit_hash_alg() {
             TpmsRsaParms {
                 symmetric: None,
                 scheme: None,
-                key_bits: tpm2::TpmiRsaKeyBits(2048),
+                key_bits: tpm2::TpmiRsaKeyBits::Rsa2048,
                 exponent: 0,
             },
-            Tpm2bPublicKeyRsa::default(),
+            // The crypto backend loads the key from its modulus, so it must not be empty.
+            Tpm2bPublicKeyRsa::from_bytes(&[0xcc; 256]).unwrap(),
         ),
     };
     let obj = TransientObject {
@@ -55,8 +56,9 @@ fn test_get_command_audit_digest_with_zeroed_audit_hash_alg() {
         name: (Tpm2bName::default()).into(),
         auth: (Tpm2bAuth::default()).into(),
         public: public.into(),
+        // The private key of an RSA object is its prime p (half the modulus).
         private: [0xcc; tpm2_engine::handler::MAX_PRIVATE_KEY_SIZE],
-        private_len: 256,
+        private_len: 128,
         qualified_name: (Tpm2bName::default()).into(),
         hierarchy: 0x40000001,
         st_clear: false,

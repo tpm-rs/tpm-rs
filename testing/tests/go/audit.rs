@@ -1,5 +1,6 @@
 // Ported from go-tpm/tpm2/test/audit_test.go
 
+use crate::_common::ClientCrypto;
 use crate::_common::Connection;
 use crate::test_utils::{
     ActiveSession, CmdHeader, RespHandles, RespHeader, flush_context, leak_bytes,
@@ -20,7 +21,6 @@ use tpm2::{
     TpmiStCommandTag, TpmsAuthCommand, TpmsAuthResponse, TpmsEccParms, TpmsEccPoint, TpmsRsaParms,
     TpmsSensitiveCreate, TpmtEccScheme, TpmtPublic, TpmtSigScheme,
 };
-use tpm2_platform_linux::PlatformCryptoProvider;
 
 // =========================================================================
 // Mixed-session command execution (mirrors go-tpm session handling)
@@ -43,8 +43,7 @@ pub(crate) enum SessionAuth<'a> {
 }
 
 fn hash_parts(alg: TpmiAlgHash, parts: &[&[u8]]) -> Vec<u8> {
-    let crypto = PlatformCryptoProvider;
-    let mut state = tpm2::crypto::HashStream::new(&crypto, alg).unwrap();
+    let mut state = tpm2::crypto::HashContext::<ClientCrypto>::new(alg).unwrap();
     for part in parts {
         state.update(part).unwrap();
     }
@@ -53,8 +52,7 @@ fn hash_parts(alg: TpmiAlgHash, parts: &[&[u8]]) -> Vec<u8> {
 }
 
 fn hmac_parts(alg: TpmiAlgHash, key: &[u8], parts: &[&[u8]]) -> Vec<u8> {
-    let crypto = PlatformCryptoProvider;
-    let mut state = tpm2::crypto::HmacStream::new(&crypto, alg, key).unwrap();
+    let mut state = tpm2::crypto::HmacContext::<ClientCrypto>::new(alg, key).unwrap();
     for part in parts {
         state.update(part).unwrap();
     }
@@ -441,7 +439,9 @@ fn create_ak_ecc(sim: &mut Tpm, auth: &[u8]) -> (Handle, Tpm2bName<'static>) {
             data: Tpm2bSensitiveData::default(),
         }),
         in_public: tpm2::Tpm2b(public_area),
-        ..Default::default()
+        primary_handle: Default::default(),
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     let rsp = create_primary_pw(sim, Handle::RH_OWNER, &create_cmd)
         .expect("could not generate AK ECC key");
@@ -465,7 +465,7 @@ fn create_certifiable_key_rsa(sim: &mut Tpm) -> (Handle, Tpm2bName<'static>) {
             TpmsRsaParms {
                 symmetric: None,
                 scheme: None,
-                key_bits: TpmiRsaKeyBits(2048),
+                key_bits: TpmiRsaKeyBits::Rsa2048,
                 exponent: 0,
             },
             Tpm2bPublicKeyRsa::default(),
@@ -477,7 +477,9 @@ fn create_certifiable_key_rsa(sim: &mut Tpm) -> (Handle, Tpm2bName<'static>) {
             data: Tpm2bSensitiveData::default(),
         }),
         in_public: tpm2::Tpm2b(public_area),
-        ..Default::default()
+        primary_handle: Default::default(),
+        outside_info: Default::default(),
+        creation_pcr: Default::default(),
     };
     let rsp = create_primary_pw(sim, Handle::RH_OWNER, &create_cmd)
         .expect("could not generate RSA key to certify");

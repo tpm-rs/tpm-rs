@@ -250,7 +250,7 @@ fn hash_mldsa_signature_authorizes() {
     let signature = mldsa_client_sign_mu(parameter_set, &seed, &mu);
     let auth = TpmtSignature::HashMldsa(TpmsSignatureHashMldsa {
         hash: hash_alg,
-        sig: Tpm2bSignatureMldsa::from_bytes(leak_bytes(&signature)).unwrap(),
+        signature: Tpm2bSignatureMldsa::from_bytes(leak_bytes(&signature)).unwrap(),
     });
     policy_signed_ml(&mut sim, key, &session, 0, auth).unwrap();
     let auth_name = read_public_name(&mut sim, key);

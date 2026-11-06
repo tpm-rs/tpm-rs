@@ -1,5 +1,6 @@
 //! TPM2_PCR_SetAuthPolicy and TPM2_PCR_SetAuthValue: PCR groups and authorization of PCR changes.
 
+use crate::_common::ClientCrypto;
 use crate::_common::{mssim_rc_of as rc_of, rc_at_locality as rc_at, *};
 use testing::tpm::Tpm;
 use tpm2::errors::TpmRc;
@@ -75,7 +76,7 @@ fn set_auth_policy_cleared_by_change_pps() {
 
     // 3. Execute valid TPM2_PCR_SetAuthPolicy on PCR 20 -> should succeed
     // authPolicy = SHA256(0^32 || TPM_CC_PolicyAuthValue), the PolicyPassword digest.
-    let mut state = tpm2::crypto::HashStream::new(CLIENT_CRYPTO, TpmiAlgHash::Sha256).unwrap();
+    let mut state = tpm2::crypto::HashContext::<ClientCrypto>::new(TpmiAlgHash::Sha256).unwrap();
     state.update(&[0u8; 32]).unwrap();
     state
         .update(&TpmCc::PolicyAuthValue.code().to_be_bytes())
