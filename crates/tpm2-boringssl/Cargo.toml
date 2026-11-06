@@ -1,0 +1,20 @@
+[package]
+name = "tpm2-boringssl"
+description = "BoringSSL cryptography backend for tpm2"
+
+# Inherit from Workspace Settings
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+tpm2.workspace = true
+# BoringSSL's `bssl-sys` crate. The crates.io release is a placeholder: users
+# replace it with BoringSSL's own `bssl-sys` with `[patch.crates-io]`, so every
+# crate in their build shares one BoringSSL. See README.md.
+bssl-sys = "0.1.0"
