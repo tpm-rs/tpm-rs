@@ -16,8 +16,7 @@
 //! | [`PCR_ALLOCATION_HANDLE`] `0x00FF_FFFD` | [`NvPcrAllocationRecord`] | the PCR allocation of the last `TPM2_PCR_Allocate`, applied at the next `_TPM_Init` |
 //! | [`PLATFORM_SETTINGS_HANDLE`] `0x00FF_FFFC` | [`NvPlatformSettingsRecord`] | `gp.ppList` and `gp.algorithmSet` |
 //!
-//! Every layout is defined only here: the engine reads and writes NV through these records, and
-//! `persistence` uses them to load the NV-synced state from a restored NV image.
+//! Every layout is defined only here: the engine reads and writes NV through these records.
 
 use crate::act::{ACT_COUNT, ActPolicy};
 use crate::command_audit::COMMAND_AUDIT_LIST_SIZE;

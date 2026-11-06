@@ -6,15 +6,13 @@
 //! [`Nv::index`]), the firmware identity, the secure transport layer and the immutable
 //! platform [`Info`]. The platform also decides how the NV data reaches external storage
 //! ([`Platform::load_nv`], [`Platform::store_nv`]) and how the runtime state is serialized
-//! for migration (`Platform::serialize`, `Platform::deserialize`, with the `persistence`
-//! feature). The component interfaces themselves ([`crate::storage::NvStorage`], [`TpmTimer`],
+//! for migration ([`Platform::serialize`], [`Platform::deserialize`]). The component interfaces themselves ([`crate::storage::NvStorage`], [`TpmTimer`],
 //! [`TpmFirmware`], [`SecureChannel`]) live in [`tpm2::platform`].
 //!
 //! Every platform crate defines its own platform type implementing [`Platform`] (e.g.
 //! `tpm2_platform_linux::LinuxPlatform`) and builds a [`TpmEngine`](crate::TpmEngine) over it.
 
 use crate::state::Nv;
-#[cfg(feature = "persistence")]
 use crate::state::State;
 use crate::storage::IndexState;
 use crate::timer::TpmTimer;
@@ -70,7 +68,7 @@ impl Default for Info {
 /// engine is monomorphized over them), the immutable platform [`Info`] and the
 /// customizations of how the TPM state reaches storage: loading and storing the NV data
 /// ([`Platform::load_nv`], [`Platform::store_nv`]) and serializing the runtime state
-/// (`Platform::serialize`, `Platform::deserialize`, with the `persistence` feature).
+/// ([`Platform::serialize`], [`Platform::deserialize`]).
 pub trait Platform: Sized {
     /// Cryptography backend ([`Crypto`]). The backend's interfaces are static (its algorithms
     /// are associated types); the platform only selects it.
@@ -138,33 +136,60 @@ pub trait Platform: Sized {
     }
 
     /// Serializes the runtime state `state` (with its NV data) into `out`, for migrating the
-    /// TPM, and returns the number of octets written. The default is the compact binary
-    /// encoding of [`crate::persistence::try_serialize_to_slice`], relative to the current
-    /// reading of the platform timer.
-    #[cfg(feature = "persistence")]
-    fn serialize(
-        &self,
-        state: &State<Self>,
-        out: &mut [u8],
-    ) -> Result<usize, crate::persistence::SerializeError> {
-        crate::persistence::try_serialize_to_slice(state, self.timer().timer_read(), out)
+    /// TPM, and returns the number of octets written. The format is the platform's.
+    ///
+    /// # Panics
+    /// The default implementation panics: a platform that migrates the TPM implements it.
+    fn serialize(&self, state: &State<Self>, out: &mut [u8]) -> Result<usize, SerializeError> {
+        let _ = (state, out);
+        unimplemented!("Platform::serialize is not implemented by this platform")
     }
 
     /// Restores the runtime state `state` (with its NV data) from `data`, written by
-    /// [`Platform::serialize`] (possibly on another platform). The default
-    /// ([`crate::persistence::try_deserialize_from_slice`]) rebases the platform time on the
-    /// current reading of the platform timer and recomputes the Names of the loaded objects
-    /// with the crypto backend; a rejected state leaves `state` unchanged.
-    #[cfg(feature = "persistence")]
-    fn deserialize(
-        &self,
-        data: &[u8],
-        state: &mut State<Self>,
-    ) -> Result<(), crate::persistence::DeserializeError> {
-        crate::persistence::try_deserialize_from_slice::<Self::Crypto, Self>(
-            data,
-            state,
-            self.timer().timer_read(),
-        )
+    /// [`Platform::serialize`] (possibly on another platform). A rejected state must leave
+    /// `state` unchanged.
+    ///
+    /// # Panics
+    /// The default implementation panics: a platform that migrates the TPM implements it.
+    fn deserialize(&self, data: &[u8], state: &mut State<Self>) -> Result<(), DeserializeError> {
+        let _ = (data, state);
+        unimplemented!("Platform::deserialize is not implemented by this platform")
     }
 }
+
+/// Error of [`Platform::serialize`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SerializeError {
+    /// The serialized state does not fit the output buffer.
+    BufferTooSmall,
+    /// The state cannot be serialized (e.g. it is inconsistent or cannot be read).
+    InvalidState,
+}
+
+impl core::fmt::Display for SerializeError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(match self {
+            Self::BufferTooSmall => "the serialized TPM state does not fit the buffer",
+            Self::InvalidState => "the TPM state cannot be serialized",
+        })
+    }
+}
+
+impl core::error::Error for SerializeError {}
+
+/// Error of [`Platform::deserialize`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeserializeError {
+    /// The data is not a valid serialized state.
+    InvalidData,
+}
+
+impl core::fmt::Display for DeserializeError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(match self {
+            Self::InvalidData => "the data is not a valid serialized TPM state",
+        })
+    }
+}
+
+impl core::error::Error for DeserializeError {}

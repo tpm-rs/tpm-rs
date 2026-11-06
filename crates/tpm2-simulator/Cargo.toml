@@ -24,8 +24,6 @@ sha512 = ["tpm2/sha512", "tpm2-engine/sha512", "tpm2-platform-linux/sha512"]
 # The vendor-specific permanent authorization handle `TPM_RH_AUTH_00` (`tpm2-engine`'s
 # `vendor-permanent-auth`, on by default).
 vendor-permanent-auth = ["tpm2-engine/vendor-permanent-auth"]
-# `Simulator::save_persisted_state`/`restore_persisted_state` (`tpm2-engine`'s `persistence`).
-persistence = ["tpm2-engine/persistence"]
 rust = ["tpm2-platform-linux/rust"]
 crux = ["tpm2-platform-linux/crux"]
 bssl = ["tpm2-platform-linux/bssl"]

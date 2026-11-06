@@ -1,5 +1,7 @@
 # Live Migration between `tpm-rs` and `ibmswtpm2` v974
 
+> **Note:** the `tpm2-engine` `persistence` module (`PersistedTpmState`) this document refers to has been removed; the runtime state is now serialized by the platform (`Platform::serialize`/`deserialize`). The differences between the two TPMs listed here still apply to any converter.
+
 This document is for whoever writes a converter between `tpm-rs`'s persisted state and the state of the google3 `ibmswtpm2` (v974, `third_party/ibmswtpm2/files/src/`, saved by the vTPM serializer as its globals plus the `s_NV` image), so that a running TPM can be live-migrated in either direction. It lists the differences between the two TPMs that **no converter can bridge** (D1-D8), the features only one side has, when each of them is harmless, and what a converter must check before it migrates.
 
 Paths are relative to the repository (`crates/...`) or, for v974, to google3 (`third_party/ibmswtpm2/files/src/...`).

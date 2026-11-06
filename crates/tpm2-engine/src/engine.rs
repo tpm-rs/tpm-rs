@@ -2029,6 +2029,23 @@ impl<P: Platform> TpmEngine<P> {
         crate::act::act_index(handle).is_some_and(|index| self.state.act.counters[index].signaled)
     }
 
+    /// Serializes the runtime state of the TPM ([`State`] with its NV data) into `out` with
+    /// the platform's serialization ([`Platform::serialize`]) and returns the number of octets
+    /// written.
+    pub fn serialize_state(&self, out: &mut [u8]) -> Result<usize, crate::SerializeError> {
+        self.platform.serialize(&self.state, out)
+    }
+
+    /// Restores the runtime state of the TPM ([`State`] with its NV data) from `data`, written
+    /// by [`Self::serialize_state`] (possibly on another platform), with the platform's
+    /// deserialization ([`Platform::deserialize`]); the NV data is then synced
+    /// ([`Platform::store_nv`]).
+    pub fn deserialize_state(&mut self, data: &[u8]) -> Result<(), crate::DeserializeError> {
+        self.platform.deserialize(data, &mut self.state)?;
+        self.platform.store_nv(&self.state.nv);
+        Ok(())
+    }
+
     /// Processes the TPM command `cmd_buf` and writes its response to `resp_buf`, returning the
     /// size of the response, or the response code of a command that fails before its response
     /// is written. The NV data is then synced to external storage ([`Platform::store_nv`]).

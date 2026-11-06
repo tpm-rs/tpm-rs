@@ -18,13 +18,7 @@ pub struct Args {
 
 use tpm2::Connection;
 use tpm2::commands::Command;
-#[cfg(feature = "persistence")]
-use tpm2::platform::firmware::TpmFirmware;
 use tpm2::platform::{SimulatedFirmware, SimulatedSecureChannel};
-#[cfg(feature = "persistence")]
-use tpm2_engine::persistence::{
-    DeserializeError, PersistedPlatformState, PersistedTpmState, SerializeError,
-};
 use tpm2_engine::{InternalError, TpmEngine};
 pub use tpm2_engine::{NO_STREAM, PlatformConnection, SimulatorPlatformSignal};
 use tpm2_platform_linux::{
@@ -525,52 +519,6 @@ impl PlatformConnection for Simulator<'_> {
         stream: &mut S,
     ) -> anyhow::Result<bool> {
         self.handle_regular_command_raw(command, stream)
-    }
-}
-
-/// Persistence of the complete simulated TPM (see [`tpm2_engine::persistence`]): the engine's
-/// state plus the platform state that only the simulator keeps.
-#[cfg(feature = "persistence")]
-impl Simulator<'_> {
-    /// Extracts the complete state of the simulated TPM into `persisted`: the engine's state
-    /// (its `State`, NV storage and self-test state) and the simulator's platform state
-    /// ([`PersistedPlatformState`]: the installed firmware image). Like the vTPM's Serialize, it
-    /// is meant to be called between commands of a powered-on simulator with NV enabled; power
-    /// and NV availability are not saved.
-    pub fn save_persisted_state(
-        &self,
-        persisted: &mut PersistedTpmState,
-    ) -> Result<(), SerializeError> {
-        self.context.save_persisted_state(persisted)?;
-        persisted.platform = Some(PersistedPlatformState {
-            firmware_hash: self.firmware.firmware_hash(),
-            firmware_svn: self.firmware.firmware_svn(),
-        });
-        Ok(())
-    }
-
-    /// Restores the complete state of the simulated TPM from `persisted` (e.g. on the target of
-    /// a live migration). The platform state is required
-    /// ([`PersistedTpmState::platform`]); a firmware SVN above the maximum SVN is rejected.
-    /// The restored simulator is powered on with NV enabled. A rejected state leaves the
-    /// simulator unchanged.
-    pub fn restore_persisted_state(
-        &mut self,
-        persisted: &PersistedTpmState,
-    ) -> Result<(), DeserializeError> {
-        let platform = persisted
-            .platform
-            .ok_or(DeserializeError::MissingField("platform"))?;
-        if platform.firmware_svn > self.firmware.firmware_max_svn() {
-            return Err(DeserializeError::InvalidValue("firmware_svn"));
-        }
-        self.context.restore_persisted_state(persisted)?;
-        self.is_power_on = true;
-        self.is_nv_on = true;
-        self.context.set_nv_available(true);
-        self.firmware.set_firmware_hash(platform.firmware_hash);
-        self.firmware.set_firmware_svn(platform.firmware_svn);
-        Ok(())
     }
 }
 
