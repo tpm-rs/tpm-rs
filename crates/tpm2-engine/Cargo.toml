@@ -122,11 +122,6 @@ fixed-size-context = []
 sec-channel = ["cc-policy-transport-spdm"]
 # The command `TPM2_PolicyTransportSPDM()`. Implies `sec-channel`.
 cc-policy-transport-spdm = ["sec-channel"]
-# The Nuvoton vendor commands `NTC2_PreConfig`, `NTC2_LockPreConfig` and
-# `NTC2_GetConfig` (`CC_VEND + 0x211..=0x213`, not in the TPM 2.0 specification)
-# as emulated by `ibmswtpm2` (built with `TPM_NUVOTON`), in addition to
-# `TPM2_Vendor_TCG_Test` (default: only `TPM2_Vendor_TCG_Test`).
-ntc2-vendor-commands = []
 # The command `TPM2_PolicyCapability` (TPM 2.0 Part 3, an immediate policy
 # assertion on the value of one TPM capability property).
 cc-policy-capability = []

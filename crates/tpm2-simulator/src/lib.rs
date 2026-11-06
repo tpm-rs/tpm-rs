@@ -154,6 +154,7 @@ impl<'a> Simulator<'a> {
         let platform = &mut self.context.platform;
         *platform.timer = timer;
         *platform.rng = platform_rng;
+        platform.reset_vendor_state();
         *self.context.state.nv.index = RamStorageMock::new();
         // The firmware of a new simulator (`SimulatedFirmware::default`).
         self.firmware

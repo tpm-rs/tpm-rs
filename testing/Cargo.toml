@@ -236,7 +236,7 @@ target-ibmswtpm2 = [
     "tpm2-engine/max-context-size-2680",
     "tpm2-engine/min-evict-objects-7",
     "tpm2-engine/nv-memory-size-32k",
-    "tpm2-engine/ntc2-vendor-commands",
+    "tpm2-platform-linux/ntc2-vendor-commands",
     "tpm2-engine/act-a",
     "cc-policy-capability",
     "cc-policy-parameters",

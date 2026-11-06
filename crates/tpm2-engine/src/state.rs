@@ -141,13 +141,6 @@ pub struct State<P: Platform> {
     /// The Authenticated Countdown Timers (counters, policies, the state saved by
     /// `TPM2_Shutdown(TPM_SU_STATE)` and the tick bookkeeping).
     pub act: crate::act::ActState,
-    /// The Nuvoton configuration of the `NTC2_*` vendor commands (`ntc2state` of
-    /// `ibmswtpm2`'s `ntc2.c`). As in `ibmswtpm2`, it lives in RAM only ("This emulation does
-    /// not store the configuration in NV memory"): it starts at
-    /// [`crate::handler::vendor::NTC2_INITIAL_CONFIG`] when the TPM is created and is kept
-    /// across `_TPM_Init` (power cycles, TPM Reset/Restart/Resume), but not in NV.
-    #[cfg(feature = "ntc2-vendor-commands")]
-    pub ntc2_config: tpm2::commands::Ntc2CfgStruct,
     /// Whether Physical Presence is asserted (`_plat__PhysicalPresenceAsserted()`), a platform
     /// input (the simulator's `PhysicalPresenceOn`/`Off` signals). The platform keeps it across
     /// `_TPM_Init`; `false` when the TPM is created.
@@ -419,8 +412,6 @@ impl<P: Platform> State<P> {
             command_audit_cp_hash: None,
             command_audit_alg_changed: false,
             act: crate::act::ActState::default(),
-            #[cfg(feature = "ntc2-vendor-commands")]
-            ntc2_config: crate::handler::vendor::NTC2_INITIAL_CONFIG,
             physical_presence: false,
             nv: Nv::new(index),
         }
@@ -469,10 +460,6 @@ impl<P: Platform> State<P> {
         self.command_audit_cp_hash = None;
         self.command_audit_alg_changed = false;
         self.act = crate::act::ActState::default();
-        #[cfg(feature = "ntc2-vendor-commands")]
-        {
-            self.ntc2_config = crate::handler::vendor::NTC2_INITIAL_CONFIG;
-        }
         self.physical_presence = false;
         self.nv.persistent = PersistentState::default();
         self.nv.orderly = OrderlyState::default();

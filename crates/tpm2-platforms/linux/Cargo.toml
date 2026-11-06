@@ -29,4 +29,9 @@ bssl = ["dep:tpm2-crypto-bssl"]
 # TPMs (`LinuxRng::reference`, `LinuxTimer::new_virtual`, `VirtualClock`) and
 # enable `tpm2-engine`'s linked C code of their DRBG, for differential testing.
 reference-rng = ["tpm2-engine/reference-rng"]
+# The Nuvoton vendor commands `NTC2_PreConfig`, `NTC2_LockPreConfig` and
+# `NTC2_GetConfig` (`CC_VEND + 0x211..=0x213`, not in the TPM 2.0 specification) as
+# emulated by `ibmswtpm2` (built with `TPM_NUVOTON`), implemented by `LinuxPlatform` as
+# platform vendor commands (`tpm2_engine::Platform::vendor_commands`).
+ntc2-vendor-commands = []
 

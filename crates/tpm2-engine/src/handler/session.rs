@@ -542,7 +542,7 @@ impl<'b, P: Platform> CommandHandler<'b, P> {
 
         // 3. The code must be implemented (`TPM_RCS_POLICY_CC + RC_PolicyCommandCode_code`).
         //    Checked after the command code conflict, as in C `TPM2_PolicyCommandCode`.
-        if !crate::engine::is_command_supported(cmd.code) {
+        if !self.context.implemented_commands().is_supported(cmd.code) {
             return Err(TpmRc::POLICY_CC.with(Position::parameter(1)));
         }
 

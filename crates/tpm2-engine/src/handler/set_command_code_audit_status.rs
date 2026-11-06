@@ -98,11 +98,13 @@ impl<'b, P: Platform> CommandHandler<'b, P> {
             }
             _ => {
                 let mut changed = false;
+                let commands = self.context.implemented_commands();
+                let audit_commands = &mut self.context.state.nv.persistent.audit_commands;
                 for &cc in cmd.set_list.as_slice() {
-                    changed |= self.context.state.nv.persistent.audit_commands.set(cc);
+                    changed |= audit_commands.set(cc, &commands);
                 }
                 for &cc in cmd.clear_list.as_slice() {
-                    changed |= self.context.state.nv.persistent.audit_commands.clear(cc);
+                    changed |= audit_commands.clear(cc, &commands);
                 }
                 if changed {
                     // NV_SYNC_PERSISTENT(auditCommands)

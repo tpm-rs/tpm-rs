@@ -25,7 +25,7 @@
 
 use crate::Platform;
 use crate::State;
-use crate::engine::{TpmEngine, VENDOR_COMMANDS, command_resp_handles_size, is_command_supported};
+use crate::engine::{ImplementedCommands, TpmEngine, command_resp_handles_size};
 use crate::owned::OwnedDigest;
 #[cfg(test)]
 use crate::storage::nv::{AUDIT_EXT_LEN, AUDIT_EXT_MARKER};
@@ -38,8 +38,8 @@ const AUDIT_CC_FIRST: u32 = 0x0000_011F;
 
 /// Bit of the first vendor command in the audit bitmap: as in the reference's (uncompressed)
 /// command table, the vendor commands follow the slots of every library command code
-/// `TPM_CC_FIRST..=TPM_CC_LAST`, so bit `LIBRARY_COMMAND_SLOTS + i` belongs to
-/// `VENDOR_COMMANDS[i]`.
+/// `TPM_CC_FIRST..=TPM_CC_LAST`, so bit `LIBRARY_COMMAND_SLOTS + i` belongs to the `i`-th
+/// vendor command of the TPM ([`ImplementedCommands::vendor`]).
 const LIBRARY_COMMAND_SLOTS: usize = (TpmCc::LAST.code() - AUDIT_CC_FIRST + 1) as usize;
 
 /// Size in bytes of the persistent audit bitmap ([`CommandAuditList::as_bytes`]). It covers the
@@ -47,7 +47,9 @@ const LIBRARY_COMMAND_SLOTS: usize = (TpmCc::LAST.code() - AUDIT_CC_FIRST + 1) a
 /// `LIBRARY_COMMAND_SLOTS`), which includes every command this TPM implements.
 pub const COMMAND_AUDIT_LIST_SIZE: usize = 24;
 
-const _: () = assert!(LIBRARY_COMMAND_SLOTS + VENDOR_COMMANDS.len() <= COMMAND_AUDIT_LIST_SIZE * 8);
+const _: () = assert!(
+    LIBRARY_COMMAND_SLOTS + crate::engine::MAX_VENDOR_COMMANDS <= COMMAND_AUDIT_LIST_SIZE * 8
+);
 
 /// The set of audited commands (`gp.auditCommands`).
 ///
@@ -73,18 +75,21 @@ impl CommandAuditList {
         let mut list = Self {
             bits: [0; COMMAND_AUDIT_LIST_SIZE],
         };
-        list.set(TpmCc::SetCommandCodeAuditStatus);
+        list.set(
+            TpmCc::SetCommandCodeAuditStatus,
+            &ImplementedCommands::BUILTIN,
+        );
         list
     }
 
     /// Returns the bit position of `cc`, or `None` if `cc` is not an implemented command (or
     /// lies outside the range covered by the bitmap).
-    fn bit_index(cc: TpmCc) -> Option<usize> {
-        if !is_command_supported(cc) {
+    fn bit_index(cc: TpmCc, commands: &ImplementedCommands) -> Option<usize> {
+        if !commands.is_supported(cc) {
             return None;
         }
         if cc.is_vendor() {
-            let position = VENDOR_COMMANDS.iter().position(|&v| v == cc)?;
+            let position = commands.vendor().iter().position(|&v| v == cc)?;
             return Some(LIBRARY_COMMAND_SLOTS + position);
         }
         let index = cc.code().checked_sub(AUDIT_CC_FIRST)? as usize;
@@ -93,27 +98,31 @@ impl CommandAuditList {
 
     /// Returns the command of bit `index` of the bitmap (the inverse of [`Self::bit_index`]
     /// for implemented commands).
-    fn command_of_bit(index: usize) -> Option<TpmCc> {
+    fn command_of_bit(index: usize, commands: &ImplementedCommands) -> Option<TpmCc> {
         if index < LIBRARY_COMMAND_SLOTS {
             Some(TpmCc::new(AUDIT_CC_FIRST + index as u32))
         } else {
-            VENDOR_COMMANDS.get(index - LIBRARY_COMMAND_SLOTS).copied()
+            commands
+                .vendor()
+                .get(index - LIBRARY_COMMAND_SLOTS)
+                .copied()
         }
     }
 
     /// Returns whether `cc` is audited (`CommandAuditIsRequired()` /
-    /// `CommandAuditCapGetOneCC()`). Unimplemented commands are never audited.
-    pub fn is_audited(&self, cc: TpmCc) -> bool {
-        Self::bit_index(cc).is_some_and(|i| self.bits[i / 8] & (1 << (i % 8)) != 0)
+    /// `CommandAuditCapGetOneCC()`) on a TPM with the implemented `commands`. Unimplemented
+    /// commands are never audited.
+    pub fn is_audited(&self, cc: TpmCc, commands: &ImplementedCommands) -> bool {
+        Self::bit_index(cc, commands).is_some_and(|i| self.bits[i / 8] & (1 << (i % 8)) != 0)
     }
 
     /// Adds `cc` to the list (`CommandAuditSet()`). Unimplemented commands and
     /// `TPM2_Shutdown` (which cannot be audited) are ignored. Returns whether the list changed.
-    pub fn set(&mut self, cc: TpmCc) -> bool {
-        if cc == TpmCc::Shutdown || self.is_audited(cc) {
+    pub fn set(&mut self, cc: TpmCc, commands: &ImplementedCommands) -> bool {
+        if cc == TpmCc::Shutdown || self.is_audited(cc, commands) {
             return false;
         }
-        match Self::bit_index(cc) {
+        match Self::bit_index(cc, commands) {
             Some(i) => {
                 self.bits[i / 8] |= 1 << (i % 8);
                 true
@@ -125,11 +134,11 @@ impl CommandAuditList {
     /// Removes `cc` from the list (`CommandAuditClear()`). `TPM2_SetCommandCodeAuditStatus`
     /// can never be removed, and unimplemented commands are ignored. Returns whether the list
     /// changed.
-    pub fn clear(&mut self, cc: TpmCc) -> bool {
-        if cc == TpmCc::SetCommandCodeAuditStatus || !self.is_audited(cc) {
+    pub fn clear(&mut self, cc: TpmCc, commands: &ImplementedCommands) -> bool {
+        if cc == TpmCc::SetCommandCodeAuditStatus || !self.is_audited(cc, commands) {
             return false;
         }
-        match Self::bit_index(cc) {
+        match Self::bit_index(cc, commands) {
             Some(i) => {
                 self.bits[i / 8] &= !(1 << (i % 8));
                 true
@@ -140,30 +149,36 @@ impl CommandAuditList {
 
     /// Iterates over the audited commands in ascending command-code order (the library
     /// commands, then the vendor commands).
-    pub fn iter(&self) -> impl Iterator<Item = TpmCc> + '_ {
+    pub fn iter<'a>(
+        &'a self,
+        commands: &'a ImplementedCommands,
+    ) -> impl Iterator<Item = TpmCc> + 'a {
         (0..COMMAND_AUDIT_LIST_SIZE * 8)
             .filter(|&i| self.bits[i / 8] & (1 << (i % 8)) != 0)
-            .filter_map(Self::command_of_bit)
+            .filter_map(move |i| Self::command_of_bit(i, commands))
     }
 
     /// The persistent (NV) encoding of the list: a bitmap where bit `i % 8` of byte `i / 8`
     /// represents command code `0x11F + i` for the library commands and
-    /// `VENDOR_COMMANDS[i - LIBRARY_COMMAND_SLOTS]` for the vendor commands.
+    /// the `(i - LIBRARY_COMMAND_SLOTS)`-th vendor command ([`ImplementedCommands::vendor`]).
     pub fn as_bytes(&self) -> &[u8; COMMAND_AUDIT_LIST_SIZE] {
         &self.bits
     }
 
-    /// Decodes the encoding produced by [`Self::as_bytes`]. Bits of command codes that are not
-    /// implemented are dropped.
-    pub fn from_bytes(bytes: &[u8; COMMAND_AUDIT_LIST_SIZE]) -> Self {
+    /// Decodes the encoding produced by [`Self::as_bytes`] on a TPM with the implemented
+    /// `commands`. Bits of command codes that are not implemented are dropped.
+    pub fn from_bytes(
+        bytes: &[u8; COMMAND_AUDIT_LIST_SIZE],
+        commands: &ImplementedCommands,
+    ) -> Self {
         let mut list = Self {
             bits: [0; COMMAND_AUDIT_LIST_SIZE],
         };
         for i in 0..COMMAND_AUDIT_LIST_SIZE * 8 {
             if bytes[i / 8] & (1 << (i % 8)) != 0
-                && let Some(cc) = Self::command_of_bit(i)
+                && let Some(cc) = Self::command_of_bit(i, commands)
             {
-                list.set(cc);
+                list.set(cc, commands);
             }
         }
         list
@@ -203,7 +218,8 @@ pub(crate) fn decode_audit_ext<P: Platform>(global_state: &mut State<P>, src: &[
     };
     global_state.nv.persistent.audit_hash_alg = ext.hash_alg;
     global_state.nv.persistent.audit_counter = ext.counter;
-    global_state.nv.persistent.audit_commands = CommandAuditList::from_bytes(&ext.commands);
+    global_state.nv.persistent.audit_commands =
+        CommandAuditList::from_bytes(&ext.commands, &ImplementedCommands::BUILTIN);
     true
 }
 
@@ -226,7 +242,13 @@ impl<P: Platform> TpmEngine<P> {
         parameters: &[u8],
     ) -> Result<(), TpmRc> {
         self.state.command_audit_cp_hash = None;
-        if !self.state.nv.persistent.audit_commands.is_audited(cc) {
+        if !self
+            .state
+            .nv
+            .persistent
+            .audit_commands
+            .is_audited(cc, &self.implemented_commands())
+        {
             return Ok(());
         }
         if (self.state.nv.reset.command_audit_digest.get_size() == 0
@@ -311,7 +333,8 @@ impl<P: Platform> TpmEngine<P> {
     pub(crate) fn command_audit_list_digest(&self) -> Result<OwnedDigest, TpmRc> {
         let alg = self.state.command_audit_hash_alg();
         let mut ctx = self.crypto().hash_stream(alg).map_err(|_| TpmRc::FAILURE)?;
-        for cc in self.state.nv.persistent.audit_commands.iter() {
+        let commands = self.implemented_commands();
+        for cc in self.state.nv.persistent.audit_commands.iter(&commands) {
             ctx.update(&cc.code().to_be_bytes())
                 .map_err(|_| TpmRc::FAILURE)?;
         }
@@ -338,12 +361,13 @@ fn response_parameters(cc: TpmCc, response: &[u8]) -> Option<&[u8]> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::{SUPPORTED_COMMANDS, implemented_commands_in_order};
+    use crate::engine::{SUPPORTED_COMMANDS, VENDOR_COMMANDS};
+    const B: &ImplementedCommands = &ImplementedCommands::BUILTIN;
 
     #[test]
     fn manufacture_default_audits_only_set_command_code_audit_status() {
         let list = CommandAuditList::manufacture_default();
-        let audited: alloc::vec::Vec<TpmCc> = list.iter().collect();
+        let audited: alloc::vec::Vec<TpmCc> = list.iter(B).collect();
         assert_eq!(audited, [TpmCc::SetCommandCodeAuditStatus]);
         assert_eq!(CommandAuditList::default(), list);
     }
@@ -351,12 +375,12 @@ mod tests {
     #[test]
     fn bitmap_covers_every_supported_command() {
         for cc in SUPPORTED_COMMANDS.iter().chain(VENDOR_COMMANDS) {
-            let bit = CommandAuditList::bit_index(*cc);
+            let bit = CommandAuditList::bit_index(*cc, B);
             assert!(
                 bit.is_some(),
                 "command {cc:?} does not fit in the audit bitmap"
             );
-            assert_eq!(CommandAuditList::command_of_bit(bit.unwrap()), Some(*cc));
+            assert_eq!(CommandAuditList::command_of_bit(bit.unwrap(), B), Some(*cc));
         }
     }
 
@@ -364,32 +388,30 @@ mod tests {
     fn vendor_commands_follow_the_library_command_slots() {
         assert_eq!(LIBRARY_COMMAND_SLOTS, 0x1AA - 0x11F + 1);
         assert_eq!(
-            CommandAuditList::bit_index(TpmCc::VendorTcgTest),
+            CommandAuditList::bit_index(TpmCc::VendorTcgTest, B),
             Some(LIBRARY_COMMAND_SLOTS)
         );
         let mut list = CommandAuditList::manufacture_default();
-        assert!(list.set(TpmCc::VendorTcgTest));
+        assert!(list.set(TpmCc::VendorTcgTest, B));
         let bytes = *list.as_bytes();
         assert_ne!(
             bytes[LIBRARY_COMMAND_SLOTS / 8] & (1 << (LIBRARY_COMMAND_SLOTS % 8)),
             0
         );
-        assert_eq!(CommandAuditList::from_bytes(&bytes), list);
-        assert!(list.clear(TpmCc::VendorTcgTest));
+        assert_eq!(CommandAuditList::from_bytes(&bytes, B), list);
+        assert!(list.clear(TpmCc::VendorTcgTest, B));
         assert_eq!(list, CommandAuditList::manufacture_default());
     }
 
     #[test]
     fn every_implemented_command_can_be_audited_in_table_order() {
         let mut list = CommandAuditList::manufacture_default();
-        for cc in implemented_commands_in_order() {
-            list.set(cc);
+        for cc in B.in_order() {
+            list.set(cc, B);
         }
-        let audited: alloc::vec::Vec<TpmCc> = list.iter().collect();
-        let expected: alloc::vec::Vec<TpmCc> = implemented_commands_in_order()
-            .into_iter()
-            .filter(|&cc| cc != TpmCc::Shutdown)
-            .collect();
+        let audited: alloc::vec::Vec<TpmCc> = list.iter(B).collect();
+        let expected: alloc::vec::Vec<TpmCc> =
+            B.in_order().filter(|&cc| cc != TpmCc::Shutdown).collect();
         assert_eq!(audited, expected);
         assert_eq!(audited.last(), VENDOR_COMMANDS.last());
     }
@@ -397,26 +419,26 @@ mod tests {
     #[test]
     fn set_and_clear_report_changes() {
         let mut list = CommandAuditList::manufacture_default();
-        assert!(list.set(TpmCc::GetRandom));
-        assert!(!list.set(TpmCc::GetRandom), "already audited");
-        assert!(list.is_audited(TpmCc::GetRandom));
-        assert!(list.clear(TpmCc::GetRandom));
-        assert!(!list.clear(TpmCc::GetRandom), "not audited");
-        assert!(!list.is_audited(TpmCc::GetRandom));
+        assert!(list.set(TpmCc::GetRandom, B));
+        assert!(!list.set(TpmCc::GetRandom, B), "already audited");
+        assert!(list.is_audited(TpmCc::GetRandom, B));
+        assert!(list.clear(TpmCc::GetRandom, B));
+        assert!(!list.clear(TpmCc::GetRandom, B), "not audited");
+        assert!(!list.is_audited(TpmCc::GetRandom, B));
     }
 
     #[test]
     fn shutdown_cannot_be_audited() {
         let mut list = CommandAuditList::manufacture_default();
-        assert!(!list.set(TpmCc::Shutdown));
-        assert!(!list.is_audited(TpmCc::Shutdown));
+        assert!(!list.set(TpmCc::Shutdown, B));
+        assert!(!list.is_audited(TpmCc::Shutdown, B));
     }
 
     #[test]
     fn set_command_code_audit_status_cannot_be_cleared() {
         let mut list = CommandAuditList::manufacture_default();
-        assert!(!list.clear(TpmCc::SetCommandCodeAuditStatus));
-        assert!(list.is_audited(TpmCc::SetCommandCodeAuditStatus));
+        assert!(!list.clear(TpmCc::SetCommandCodeAuditStatus, B));
+        assert!(list.is_audited(TpmCc::SetCommandCodeAuditStatus, B));
     }
 
     #[test]
@@ -434,9 +456,9 @@ mod tests {
             0x4000_0000,
         ] {
             let cc = TpmCc::new(code);
-            assert!(!list.set(cc), "{code:#x}");
-            assert!(!list.is_audited(cc), "{code:#x}");
-            assert!(!list.clear(cc), "{code:#x}");
+            assert!(!list.set(cc, B), "{code:#x}");
+            assert!(!list.is_audited(cc, B), "{code:#x}");
+            assert!(!list.clear(cc, B), "{code:#x}");
         }
         assert_eq!(list, CommandAuditList::manufacture_default());
     }
@@ -444,10 +466,10 @@ mod tests {
     #[test]
     fn iteration_is_in_ascending_command_code_order() {
         let mut list = CommandAuditList::manufacture_default();
-        list.set(TpmCc::GetRandom);
-        list.set(TpmCc::Clear);
-        list.set(TpmCc::PCRRead);
-        let codes: alloc::vec::Vec<u32> = list.iter().map(|cc| cc.code()).collect();
+        list.set(TpmCc::GetRandom, B);
+        list.set(TpmCc::Clear, B);
+        list.set(TpmCc::PCRRead, B);
+        let codes: alloc::vec::Vec<u32> = list.iter(B).map(|cc| cc.code()).collect();
         let mut sorted = codes.clone();
         sorted.sort_unstable();
         assert_eq!(codes, sorted);
@@ -457,15 +479,15 @@ mod tests {
     #[test]
     fn byte_encoding_round_trips_and_drops_unimplemented_bits() {
         let mut list = CommandAuditList::manufacture_default();
-        list.set(TpmCc::GetRandom);
-        list.set(TpmCc::NVRead);
+        list.set(TpmCc::GetRandom, B);
+        list.set(TpmCc::NVRead, B);
         let bytes = *list.as_bytes();
-        assert_eq!(CommandAuditList::from_bytes(&bytes), list);
+        assert_eq!(CommandAuditList::from_bytes(&bytes, B), list);
 
         // 0x123 (bit 4) is not a command.
         let mut tampered = bytes;
         tampered[0] |= 1 << 4;
-        assert_eq!(CommandAuditList::from_bytes(&tampered), list);
+        assert_eq!(CommandAuditList::from_bytes(&tampered, B), list);
     }
 
     #[test]
@@ -473,7 +495,11 @@ mod tests {
         let mut state = crate::test_support::TestState::default();
         state.nv.persistent.audit_hash_alg = 0x000B; // TPM_ALG_SHA256
         state.nv.persistent.audit_counter = 0x1122_3344_5566_7788;
-        state.nv.persistent.audit_commands.set(TpmCc::NVRead);
+        state
+            .nv
+            .persistent
+            .audit_commands
+            .set(TpmCc::NVRead, &ImplementedCommands::BUILTIN);
         let mut buf = [0u8; AUDIT_EXT_LEN + 3];
         assert_eq!(encode_audit_ext(&state, &mut buf), AUDIT_EXT_LEN);
         assert_eq!(buf[0], AUDIT_EXT_MARKER);

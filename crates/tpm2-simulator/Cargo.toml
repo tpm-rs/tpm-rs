@@ -27,6 +27,8 @@ vendor-permanent-auth = ["tpm2-engine/vendor-permanent-auth"]
 rust = ["tpm2-platform-linux/rust"]
 crux = ["tpm2-platform-linux/crux"]
 bssl = ["tpm2-platform-linux/bssl"]
+# The Nuvoton `NTC2_*` vendor commands of the Linux platform.
+ntc2-vendor-commands = ["tpm2-platform-linux/ntc2-vendor-commands"]
 # Adds `create_reference_simulator!(pid, realtime_ms)` and
 # `Simulator::advance_clock`: a simulator that reproduces the platform entropy,
 # DRBG and virtual clock of one C reference TPM process (used by the E2E and

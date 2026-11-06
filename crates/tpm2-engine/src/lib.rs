@@ -96,10 +96,10 @@ mod rsa;
 #[cfg(feature = "sec-channel")]
 mod sec_channel;
 pub use engine::{
-    ActiveSequence, DRBG_MAGIC, DrbgState, MAX_ACTIVE_SEQUENCES, MAX_COMMAND_SIZE,
-    MAX_LOADED_OBJECTS, MAX_LOADED_SESSIONS, MAX_RESPONSE_SIZE, ResponseBufferTooSmall,
-    SequenceType, SignatureSequence, TpmEngine, command_handles_count, command_returns_handle,
-    get_command_attribute, handle_requires_auth,
+    ActiveSequence, DRBG_MAGIC, DrbgState, ImplementedCommands, MAX_ACTIVE_SEQUENCES,
+    MAX_COMMAND_SIZE, MAX_LOADED_OBJECTS, MAX_LOADED_SESSIONS, MAX_RESPONSE_SIZE,
+    ResponseBufferTooSmall, SequenceType, SignatureSequence, TpmEngine, command_handles_count,
+    command_returns_handle, get_command_attribute, handle_requires_auth,
 };
 pub use error::InternalError;
 pub use hash_state::StreamingHashState;
@@ -107,17 +107,14 @@ pub use platform_connection::SimulatorPlatformSignal;
 #[cfg(feature = "std")]
 pub use platform_connection::{NO_STREAM, PlatformConnection};
 
-pub use platform::{DeserializeError, Info, Platform, SerializeError};
+pub use platform::{
+    DeserializeError, Info, MAX_PLATFORM_VENDOR_COMMANDS, Platform, SerializeError, VendorCommand,
+};
 
 /// Whether `TPM2_ECC_Parameters` reports a recommended KDF for the NIST curves
 /// (`KDF1_SP800_56A` with the hash of the curve's strength); without (the
 /// `ecc-parameters-null-kdf` feature) it reports `TPM_ALG_NULL` for every curve.
 pub const ECC_PARAMETERS_REPORT_KDF: bool = !cfg!(feature = "ecc-parameters-null-kdf");
-
-/// Whether the TPM implements the Nuvoton `NTC2_PreConfig`, `NTC2_LockPreConfig` and
-/// `NTC2_GetConfig` vendor commands of `ibmswtpm2` (the `ntc2-vendor-commands` feature) in
-/// addition to `TPM2_Vendor_TCG_Test`.
-pub const NTC2_VENDOR_COMMANDS: bool = cfg!(feature = "ntc2-vendor-commands");
 
 /// Whether the TPM implements `TPM2_NV_DefineSpace2` (the `cc-nv-define-space2` feature).
 pub const CC_NV_DEFINE_SPACE2: bool = cfg!(feature = "cc-nv-define-space2");

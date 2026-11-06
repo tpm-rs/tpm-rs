@@ -1554,8 +1554,10 @@ impl<P: Platform> TpmEngine<P> {
         if let Some(audit) = &r.audit {
             st.nv.persistent.audit_hash_alg = audit.hash_alg;
             st.nv.persistent.audit_counter = audit.counter;
-            st.nv.persistent.audit_commands =
-                crate::command_audit::CommandAuditList::from_bytes(&audit.commands);
+            st.nv.persistent.audit_commands = crate::command_audit::CommandAuditList::from_bytes(
+                &audit.commands,
+                &ImplementedCommands::new(self.platform.vendor_commands()),
+            );
         }
     }
 
@@ -2181,7 +2183,7 @@ impl<P: Platform> TpmEngine<P> {
         let cc = header.code;
         let command_code = cc.code();
 
-        if !is_command_supported(cc) {
+        if !self.implemented_commands().is_supported(cc) {
             return Err(TpmRc::COMMAND_CODE);
         }
 
@@ -2318,7 +2320,7 @@ impl<P: Platform> TpmEngine<P> {
         // is checked after the handles have been validated and the `authorizationSize` passed
         // its sanity check, but before any session structure is unmarshaled
         // (`IsSessionAllowed` is the first check of `ParseSessionBuffer`).
-        if !is_session_allowed(cc) {
+        if !is_session_allowed(cc) || self.is_platform_vendor_command(cc) {
             self.reject_sessions_for_no_sessions_command(cmd_buf, cc, request_size)?;
         }
         // 1. Parse and validate the handles, then parse the session area (see
@@ -5324,6 +5326,7 @@ impl<P: Platform> TpmEngine<P> {
             return Err(TpmRc::INITIALIZE);
         }
 
+        let platform_vendor = self.is_platform_vendor_command(cc);
         let mut handler = CommandHandler::new(self);
         match cc {
             TpmCc::GetRandom => handler.get_random(request),
@@ -5485,12 +5488,7 @@ impl<P: Platform> TpmEngine<P> {
             #[cfg(feature = "cc-policy-parameters")]
             TpmCc::PolicyParameters => handler.policy_parameters(request),
             TpmCc::VendorTcgTest => handler.vendor_tcg_test(request),
-            #[cfg(feature = "ntc2-vendor-commands")]
-            TpmCc::NTC2PreConfig => handler.ntc2_pre_config(request),
-            #[cfg(feature = "ntc2-vendor-commands")]
-            TpmCc::NTC2LockPreConfig => handler.ntc2_lock_pre_config(request),
-            #[cfg(feature = "ntc2-vendor-commands")]
-            TpmCc::NTC2GetConfig => handler.ntc2_get_config(request),
+            _ if platform_vendor => handler.platform_vendor_command(cc, request),
             _ => Err(TpmRc::COMMAND_CODE),
         }?;
 
@@ -5722,17 +5720,10 @@ pub fn get_command_attribute(cc: TpmCc) -> tpm2::TpmaCc {
         attr |= tpm2::TpmaCc::FLUSHED;
     }
     // Vendor commands (`TPMA_CC_INITIALIZER(..., v = 1, ...)`): `commandIndex` is the low 16
-    // bits of the command code and `V` is SET. `ibmswtpm2` gives its Nuvoton `NTC2_*` commands
-    // the `nv` attribute.
+    // bits of the command code and `V` is SET (the platform's vendor commands add their own
+    // attributes, see `TpmEngine::command_attributes`).
     if cc.is_vendor() {
         attr |= tpm2::TpmaCc::V;
-    }
-    #[cfg(feature = "ntc2-vendor-commands")]
-    if matches!(
-        cc,
-        TpmCc::NTC2PreConfig | TpmCc::NTC2LockPreConfig | TpmCc::NTC2GetConfig
-    ) {
-        attr |= tpm2::TpmaCc::NV;
     }
     attr
 }
@@ -5752,15 +5743,9 @@ pub(crate) const fn is_vendor_permanent_auth(handle: u32) -> bool {
 /// `TPM2_ContextSave` and `TPM2_FlushContext`. Sending them with `TPM_ST_SESSIONS` fails with
 /// `TPM_RC_AUTH_CONTEXT`.
 ///
-/// `ibmswtpm2` also gives its Nuvoton `NTC2_*` vendor commands `NO_SESSIONS`.
+/// The platform's vendor commands have no sessions either (see
+/// [`crate::platform::VendorCommand`]); [`TpmEngine::is_platform_vendor_command`] covers them.
 pub(crate) fn is_session_allowed(cc: TpmCc) -> bool {
-    #[cfg(feature = "ntc2-vendor-commands")]
-    if matches!(
-        cc,
-        TpmCc::NTC2PreConfig | TpmCc::NTC2LockPreConfig | TpmCc::NTC2GetConfig
-    ) {
-        return false;
-    }
     !matches!(
         cc,
         TpmCc::Startup | TpmCc::ContextLoad | TpmCc::ContextSave | TpmCc::FlushContext
@@ -5933,38 +5918,132 @@ pub(crate) const SUPPORTED_COMMANDS: &[TpmCc] = &[
 ///
 /// * `TPM2_Vendor_TCG_Test` (TPM 2.0 Part 3, "Vendor Specific"), which every C reference
 ///   implements (`CC_Vendor_TCG_Test CC_YES`);
-/// * with the `ntc2-vendor-commands` profile feature, the Nuvoton `NTC2_PreConfig`,
-///   `NTC2_LockPreConfig` and `NTC2_GetConfig` commands as emulated by `ibmswtpm2`
-///   (`TPM_NUVOTON`).
-pub(crate) const VENDOR_COMMANDS: &[TpmCc] = &[
-    TpmCc::VendorTcgTest,
-    #[cfg(feature = "ntc2-vendor-commands")]
-    TpmCc::NTC2PreConfig,
-    #[cfg(feature = "ntc2-vendor-commands")]
-    TpmCc::NTC2LockPreConfig,
-    #[cfg(feature = "ntc2-vendor-commands")]
-    TpmCc::NTC2GetConfig,
-];
+///
+/// The platform adds its own vendor commands ([`Platform::vendor_commands`]); the commands of
+/// a TPM are its [`ImplementedCommands`].
+pub(crate) const VENDOR_COMMANDS: &[TpmCc] = &[TpmCc::VendorTcgTest];
 
-/// The number of implemented commands, library and vendor (`COMMAND_COUNT`,
-/// `TPM_PT_TOTAL_COMMANDS`).
-pub(crate) const TOTAL_COMMAND_COUNT: usize = SUPPORTED_COMMANDS.len() + VENDOR_COMMANDS.len();
-
+/// Returns whether `cc` is a library command or one of the engine's own vendor commands
+/// ([`VENDOR_COMMANDS`]), whatever the platform. [`ImplementedCommands::is_supported`] also
+/// covers the platform's vendor commands.
 pub(crate) fn is_command_supported(cc: TpmCc) -> bool {
     SUPPORTED_COMMANDS.contains(&cc) || VENDOR_COMMANDS.contains(&cc)
 }
 
-/// Returns every implemented command in the order of the reference's command table
-/// (`s_ccAttr`): the library commands in ascending command-code order, then the vendor
-/// commands in ascending order (since every vendor code has the `V` bit, this is ascending
-/// order of the 32-bit command codes). `TPM_CAP_COMMANDS`, `TPM_CAP_AUDIT_COMMANDS` and the
-/// command audit digest list the commands in this order.
-pub(crate) fn implemented_commands_in_order() -> [TpmCc; TOTAL_COMMAND_COUNT] {
-    let mut all = [TpmCc::default(); TOTAL_COMMAND_COUNT];
-    all[..SUPPORTED_COMMANDS.len()].copy_from_slice(SUPPORTED_COMMANDS);
-    all[SUPPORTED_COMMANDS.len()..].copy_from_slice(VENDOR_COMMANDS);
-    all.sort_unstable_by_key(|cc| cc.code());
-    all
+/// The largest number of vendor commands of a TPM: the engine's and the platform's.
+pub(crate) const MAX_VENDOR_COMMANDS: usize =
+    VENDOR_COMMANDS.len() + crate::platform::MAX_PLATFORM_VENDOR_COMMANDS;
+
+/// The commands a TPM implements: the library commands and its vendor commands, the
+/// engine's (`TPM2_Vendor_TCG_Test`) and the platform's
+/// ([`Platform::vendor_commands`]) in ascending command-code order
+/// ([`TpmEngine::implemented_commands`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ImplementedCommands {
+    vendor: [TpmCc; MAX_VENDOR_COMMANDS],
+    vendor_len: usize,
+}
+
+impl ImplementedCommands {
+    /// The commands of a TPM whose platform implements no vendor commands.
+    pub const BUILTIN: Self = Self::new(&[]);
+
+    /// The commands of a TPM whose platform implements `platform_vendor` (those without the
+    /// `V` bit, duplicates and those beyond [`crate::MAX_PLATFORM_VENDOR_COMMANDS`] are
+    /// ignored).
+    pub const fn new(platform_vendor: &[crate::platform::VendorCommand]) -> Self {
+        let mut vendor = [TpmCc::VendorTcgTest; MAX_VENDOR_COMMANDS];
+        let mut vendor_len = 0;
+        let mut i = 0;
+        while i < VENDOR_COMMANDS.len() {
+            vendor[vendor_len] = VENDOR_COMMANDS[i];
+            vendor_len += 1;
+            i += 1;
+        }
+        let mut i = 0;
+        while i < platform_vendor.len() && vendor_len < MAX_VENDOR_COMMANDS {
+            let code = platform_vendor[i].code;
+            let mut known = !code.is_vendor();
+            let mut j = 0;
+            while j < vendor_len {
+                known |= vendor[j].code() == code.code();
+                j += 1;
+            }
+            if !known {
+                // Insertion in ascending order of the command codes.
+                let mut k = vendor_len;
+                while k > 0 && vendor[k - 1].code() > code.code() {
+                    vendor[k] = vendor[k - 1];
+                    k -= 1;
+                }
+                vendor[k] = code;
+                vendor_len += 1;
+            }
+            i += 1;
+        }
+        Self { vendor, vendor_len }
+    }
+
+    /// The vendor commands, in ascending command-code order.
+    pub fn vendor(&self) -> &[TpmCc] {
+        &self.vendor[..self.vendor_len]
+    }
+
+    /// The number of implemented commands, library and vendor (`COMMAND_COUNT`,
+    /// `TPM_PT_TOTAL_COMMANDS`).
+    pub fn total(&self) -> usize {
+        SUPPORTED_COMMANDS.len() + self.vendor_len
+    }
+
+    /// Whether `cc` is implemented.
+    pub fn is_supported(&self, cc: TpmCc) -> bool {
+        SUPPORTED_COMMANDS.contains(&cc) || self.vendor().contains(&cc)
+    }
+
+    /// Every implemented command in the order of the reference's command table (`s_ccAttr`):
+    /// the library commands in ascending command-code order, then the vendor commands in
+    /// ascending order (since every vendor code has the `V` bit, this is ascending order of the
+    /// 32-bit command codes). `TPM_CAP_COMMANDS`, `TPM_CAP_AUDIT_COMMANDS` and the command
+    /// audit digest list the commands in this order.
+    pub fn in_order(&self) -> impl Iterator<Item = TpmCc> + '_ {
+        let mut library = [TpmCc::default(); SUPPORTED_COMMANDS.len()];
+        library.copy_from_slice(SUPPORTED_COMMANDS);
+        library.sort_unstable_by_key(|cc| cc.code());
+        library.into_iter().chain(self.vendor().iter().copied())
+    }
+}
+
+impl<P: Platform> TpmEngine<P> {
+    /// The commands this TPM implements, with the platform's vendor commands.
+    pub fn implemented_commands(&self) -> ImplementedCommands {
+        ImplementedCommands::new(self.platform.vendor_commands())
+    }
+
+    /// Whether `cc` is one of the platform's vendor commands ([`Platform::vendor_commands`]).
+    pub(crate) fn is_platform_vendor_command(&self, cc: TpmCc) -> bool {
+        cc != TpmCc::VendorTcgTest
+            && self
+                .platform
+                .vendor_commands()
+                .iter()
+                .any(|v| v.code == cc && v.code.is_vendor())
+    }
+
+    /// The `TPMA_CC` of the implemented command `cc` ([`get_command_attribute`], with the
+    /// attributes of a platform vendor command).
+    pub fn command_attributes(&self, cc: TpmCc) -> tpm2::TpmaCc {
+        let mut attr = get_command_attribute(cc);
+        if self.is_platform_vendor_command(cc)
+            && let Some(v) = self
+                .platform
+                .vendor_commands()
+                .iter()
+                .find(|v| v.code == cc)
+        {
+            attr |= v.attributes;
+        }
+        attr
+    }
 }
 
 /// The lowest command code a capability list of commands (`TPM_CAP_COMMANDS`,

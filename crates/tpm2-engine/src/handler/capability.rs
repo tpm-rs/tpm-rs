@@ -694,7 +694,7 @@ impl<'b, P: Platform> CommandHandler<'b, P> {
                     (TpmPt::SPLIT_MAX, 128),
                     (
                         TpmPt::TOTAL_COMMANDS,
-                        crate::engine::TOTAL_COMMAND_COUNT as u32,
+                        self.context.implemented_commands().total() as u32,
                     ),
                     (
                         TpmPt::LIBRARY_COMMANDS,
@@ -702,7 +702,7 @@ impl<'b, P: Platform> CommandHandler<'b, P> {
                     ),
                     (
                         TpmPt::VENDOR_COMMANDS,
-                        crate::engine::VENDOR_COMMANDS.len() as u32,
+                        self.context.implemented_commands().vendor().len() as u32,
                     ),
                     (TpmPt::NV_BUFFER_MAX, tpm2::TPM2_MAX_NV_BUFFER_SIZE),
                     (TpmPt::MODES, tpm2::TpmaModes::empty().bits()),
@@ -1009,10 +1009,10 @@ impl<'b, P: Platform> CommandHandler<'b, P> {
                 // `CommandCapGetCCList`: the library commands, then the vendor commands, from
                 // the first one at or after `property` (see `command_list_start`).
                 let first = crate::engine::command_list_start(cmd.property);
-                for cc in crate::engine::implemented_commands_in_order() {
+                for cc in self.context.implemented_commands().in_order() {
                     if first.is_some_and(|first| cc.code() >= first) {
                         if count < cmd.property_count as usize && count < tpm2::TPM2_MAX_CAP_CC {
-                            command_attributes[count] = crate::engine::get_command_attribute(cc);
+                            command_attributes[count] = self.context.command_attributes(cc);
                             count += 1;
                         } else {
                             more_data = true;
@@ -1295,7 +1295,7 @@ impl<'b, P: Platform> CommandHandler<'b, P> {
                 let mut list = tpm2::TpmlCc::default();
                 let first = crate::engine::command_list_start(cmd.property);
                 let pp_list = self.context.state.nv.persistent.pp_list;
-                for cc in crate::engine::implemented_commands_in_order() {
+                for cc in self.context.implemented_commands().in_order() {
                     if !first.is_some_and(|first| cc.code() >= first) || !pp_list.is_required(cc) {
                         continue;
                     }
@@ -1315,7 +1315,15 @@ impl<'b, P: Platform> CommandHandler<'b, P> {
                 let max = (cmd.property_count as usize).min(tpm2::TPM2_MAX_CAP_CC);
                 let mut list = tpm2::TpmlCc::default();
                 let first = crate::engine::command_list_start(cmd.property);
-                for cc in self.context.state.nv.persistent.audit_commands.iter() {
+                let commands = self.context.implemented_commands();
+                for cc in self
+                    .context
+                    .state
+                    .nv
+                    .persistent
+                    .audit_commands
+                    .iter(&commands)
+                {
                     if !first.is_some_and(|first| cc.code() >= first) {
                         continue;
                     }

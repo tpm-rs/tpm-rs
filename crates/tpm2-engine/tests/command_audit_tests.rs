@@ -152,7 +152,13 @@ fn command_audit_state_persists_across_tpm_init() {
     assert_eq!(execute_rc(&mut tpm, &startup), 0);
 
     // Manufacture default.
-    let audited: Vec<TpmCc> = tpm.state.nv.persistent.audit_commands.iter().collect();
+    let audited: Vec<TpmCc> = tpm
+        .state
+        .nv
+        .persistent
+        .audit_commands
+        .iter(&tpm2_engine::ImplementedCommands::BUILTIN)
+        .collect();
     assert_eq!(audited, [TpmCc::SetCommandCodeAuditStatus]);
     assert_eq!(tpm.state.nv.persistent.audit_counter, 0);
 
@@ -164,7 +170,7 @@ fn command_audit_state_persists_across_tpm_init() {
             .nv
             .persistent
             .audit_commands
-            .is_audited(TpmCc::GetRandom)
+            .is_audited(TpmCc::GetRandom, &tpm2_engine::ImplementedCommands::BUILTIN)
     );
     assert_eq!(tpm.state.nv.persistent.audit_counter, 1);
     assert_eq!(
@@ -200,7 +206,7 @@ fn command_audit_state_persists_across_tpm_init() {
             .nv
             .persistent
             .audit_commands
-            .is_audited(TpmCc::GetRandom)
+            .is_audited(TpmCc::GetRandom, &tpm2_engine::ImplementedCommands::BUILTIN)
     );
     assert_eq!(tpm.state.nv.persistent.audit_hash_alg, OTHER_AUDIT_ALG.0);
     assert_eq!(tpm.state.nv.persistent.audit_counter, 2);
@@ -232,7 +238,7 @@ fn rejected_commands_leave_command_audit_state_unchanged() {
             .nv
             .persistent
             .audit_commands
-            .is_audited(TpmCc::GetRandom)
+            .is_audited(TpmCc::GetRandom, &tpm2_engine::ImplementedCommands::BUILTIN)
     );
     // The context integrity hash: SHA-512, or SHA-384 without it (SHA-256 with
     // `context-hash-sha256`).

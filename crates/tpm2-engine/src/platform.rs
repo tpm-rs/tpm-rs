@@ -17,7 +17,9 @@ use crate::state::State;
 use crate::storage::IndexState;
 use crate::timer::TpmTimer;
 use tpm2::crypto::{Crypto, Rng};
+use tpm2::errors::TpmRc;
 use tpm2::platform::{SecureChannel, TpmFirmware};
+use tpm2::{TpmCc, TpmaCc};
 
 /// Immutable information about the platform and the TPM vendor, reported by
 /// `TPM2_GetCapability(TPM_CAP_TPM_PROPERTIES)` and in attestation structures.
@@ -115,6 +117,35 @@ pub trait Platform: Sized {
         None
     }
 
+    /// The vendor-specific commands the platform implements (in addition to the engine's
+    /// `TPM2_Vendor_TCG_Test`), at most [`MAX_PLATFORM_VENDOR_COMMANDS`]; see
+    /// [`VendorCommand`]. The engine lists them in `TPM2_GetCapability` (`TPM_CAP_COMMANDS`,
+    /// `TPM_PT_VENDOR_COMMANDS`, `TPM_PT_TOTAL_COMMANDS`), lets them be audited and executes
+    /// them with [`Platform::execute_vendor_command`]. The list must not change while the TPM
+    /// runs. Defaults to none.
+    fn vendor_commands(&self) -> &[VendorCommand] {
+        &[]
+    }
+
+    /// Executes the vendor command `code` (one of [`Platform::vendor_commands`]) with the
+    /// parameter area `parameters` (the command after its header: a vendor command has no
+    /// handles and no sessions) and writes its response parameters to the start of `response`,
+    /// returning their size. An error is returned as the response code of the command (e.g.
+    /// `TPM_RC_SIZE` for unexpected parameter octets).
+    ///
+    /// The engine calls it after the common command checks (command size, `TPM2_Startup`, no
+    /// session area); the command's state lives in the platform. The default fails with
+    /// `TPM_RC_COMMAND_CODE`.
+    fn execute_vendor_command(
+        &mut self,
+        code: TpmCc,
+        parameters: &[u8],
+        response: &mut [u8],
+    ) -> Result<usize, TpmRc> {
+        let _ = (code, parameters, response);
+        Err(TpmRc::COMMAND_CODE)
+    }
+
     /// Reads the NV data from external storage into `nv`.
     ///
     /// Called at `_TPM_Init` ([`crate::TpmEngine::reset`]), before the engine reloads its
@@ -193,3 +224,23 @@ impl core::fmt::Display for DeserializeError {
 }
 
 impl core::error::Error for DeserializeError {}
+
+/// The largest number of vendor commands a platform may implement
+/// ([`Platform::vendor_commands`]); further ones are ignored.
+pub const MAX_PLATFORM_VENDOR_COMMANDS: usize = 16;
+
+/// A vendor-specific command implemented by the platform ([`Platform::vendor_commands`]).
+///
+/// A platform vendor command has no handles and no authorization sessions (like the
+/// references' `NO_SESSIONS` commands: a command with `TPM_ST_SESSIONS` fails with
+/// `TPM_RC_AUTH_CONTEXT`); its parameters and response parameters are interpreted by the
+/// platform ([`Platform::execute_vendor_command`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VendorCommand {
+    /// The command code; it must have the `V` bit (`TPM_CC_VEND`) and differ from the
+    /// engine's `TPM2_Vendor_TCG_Test`.
+    pub code: TpmCc,
+    /// Further attributes of the command reported in its `TPMA_CC` (e.g. `NV`); the engine
+    /// sets `commandIndex` (the low 16 bits of the code) and `V`.
+    pub attributes: TpmaCc,
+}
