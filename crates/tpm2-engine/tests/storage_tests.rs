@@ -1,6 +1,5 @@
-use tpm2_engine::storage::manager::StorageManager;
 use tpm2_engine::storage::ram_storage_mock::RamStorageMock;
-use tpm2_engine::storage::{NvStorage, StorageError, Tpm2Storage};
+use tpm2_engine::storage::{IndexState, NvStorage, StorageError};
 
 // =========================================================================
 // Tests from src/storage/ram_storage_mock.rs
@@ -29,7 +28,7 @@ fn test_ram_storage() {
 fn test_manager_define_write_read() {
     // Room for the table of contents (`MAX_ITEMS` entries) and the items.
     let mut ram = RamStorageMock::<4096>::new();
-    let mut manager = StorageManager::new(&mut ram);
+    let manager = &mut ram;
 
     // Define a 64 byte NV index
     manager.define_space(0x01500000, 64, 0).unwrap();
@@ -50,7 +49,7 @@ fn test_manager_define_write_read() {
 fn test_manager_compaction() {
     // Room for the table of contents (`MAX_ITEMS` entries) and the items.
     let mut ram = RamStorageMock::<4096>::new();
-    let mut manager = StorageManager::new(&mut ram);
+    let manager = &mut ram;
 
     manager.define_space(0x81000001, 10, 0).unwrap(); // Persistent Key 1
     manager.define_space(0x81000002, 20, 0).unwrap(); // Persistent Key 2

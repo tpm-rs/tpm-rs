@@ -20,6 +20,7 @@ use core::fmt;
 use tpm2::crypto::backend::Hash;
 use tpm2::{Alg, Handle, Marshal, TpmSe, TpmiAlgHash, TpmlPcrSelection, TpmtSymDef, Unmarshal};
 
+use crate::Platform;
 use crate::act::{ACT_COUNT, ActCounter, ActPolicy};
 use crate::command_audit::CommandAuditList;
 use crate::engine::{MAX_ACTIVE_SESSIONS, MAX_CONTEXT_GAP, SignatureSequence};
@@ -28,15 +29,15 @@ use crate::hash_state::StreamingHashState;
 use crate::owned::{OwnedName, OwnedPublic, OwnedTpm2b};
 use crate::physical_presence::PpList;
 use crate::self_test::{ALG_LAST, AlgorithmVector, SelfTestState};
-use crate::storage::manager::{MAX_ITEMS, RESERVED_SIZE, StorageManager, TOC_SIZE};
+use crate::state::{Detached, NoIndex};
+use crate::storage::manager::{MAX_ITEMS, RESERVED_SIZE, TOC_SIZE};
 use crate::storage::nv::{
     HIERARCHY_RECORD_HANDLE, HIERARCHY_RECORD_SIZE, NvHeader, NvHierarchyRecord, NvIndexRecord,
     NvPersistentObjectRecord, NvPlatformSettingsRecord, NvStateSaveRecord, PCR_ALLOCATION_HANDLE,
     PERSISTENT_OBJECT_MAX_LEN, PLATFORM_SETTINGS_HANDLE, PLATFORM_SETTINGS_LEN, STATE_SAVE_HANDLE,
     STATE_SAVE_MAX_LEN,
 };
-use crate::storage::types::ItemMetadata;
-use crate::storage::{NvStorage, StorageError, Tpm2Storage};
+use crate::storage::{IndexState, StorageError};
 use crate::{
     ActiveSequence, DrbgState, MAX_ACTIVE_SEQUENCES, MAX_LOADED_OBJECTS, MAX_LOADED_SESSIONS,
     SequenceType, State,
@@ -307,20 +308,19 @@ fn claim_slot(
 // ---------------------------------------------------------------------------------------------
 
 impl PersistedTpmState {
-    /// Extracts a structured [`PersistedTpmState`] from a live `tpm-rs` [`State`] and
-    /// [`NvStorage`].
+    /// Extracts a structured [`PersistedTpmState`] from a live `tpm-rs` [`State`] (with its NV
+    /// data, [`crate::Nv::index`]).
     ///
     /// `now_ms` is the current reading of the platform timer: the platform time is persisted
     /// relative to it. The self-test state, which is not part of [`State`], is set to its
     /// state after `_TPM_Init` (every algorithm needs its test, no Failure mode); see
     /// [`Self::extract_self_test`]. The platform state is not known to the engine (`None`).
-    pub(crate) fn extract_from_global_state_and_storage<S: NvStorage>(
+    pub(crate) fn extract_from_global_state<P: Platform>(
         &mut self,
-        state: &State,
-        storage: &S,
+        state: &State<P>,
         now_ms: u64,
     ) -> Result<(), SerializeError> {
-        self.extract_nv(storage)?;
+        self.extract_nv(&state.nv.index)?;
         self.reset = extract_reset(state)?;
         self.clear = PersistedClearData {
             sh_enable: state.nv.clear.sh_enable,
@@ -432,29 +432,23 @@ impl PersistedTpmState {
 
     /// Extracts the raw reserved NV header and every NV item with its canonical payload
     /// ([`read_canonical_nv_payload`]), in ascending handle order.
-    fn extract_nv<S: NvStorage>(&mut self, storage: &S) -> Result<(), SerializeError> {
+    fn extract_nv(&mut self, storage: &(impl IndexState + ?Sized)) -> Result<(), SerializeError> {
         let nv: &mut PersistedNvImage = &mut self.nv;
-        storage.read_nv(0, &mut nv.header)?;
+        storage.read_reserved(0, &mut nv.header)?;
         nv.handles = Array::new();
         nv.data = Array::new();
-        let mut toc_buf = [0u8; TOC_SIZE];
-        storage.read_nv(RESERVED_SIZE, &mut toc_buf)?;
-        // The items (handle, offset, size) in storage order, then sorted by handle.
-        let mut items = [(0u32, 0usize, 0usize); MAX_ITEMS];
+        // The items (handle, size) in storage order, then sorted by handle.
+        let mut items = [(0u32, 0usize); MAX_ITEMS];
         let mut count = 0;
-        let mut item_offset = RESERVED_SIZE + TOC_SIZE;
-        for entry in toc_buf.as_chunks::<{ ItemMetadata::SIZE }>().0 {
-            let item = ItemMetadata::from_bytes(entry);
+        for item in storage.items()? {
             if item.in_use == 0 {
                 break;
             }
-            let size = item.data_size as usize;
-            items[count] = (item.handle, item_offset, size);
+            items[count] = (item.handle, item.data_size as usize);
             count += 1;
-            item_offset += size;
         }
         let items = &mut items[..count];
-        items.sort_unstable_by_key(|&(handle, _, _)| handle);
+        items.sort_unstable_by_key(|&(handle, _)| handle);
         if items.windows(2).any(|w| w[0].0 == w[1].0) {
             return Err(SerializeError::InvalidStorage("duplicate NV item handle"));
         }
@@ -465,15 +459,9 @@ impl PersistedTpmState {
                 actual: count,
             });
         }
-        for &(handle, offset, size) in items.iter() {
+        for &(handle, size) in items.iter() {
             let start = nv.data.len;
-            let len = read_canonical_nv_payload(
-                storage,
-                handle,
-                offset,
-                size,
-                &mut nv.data.data[start..],
-            )?;
+            let len = read_canonical_nv_payload(storage, handle, size, &mut nv.data.data[start..])?;
             nv.data.len += len;
             nv.handles.push(handle);
         }
@@ -481,7 +469,7 @@ impl PersistedTpmState {
     }
 }
 
-/// Reads the NV item `handle` (`size` octets at `offset` of `storage`), writes its canonical
+/// Reads the NV item `handle` (`size` octets of `storage`), writes its canonical
 /// payload to the start of `out` and returns its length:
 ///
 /// - a persistent object and the hierarchy and state-save records: the encoding of the decoded
@@ -490,10 +478,9 @@ impl PersistedTpmState {
 ///   platform settings: the item itself.
 ///
 /// In every case, [`nv_payload_len`] recovers the length from the content.
-fn read_canonical_nv_payload<S: NvStorage>(
-    storage: &S,
+fn read_canonical_nv_payload(
+    storage: &(impl IndexState + ?Sized),
     handle: u32,
-    offset: usize,
     size: usize,
     out: &mut [u8],
 ) -> Result<usize, SerializeError> {
@@ -508,7 +495,7 @@ fn read_canonical_nv_payload<S: NvStorage>(
     let len = if reencoded {
         let mut raw = [0u8; PERSISTENT_OBJECT_MAX_LEN];
         let raw = raw.get_mut(..size).ok_or(invalid)?;
-        storage.read_nv(offset, raw)?;
+        storage.read_item(handle, 0, raw)?;
         let mut buf = [0u8; PERSISTENT_OBJECT_MAX_LEN];
         let len = match handle {
             HIERARCHY_RECORD_HANDLE => {
@@ -529,7 +516,7 @@ fn read_canonical_nv_payload<S: NvStorage>(
             .copy_from_slice(&buf[..len]);
         len
     } else {
-        storage.read_nv(offset, out.get_mut(..size).ok_or(too_large(size))?)?;
+        storage.read_item(handle, 0, out.get_mut(..size).ok_or(too_large(size))?)?;
         size
     };
     // The payload must be self-delimiting, so that restore can split the image.
@@ -580,7 +567,7 @@ fn nv_payload_len(handle: u32, rest: &[u8]) -> Option<usize> {
     (len <= rest.len()).then_some(len)
 }
 
-fn extract_reset(state: &State) -> Result<PersistedResetData, SerializeError> {
+fn extract_reset<P: Platform>(state: &State<P>) -> Result<PersistedResetData, SerializeError> {
     let mut saved_sessions = Array::new();
     for (slot, saved) in state.nv.reset.saved_sessions.iter().enumerate() {
         if saved.is_some() {
@@ -628,7 +615,7 @@ fn extract_reset(state: &State) -> Result<PersistedResetData, SerializeError> {
     })
 }
 
-fn extract_pcrs(state: &State) -> Result<PersistedPcrState, SerializeError> {
+fn extract_pcrs<P: Platform>(state: &State<P>) -> Result<PersistedPcrState, SerializeError> {
     let mut banks = Array::<PersistedPcrBank, MAX_PCR_BANKS>::new();
     for &alg in tpm2::platform::PcrState::IMPLEMENTED_BANKS {
         let mut bank = PersistedPcrBank::default();
@@ -652,8 +639,8 @@ fn extract_pcrs(state: &State) -> Result<PersistedPcrState, SerializeError> {
     })
 }
 
-fn extract_transient_objects(
-    state: &State,
+fn extract_transient_objects<P: Platform>(
+    state: &State<P>,
 ) -> Result<Array<PersistedTransientObject, MAX_LOADED_OBJECTS>, SerializeError> {
     let mut objects: Array<PersistedTransientObject, MAX_LOADED_OBJECTS> = Array::new();
     for obj in state.transient_objects.iter().flatten() {
@@ -680,8 +667,8 @@ fn extract_transient_objects(
     Ok(objects)
 }
 
-fn extract_sessions(
-    state: &State,
+fn extract_sessions<P: Platform>(
+    state: &State<P>,
 ) -> Result<Array<PersistedSessionState, MAX_LOADED_SESSIONS>, SerializeError> {
     let mut sessions: Array<PersistedSessionState, MAX_LOADED_SESSIONS> = Array::new();
     for sess in state.active_sessions.iter().flatten() {
@@ -753,8 +740,8 @@ fn extract_sessions(
     Ok(sessions)
 }
 
-fn extract_sequences(
-    state: &State,
+fn extract_sequences<P: Platform>(
+    state: &State<P>,
 ) -> Result<Array<PersistedActiveSequence, MAX_ACTIVE_SEQUENCES>, SerializeError> {
     let mut sequences: Array<PersistedActiveSequence, MAX_ACTIVE_SEQUENCES> = Array::new();
     for seq in state.active_sequences.iter().flatten() {
@@ -799,7 +786,10 @@ fn extract_sequences(
     Ok(sequences)
 }
 
-fn extract_act(state: &State, now_ms: u64) -> Result<PersistedActState, SerializeError> {
+fn extract_act<P: Platform>(
+    state: &State<P>,
+    now_ms: u64,
+) -> Result<PersistedActState, SerializeError> {
     let act = &state.act;
     let mut acts = Array::new();
     for i in 0..ACT_COUNT {
@@ -831,8 +821,8 @@ fn extract_act(state: &State, now_ms: u64) -> Result<PersistedActState, Serializ
 // ---------------------------------------------------------------------------------------------
 
 impl PersistedTpmState {
-    /// Applies this [`PersistedTpmState`] onto an existing `tpm-rs` [`State`] and
-    /// [`NvStorage`].
+    /// Applies this [`PersistedTpmState`] onto an existing `tpm-rs` [`State`] (with its NV
+    /// data, [`crate::Nv::index`]).
     ///
     /// The new state is built from scratch (`State::default()`, i.e. the derived fields
     /// get their values between two commands with NV available): the NV-synced fields are
@@ -841,18 +831,19 @@ impl PersistedTpmState {
     /// and the Names of the loaded objects recomputed with the crypto backend `H`. The whole persisted state
     /// is validated before `state` is modified; the NV storage is then erased and rewritten
     /// from the image. The self-test state is not applied (see [`Self::apply_self_test`]).
-    pub(crate) fn apply_to_global_state<H: Hash, S: NvStorage>(
+    pub(crate) fn apply_to_global_state<H: Hash, P: Platform>(
         &self,
-        state: &mut State,
-        storage: &mut S,
+        state: &mut State<P>,
         now_ms: u64,
     ) -> Result<(), DeserializeError> {
-        self.validate_nv(storage.capacity())?;
-        let mut staged = State::default();
+        self.validate_nv(state.nv.index.nv_capacity())?;
+        // The new state is staged without NV data, so that the target is not touched before
+        // the whole persisted state is validated.
+        let mut staged = State::<Detached<P>>::new(NoIndex);
         self.load_nv_synced(&mut staged)?;
-        self.apply_ram_state::<H>(&mut staged, now_ms)?;
-        self.write_nv(storage)?;
-        *state = staged;
+        self.apply_ram_state::<H, _>(&mut staged, now_ms)?;
+        self.write_nv(&mut state.nv.index)?;
+        state.replace_except_index(staged);
         Ok(())
     }
 
@@ -905,7 +896,7 @@ impl PersistedTpmState {
     /// manufacture defaults, like `_TPM_Init` does. The fields of the hierarchy record that
     /// are not authoritative in NV (`STATE_CLEAR_DATA`, `gp.lockOutAuthEnabled` and `go.clock`)
     /// come from the RAM groups instead.
-    fn load_nv_synced(&self, st: &mut State) -> Result<(), DeserializeError> {
+    fn load_nv_synced<P: Platform>(&self, st: &mut State<P>) -> Result<(), DeserializeError> {
         let header = NvHeader::decode(&self.nv.header);
         st.nv.persistent.reset_count = header.reset_count;
         st.nv.persistent.orderly_state = header.orderly_state;
@@ -976,9 +967,9 @@ impl PersistedTpmState {
     /// NV-synced fields: the RAM values that may be ahead of NV (`clear_count`,
     /// `orderly_state`, `failed_tries`, `lockout_auth_enabled`) replace the ones reloaded from
     /// NV.
-    fn apply_ram_state<H: Hash>(
+    fn apply_ram_state<H: Hash, P: Platform>(
         &self,
-        state: &mut State,
+        state: &mut State<P>,
         now_ms: u64,
     ) -> Result<(), DeserializeError> {
         self.apply_reset(state)?;
@@ -1035,7 +1026,7 @@ impl PersistedTpmState {
         state.locality = r.locality;
         state.physical_presence = r.physical_presence;
 
-        self.apply_transient_objects::<H>(state)?;
+        self.apply_transient_objects::<H, P>(state)?;
         self.apply_sessions(state)?;
         self.apply_sequences(state)?;
         self.check_loaded_handles()?;
@@ -1062,7 +1053,7 @@ impl PersistedTpmState {
         Ok(())
     }
 
-    fn apply_reset(&self, state: &mut State) -> Result<(), DeserializeError> {
+    fn apply_reset<P: Platform>(&self, state: &mut State<P>) -> Result<(), DeserializeError> {
         let r = &self.reset;
         fixed_u16(
             &r.null_proof,
@@ -1124,7 +1115,7 @@ impl PersistedTpmState {
         Ok(())
     }
 
-    fn apply_pcrs(&self, state: &mut State) -> Result<(), DeserializeError> {
+    fn apply_pcrs<P: Platform>(&self, state: &mut State<P>) -> Result<(), DeserializeError> {
         let banks = bytes(&self.pcrs.banks, "pcrs.banks")?;
         let implemented = tpm2::platform::PcrState::IMPLEMENTED_BANKS;
         if banks.len() != implemented.len() {
@@ -1154,7 +1145,10 @@ impl PersistedTpmState {
     }
 
     /// Applies the loaded objects, in the slots of their order, and recomputes their Names.
-    fn apply_transient_objects<H: Hash>(&self, state: &mut State) -> Result<(), DeserializeError> {
+    fn apply_transient_objects<H: Hash, P: Platform>(
+        &self,
+        state: &mut State<P>,
+    ) -> Result<(), DeserializeError> {
         state.transient_objects = [const { None }; MAX_LOADED_OBJECTS];
         for (i, obj) in bytes(&self.loaded.objects, "loaded.objects")?
             .iter()
@@ -1190,7 +1184,7 @@ impl PersistedTpmState {
         Ok(())
     }
 
-    fn apply_sessions(&self, state: &mut State) -> Result<(), DeserializeError> {
+    fn apply_sessions<P: Platform>(&self, state: &mut State<P>) -> Result<(), DeserializeError> {
         state.active_sessions = [const { None }; MAX_LOADED_SESSIONS];
         for (i, sess) in bytes(&self.loaded.sessions, "loaded.sessions")?
             .iter()
@@ -1277,7 +1271,7 @@ impl PersistedTpmState {
         Ok(())
     }
 
-    fn apply_sequences(&self, state: &mut State) -> Result<(), DeserializeError> {
+    fn apply_sequences<P: Platform>(&self, state: &mut State<P>) -> Result<(), DeserializeError> {
         state.active_sequences = [const { None }; MAX_ACTIVE_SEQUENCES];
         for (i, seq) in bytes(&self.loaded.sequences, "loaded.sequences")?
             .iter()
@@ -1337,7 +1331,11 @@ impl PersistedTpmState {
         Ok(())
     }
 
-    fn apply_act(&self, state: &mut State, now_ms: u64) -> Result<(), DeserializeError> {
+    fn apply_act<P: Platform>(
+        &self,
+        state: &mut State<P>,
+        now_ms: u64,
+    ) -> Result<(), DeserializeError> {
         let acts = bytes(&self.act.acts, "act.acts")?;
         if acts.len() != ACT_COUNT {
             return Err(DeserializeError::InvalidLength {
@@ -1454,30 +1452,21 @@ impl PersistedTpmState {
 
     /// Erases `storage` and writes the raw NV header and the NV items with their payloads; the
     /// item metadata is derived ([`nv_item_size`], [`nv_item_attributes`]).
-    fn write_nv<S: NvStorage>(&self, storage: &mut S) -> Result<(), DeserializeError> {
-        let zero_block = [0u8; 128];
-        let cap = storage.capacity();
-        let mut pos = 0;
-        while pos < cap {
-            let len = (cap - pos).min(zero_block.len());
-            storage.write_nv(pos, &zero_block[..len])?;
-            pos += len;
-        }
+    fn write_nv(&self, storage: &mut (impl IndexState + ?Sized)) -> Result<(), DeserializeError> {
+        storage.erase()?;
 
         const _: () = assert!(NV_HEADER_SIZE == RESERVED_SIZE);
-        storage.write_nv(0, &self.nv.header)?;
+        storage.write_reserved(0, &self.nv.header)?;
 
-        let mut storage_mgr = StorageManager::new(storage);
         self.for_each_nv_item(|handle, payload| {
-            storage_mgr.define_space(
+            storage.define_space(
                 handle,
                 nv_item_size(handle, payload) as u16,
                 nv_item_attributes(handle, payload),
             )?;
-            storage_mgr.write_item(handle, 0, payload)?;
+            storage.write_item(handle, 0, payload)?;
             Ok(())
         })?;
-        storage.flush()?;
         Ok(())
     }
 }

@@ -114,7 +114,7 @@ pub struct Simulator<'a> {
             TpmPlatform<
                 'a,
                 PlatformCryptoProvider,
-                RamStorageMock<NV_STORAGE_SIZE>,
+                &'a mut RamStorageMock<NV_STORAGE_SIZE>,
                 LinuxTimer,
                 LinuxRng,
             >,
@@ -138,9 +138,9 @@ impl<'a> Simulator<'a> {
         // Like the TCG reference, the simulator has a dummy secure transport layer that
         // protects every command with an SPDM session (`SimulatedSecureChannel`); the TPM uses
         // it with the `sec-channel` feature of `tpm2-engine`.
-        let platform = create_linux_platform(crypto, storage, timer, platform_rng, firmware)
+        let platform = create_linux_platform(crypto, timer, platform_rng, firmware)
             .with_secure_channel(&SimulatedSecureChannel);
-        let mut context = Box::new(TpmEngine::new(platform)?);
+        let mut context = Box::new(TpmEngine::new(platform, storage)?);
         context.init_storage();
         Ok(Self {
             context,
@@ -162,16 +162,16 @@ impl<'a> Simulator<'a> {
     #[cfg(feature = "reference-rng")]
     fn restart_with(&mut self, timer: LinuxTimer, platform_rng: LinuxRng) {
         let platform = &mut self.context.platform;
-        *platform.storage = RamStorageMock::new();
         *platform.timer = timer;
         *platform.rng = platform_rng;
+        *self.context.state.nv.index = RamStorageMock::new();
         // The firmware of a new simulator (`SimulatedFirmware::default`).
         self.firmware
             .set_firmware_hash(SimulatedFirmware::DEFAULT_HASH);
         self.firmware
             .set_firmware_svn(SimulatedFirmware::DEFAULT_SVN);
         // What `TpmEngine::new` + `Simulator::new` do.
-        self.context.state = tpm2_engine::State::default();
+        self.context.state.reinitialize();
         self.context.crypto_rng = <PlatformCryptoProvider as tpm2::crypto::Random>::from_entropy()
             .expect("the crypto backend's entropy source failed");
         self.context.init_storage();

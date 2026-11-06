@@ -31,8 +31,7 @@ use tpm2_engine::handler::SessionState;
 use tpm2_engine::persistence::{
     self, Array, DeserializeError, PersistedSequenceType, PersistedTpmState,
 };
-use tpm2_engine::storage::Tpm2Storage;
-use tpm2_engine::storage::manager::StorageManager;
+use tpm2_engine::storage::IndexState;
 use tpm2_engine::storage::nv::{
     HIERARCHY_RECORD_HANDLE, HIERARCHY_RECORD_SIZE, NvHeader, NvHierarchyRecord,
 };
@@ -42,30 +41,37 @@ use tpm2_engine::{ActiveSequence, SequenceType, State};
 /// The size of the NV backing store of the simulator (twice the accounted NV memory).
 const NV_STORAGE_SIZE: usize = 2 * tpm2_engine::storage::nv_capacity::NV_MEMORY_SIZE as usize;
 
+/// A standalone TPM state whose NV data is held in its own [`RamStorageMock`] of the
+/// simulator's size.
+type RamState = State<
+    tpm2_engine::TpmPlatform<
+        'static,
+        TestCryptoProvider,
+        RamStorageMock<NV_STORAGE_SIZE>,
+        FakeTimer,
+        FakeRng,
+    >,
+>;
+
 /// A new, zeroed persisted state on the heap (it is too large for a test thread's stack).
 fn new_persisted() -> Box<PersistedTpmState> {
     Box::default()
 }
 
-/// The persisted state of `state` and `storage`, with the platform timer at `now_ms`.
-fn persisted_of<S: tpm2_engine::storage::NvStorage>(
-    state: &State,
-    storage: &S,
-    now_ms: u64,
-) -> Box<PersistedTpmState> {
+/// The persisted state of `state` (with its NV data), with the platform timer at `now_ms`.
+fn persisted_of<P: tpm2_engine::Platform>(state: &State<P>, now_ms: u64) -> Box<PersistedTpmState> {
     let mut persisted = new_persisted();
-    persistence::try_serialize(state, storage, now_ms, &mut persisted).expect("serialize");
+    persistence::try_serialize(state, now_ms, &mut persisted).expect("serialize");
     persisted
 }
 
-/// Restores `persisted` into `state` and `storage`, with the platform timer at `now_ms`.
-fn restore_into<S: tpm2_engine::storage::NvStorage>(
+/// Restores `persisted` into `state` (with its NV data), with the platform timer at `now_ms`.
+fn restore_into<P: tpm2_engine::Platform>(
     persisted: &PersistedTpmState,
-    state: &mut State,
-    storage: &mut S,
+    state: &mut State<P>,
     now_ms: u64,
 ) -> Result<(), DeserializeError> {
-    persistence::try_deserialize::<TestCryptoProvider, _>(persisted, state, storage, now_ms)
+    persistence::try_deserialize::<TestCryptoProvider, _>(persisted, state, now_ms)
 }
 
 /// The payload of the NV item `handle` of `persisted`.
@@ -89,12 +95,10 @@ macro_rules! two_engines {
         let mut timer_b = FakeTimer;
         let mut rng_b = FakeRng::new();
         #[allow(unused_mut)]
-        let mut $b = tpm2_engine::TpmEngine::new(tpm2_engine::TpmPlatform::new(
-            &mut crypto_b,
+        let mut $b = tpm2_engine::TpmEngine::new(
+            tpm2_engine::TpmPlatform::new(&mut crypto_b, &mut timer_b, &mut rng_b),
             &mut storage_b,
-            &mut timer_b,
-            &mut rng_b,
-        ))
+        )
         .unwrap();
     };
 }
@@ -400,7 +404,7 @@ fn nv_index_item(public: TpmsNvPublic<'_>, data: &[u8]) -> Vec<u8> {
 /// timer reading of the restore.
 #[test]
 fn global_state_to_persisted_and_back_round_trip() {
-    let mut state = Box::<State>::default();
+    let mut state = Box::<RamState>::default();
     state.initialized = true;
     state.nv.persistent.reset_count = 77;
     state.nv.reset.restart_count = 5;
@@ -520,9 +524,8 @@ fn global_state_to_persisted_and_back_round_trip() {
     );
     let mut hierarchy = [0u8; HIERARCHY_RECORD_SIZE];
     let hierarchy_len = NvHierarchyRecord::default().encode(&mut hierarchy);
-    let mut storage = Box::new(RamStorageMock::<NV_STORAGE_SIZE>::new());
     {
-        let mut mgr = StorageManager::new(&mut *storage);
+        let mgr = &mut state.nv.index;
         mgr.define_space(HIERARCHY_RECORD_HANDLE, HIERARCHY_RECORD_SIZE as u16, 0)
             .unwrap();
         mgr.write_item(HIERARCHY_RECORD_HANDLE, 0, &hierarchy[..hierarchy_len])
@@ -531,9 +534,9 @@ fn global_state_to_persisted_and_back_round_trip() {
             .unwrap();
         mgr.write_item(0x0150_0001, 0, &index).unwrap();
     }
-    storage.as_mut_slice()[0..4].copy_from_slice(&77u32.to_be_bytes());
+    state.nv.index.as_mut_slice()[0..4].copy_from_slice(&77u32.to_be_bytes());
 
-    let persisted = persisted_of(&state, &*storage, 2000);
+    let persisted = persisted_of(&*state, 2000);
     assert_eq!(
         persisted.nv.handles.as_slice(),
         &[HIERARCHY_RECORD_HANDLE, 0x0150_0001]
@@ -572,10 +575,8 @@ fn global_state_to_persisted_and_back_round_trip() {
     ));
 
     // Restore on another platform timer, which reads 50.
-    let mut restored_storage = Box::new(RamStorageMock::<NV_STORAGE_SIZE>::new());
-    let mut restored_state = Box::<State>::default();
-    restore_into(&persisted, &mut restored_state, &mut *restored_storage, 50)
-        .expect("Conversion to State must succeed");
+    let mut restored_state = Box::<RamState>::default();
+    restore_into(&persisted, &mut *restored_state, 50).expect("Conversion to State must succeed");
     assert!(restored_state.active_sessions[0].is_some());
     assert!(restored_state.active_sequences[0].is_some());
     assert_eq!(restored_state.nv.reset.saved_sessions[2], Some(0x0200_0002));
@@ -586,7 +587,10 @@ fn global_state_to_persisted_and_back_round_trip() {
     assert!(restored_state.da_pending_on_nv);
     assert_eq!(restored_state.locality, 3);
     assert!(!restored_state.nv.persistent.lockout_auth_enabled);
-    assert_eq!(restored_state.update_nv, State::default().update_nv);
+    assert_eq!(
+        restored_state.update_nv,
+        Box::<RamState>::default().update_nv
+    );
     assert!(!restored_state.clear_orderly);
     assert_eq!(restored_state.last_timer_read_ms, Some(50));
     assert_eq!(restored_state.clock_adjust_remainder, 772);
@@ -598,20 +602,20 @@ fn global_state_to_persisted_and_back_round_trip() {
         (50, 1300)
     );
 
-    let re_persisted = persisted_of(&restored_state, &*restored_storage, 50);
+    let re_persisted = persisted_of(&*restored_state, 50);
     assert_eq!(persisted, re_persisted);
 
-    let mut restored_storage_2 = Box::new(RamStorageMock::<NV_STORAGE_SIZE>::new());
-    let mut restored_state_2 = Box::<State>::default();
-    persistence::deserialize::<TestCryptoProvider, _>(
-        &re_persisted,
-        &mut restored_state_2,
-        &mut *restored_storage_2,
-        50,
+    let mut restored_state_2 = Box::<RamState>::default();
+    persistence::deserialize::<TestCryptoProvider, _>(&re_persisted, &mut *restored_state_2, 50);
+    assert_eq!(
+        restored_state.nv.index.as_slice(),
+        restored_state_2.nv.index.as_slice()
     );
-    assert_eq!(restored_storage.as_slice(), restored_storage_2.as_slice());
     // The restored storage holds the same NV header and items as the original one.
-    assert_eq!(restored_storage.as_slice(), storage.as_slice());
+    assert_eq!(
+        restored_state.nv.index.as_slice(),
+        state.nv.index.as_slice()
+    );
 
     // The ACTs tick on from the persisted phase: the pending second and one more after 700 ms
     // (the restored TPM is initialized).
@@ -626,14 +630,12 @@ fn global_state_to_persisted_and_back_round_trip() {
 /// An unknown hash algorithm in the persisted state is rejected.
 #[test]
 fn invalid_alg_hash_returns_deserialize_error() {
-    let state = Box::<State>::default();
-    let storage = Box::new(RamStorageMock::<NV_STORAGE_SIZE>::new());
-    let mut persisted = persisted_of(&state, &*storage, 0);
+    let state = Box::<RamState>::default();
+    let mut persisted = persisted_of(&*state, 0);
     persisted.clear.platform_alg = Some(0xFFFF);
-    let mut out_storage = Box::new(RamStorageMock::<NV_STORAGE_SIZE>::new());
-    let mut out_state = Box::<State>::default();
+    let mut out_state = Box::<RamState>::default();
     assert_eq!(
-        restore_into(&persisted, &mut out_state, &mut *out_storage, 0).unwrap_err(),
+        restore_into(&persisted, &mut *out_state, 0).unwrap_err(),
         DeserializeError::InvalidValue("clear.platform_alg")
     );
 }
@@ -781,9 +783,8 @@ fn array_serde_uses_active_elements_and_checks_capacity() {
 #[cfg(feature = "serde")]
 #[test]
 fn fixed_byte_arrays_require_their_exact_length() {
-    let state = Box::<State>::default();
-    let storage = Box::new(RamStorageMock::<NV_STORAGE_SIZE>::new());
-    let persisted = persisted_of(&state, &*storage, 0);
+    let state = Box::<RamState>::default();
+    let persisted = persisted_of(&*state, 0);
     let mut json: serde_json::Value = serde_json::to_value(&*persisted).unwrap();
     let seed = json["orderly"]["drbg"]["seed"].as_array_mut().unwrap();
     assert_eq!(seed.len(), 48);
@@ -931,13 +932,7 @@ fn self_test_state_is_persisted_by_the_engine() {
     assert_eq!(target.self_test.load(), source.self_test.load());
 
     let mut from_free_fn = new_persisted();
-    persistence::try_serialize(
-        &source.state,
-        &*source.platform.storage,
-        0,
-        &mut from_free_fn,
-    )
-    .unwrap();
+    persistence::try_serialize(&source.state, 0, &mut from_free_fn).unwrap();
     assert!(!from_free_fn.self_test.failed);
     let initial: Vec<u16> = tpm2_engine::self_test::SelfTestState::default()
         .load()
@@ -1104,10 +1099,7 @@ fn deferred_da_update_survives_migration() {
     for tpm in [&mut source, &mut target] {
         let _ = execute_command(tpm, &change_auth, &[password_auth(b"")]);
         assert!(!tpm.state.da_pending_on_nv);
-        assert_eq!(
-            NvHeader::read(&*tpm.platform.storage).unwrap().failed_tries,
-            2
-        );
+        assert_eq!(NvHeader::read(&tpm.state.nv.index).unwrap().failed_tries, 2);
     }
     let mut source_after = new_persisted();
     source.save_persisted_state(&mut source_after).unwrap();

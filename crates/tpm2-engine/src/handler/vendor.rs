@@ -244,6 +244,9 @@ mod tests {
                 0xff, 0xff, 0xaa, 0xff,
             ]
         );
-        assert_eq!(crate::State::default().ntc2_config, NTC2_INITIAL_CONFIG);
+        assert_eq!(
+            crate::test_support::TestState::default().ntc2_config,
+            NTC2_INITIAL_CONFIG
+        );
     }
 }

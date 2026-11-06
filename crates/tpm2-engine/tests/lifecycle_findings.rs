@@ -11,7 +11,7 @@ mod common;
 use common::{FakeCrypto, FakeRng, FakeStorage, FakeTimer};
 use std::sync::atomic::{AtomicBool, Ordering};
 use tpm2::crypto::{CryptoError, Rng};
-use tpm2_engine::{State, TpmEngine, TpmPlatform};
+use tpm2_engine::{TpmEngine, TpmPlatform};
 
 /// Builds a `TPM_ST_SESSIONS` command authorized with one empty password session per handle.
 fn pw_command(cc: u32, handles: &[u32], params: &[u8]) -> Vec<u8> {
@@ -49,7 +49,7 @@ fn plain_command(cc: u32, params: &[u8]) -> Vec<u8> {
 
 /// Executes `cmd` and returns the response code.
 fn run<R: Rng + Sync>(
-    tpm: &mut TpmEngine<TpmPlatform<'_, FakeCrypto, FakeStorage, FakeTimer, R>>,
+    tpm: &mut TpmEngine<TpmPlatform<'_, FakeCrypto, &'_ mut FakeStorage, FakeTimer, R>>,
     cmd: &[u8],
 ) -> u32 {
     let mut rsp = [0u8; 4096];
@@ -68,7 +68,7 @@ const TPM_RH_PLATFORM: u32 = 0x4000_000C;
 
 /// Powers on (`_TPM_Init`) with `gs` and runs `TPM2_Startup(CLEAR)`.
 fn power_on_startup<R: Rng + Sync>(
-    tpm: &mut TpmEngine<TpmPlatform<'_, FakeCrypto, FakeStorage, FakeTimer, R>>,
+    tpm: &mut TpmEngine<TpmPlatform<'_, FakeCrypto, &'_ mut FakeStorage, FakeTimer, R>>,
 ) {
     tpm.reset();
     assert_eq!(run(tpm, &plain_command(TPM_CC_STARTUP, &[0, 0])), 0);
@@ -84,8 +84,8 @@ fn tpm2_startup_missing_nv_loads_for_orderly_counters_and_lockout() {
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer::new();
     let mut rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
-    let mut tpm = TpmEngine::new(platform).unwrap();
+    let platform = TpmPlatform::new(&mut crypto, &mut timer, &mut rng);
+    let mut tpm = TpmEngine::new(platform, &mut storage).unwrap();
 
     tpm.init_storage();
     power_on_startup(&mut tpm);
@@ -111,7 +111,7 @@ fn tpm2_startup_missing_nv_loads_for_orderly_counters_and_lockout() {
     assert_eq!(run(&mut tpm, &plain_command(TPM_CC_SHUTDOWN, &[0, 0])), 0);
 
     // Real reboot: RAM is lost, only NV survives.
-    tpm.state = State::default();
+    tpm.state.reinitialize();
     tpm.reset();
     assert_eq!(tpm.state.nv.persistent.max_tries, 7);
     assert_eq!(tpm.state.nv.persistent.recovery_time, 0);
@@ -178,8 +178,8 @@ fn tpm2_getrandom_stirrandom_unmarshal_panic_and_size_bugs() {
         inner: FakeRng::new(),
         fail: &fail,
     };
-    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
-    let mut tpm = TpmEngine::new(platform).unwrap();
+    let platform = TpmPlatform::new(&mut crypto, &mut timer, &mut rng);
+    let mut tpm = TpmEngine::new(platform, &mut storage).unwrap();
     tpm.init_storage();
     power_on_startup(&mut tpm);
 
@@ -205,8 +205,8 @@ fn rng_failure_at_manufacture_leaves_seeds_and_proofs_unprovisioned() {
         inner: FakeRng::new(),
         fail: &fail,
     };
-    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
-    let mut tpm = TpmEngine::new(platform).unwrap();
+    let platform = TpmPlatform::new(&mut crypto, &mut timer, &mut rng);
+    let mut tpm = TpmEngine::new(platform, &mut storage).unwrap();
     tpm.init_storage();
     for size in [
         tpm.state.nv.persistent.ep_seed_size,

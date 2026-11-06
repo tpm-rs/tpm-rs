@@ -171,7 +171,7 @@ impl CommandAuditList {
     }
 }
 
-impl State {
+impl<P: Platform> State<P> {
     /// The command audit hash algorithm (`gp.auditHashAlg`). An invalid stored value (which a
     /// TPM state never contains) falls back to the manufacture default, SHA-512 (SHA-384 without SHA-512).
     pub fn command_audit_hash_alg(&self) -> TpmiAlgHash {
@@ -185,7 +185,7 @@ impl State {
 /// [`AUDIT_EXT_LEN`](crate::storage::nv::AUDIT_EXT_LEN) bytes. Returns the number
 /// of bytes written.
 #[cfg(test)]
-pub(crate) fn encode_audit_ext(global_state: &State, dst: &mut [u8]) -> usize {
+pub(crate) fn encode_audit_ext<P: Platform>(global_state: &State<P>, dst: &mut [u8]) -> usize {
     crate::storage::nv::NvAuditExt {
         hash_alg: global_state.nv.persistent.audit_hash_alg,
         counter: global_state.nv.persistent.audit_counter,
@@ -198,7 +198,7 @@ pub(crate) fn encode_audit_ext(global_state: &State, dst: &mut [u8]) -> usize {
 /// `src`. Returns `false` (leaving `global_state` untouched) if `src` does not start with a
 /// complete record or the record names an unsupported hash algorithm.
 #[cfg(test)]
-pub(crate) fn decode_audit_ext(global_state: &mut State, src: &[u8]) -> bool {
+pub(crate) fn decode_audit_ext<P: Platform>(global_state: &mut State<P>, src: &[u8]) -> bool {
     let Some(ext) = crate::storage::nv::NvAuditExt::decode(src) else {
         return false;
     };
@@ -471,7 +471,7 @@ mod tests {
 
     #[test]
     fn audit_ext_round_trips() {
-        let mut state = State::default();
+        let mut state = crate::test_support::TestState::default();
         state.nv.persistent.audit_hash_alg = 0x000B; // TPM_ALG_SHA256
         state.nv.persistent.audit_counter = 0x1122_3344_5566_7788;
         state.nv.persistent.audit_commands.set(TpmCc::NVRead);
@@ -479,7 +479,7 @@ mod tests {
         assert_eq!(encode_audit_ext(&state, &mut buf), AUDIT_EXT_LEN);
         assert_eq!(buf[0], AUDIT_EXT_MARKER);
 
-        let mut restored = State::default();
+        let mut restored = crate::test_support::TestState::default();
         assert!(decode_audit_ext(&mut restored, &buf));
         assert_eq!(
             restored.nv.persistent.audit_hash_alg,
@@ -497,12 +497,12 @@ mod tests {
 
     #[test]
     fn audit_ext_rejects_malformed_records() {
-        let mut state = State::default();
+        let mut state = crate::test_support::TestState::default();
         state.nv.persistent.audit_counter = 5;
         let mut buf = [0u8; AUDIT_EXT_LEN];
         encode_audit_ext(&state, &mut buf);
 
-        let mut target = State::default();
+        let mut target = crate::test_support::TestState::default();
         assert!(
             !decode_audit_ext(&mut target, &buf[..AUDIT_EXT_LEN - 1]),
             "short"

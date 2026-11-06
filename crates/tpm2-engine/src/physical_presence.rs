@@ -18,8 +18,7 @@
 
 use crate::Platform;
 use crate::engine::{TpmEngine, is_command_supported};
-use crate::storage::Tpm2Storage;
-use crate::storage::manager::StorageManager;
+use crate::storage::IndexState;
 use tpm2::TpmCc;
 use tpm2::crypto::Crypto;
 
@@ -155,14 +154,14 @@ impl<C: Crypto, P: Platform<Crypto = C>> TpmEngine<P> {
             pp_list: self.state.nv.persistent.pp_list.bits(),
             algorithm_set: self.state.nv.persistent.algorithm_set,
         }
-        .write(self.platform.storage_mut());
+        .write(&mut self.state.nv.index);
     }
 
     /// Reloads `gp.ppList` and `gp.algorithmSet` from NV at `_TPM_Init`; without a record (as
     /// after manufacture) they keep their manufacture defaults.
     pub(crate) fn restore_platform_settings(&mut self) {
         if let Some(record) =
-            crate::storage::nv::NvPlatformSettingsRecord::read(self.platform.storage_mut())
+            crate::storage::nv::NvPlatformSettingsRecord::read(&mut self.state.nv.index)
         {
             self.state.nv.persistent.pp_list = PpList::from_bits(record.pp_list);
             self.state.nv.persistent.algorithm_set = record.algorithm_set;
@@ -171,7 +170,7 @@ impl<C: Crypto, P: Platform<Crypto = C>> TpmEngine<P> {
 
     /// Forgets the platform settings record (manufacture).
     pub(crate) fn clear_platform_settings(&mut self) {
-        let mut storage = StorageManager::new(self.platform.storage_mut());
+        let storage = &mut self.state.nv.index;
         let _ = storage.undefine_space(PLATFORM_SETTINGS_HANDLE);
         self.state.nv.persistent.pp_list = PpList::manufacture_default();
         self.state.nv.persistent.algorithm_set = 0;

@@ -27,9 +27,9 @@ fn setup_tpm<'a>(
     storage: &'a mut FakeStorage,
     timer: &'a mut FakeTimer,
     rng: &'a mut FakeRng,
-) -> TpmEngine<TpmPlatform<'a, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng>> {
-    let platform = TpmPlatform::new(crypto, storage, timer, rng);
-    let mut tpm = TpmEngine::new(platform).unwrap();
+) -> TpmEngine<TpmPlatform<'a, TestCryptoProvider, &'a mut FakeStorage, FakeTimer, FakeRng>> {
+    let platform = TpmPlatform::new(crypto, timer, rng);
+    let mut tpm = TpmEngine::new(platform, storage).unwrap();
     tpm.init_storage();
     tpm.state.nv_available = true;
     tpm.state.locality = 0;
@@ -43,7 +43,9 @@ fn setup_tpm<'a>(
 }
 
 fn execute_tpm_command<C: Command>(
-    tpm: &mut TpmEngine<TpmPlatform<'_, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng>>,
+    tpm: &mut TpmEngine<
+        TpmPlatform<'_, TestCryptoProvider, &'_ mut FakeStorage, FakeTimer, FakeRng>,
+    >,
     cmd: &C,
     auths: &[TpmsAuthCommand],
 ) -> Result<C::Response<'static>, u32>
@@ -255,7 +257,9 @@ fn create_transient_ecc_key(
 /// `commandCode` is `TPM2_Duplicate` (C `IsPolicySessionRequired()` / `CheckPolicyAuthSession()`).
 /// Installs such a session (its policyDigest equals the object's empty authPolicy) and returns the
 /// authorization that uses it.
-fn dup_policy_auth(global_state: &mut tpm2_engine::State) -> TpmsAuthCommand<'static> {
+fn dup_policy_auth<P: tpm2_engine::Platform>(
+    global_state: &mut tpm2_engine::State<P>,
+) -> TpmsAuthCommand<'static> {
     const SESSION: u32 = 0x0300_0000;
     let _ = global_state.flush_session(SESSION);
     let mut session = common::make_test_session_state(

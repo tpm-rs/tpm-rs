@@ -312,3 +312,11 @@ impl TpmTimer for FakeTimer {
         0
     }
 }
+
+/// A [`crate::Platform`] over the fake components whose NV data structure is an owned
+/// [`FakeStorage`], for tests of a standalone [`TestState`].
+pub type TestPlatform = crate::TpmPlatform<'static, FakeCrypto, FakeStorage, FakeTimer, FakeRng>;
+
+/// A standalone TPM state ([`crate::State`]) over [`TestPlatform`]; its
+/// [`Default`](crate::State::default) has a fresh [`FakeStorage`].
+pub type TestState = crate::State<TestPlatform>;

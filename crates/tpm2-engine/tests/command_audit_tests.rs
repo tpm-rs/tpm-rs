@@ -17,9 +17,9 @@ fn test_get_command_audit_digest_with_zeroed_audit_hash_alg() {
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
     let mut rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
+    let platform = TpmPlatform::new(&mut crypto, &mut timer, &mut rng);
 
-    let mut tpm = TpmEngine::new(platform).unwrap();
+    let mut tpm = TpmEngine::new(platform, &mut storage).unwrap();
     tpm.state.init_zeroed();
     // Intentionally test with audit_hash_alg = 0
     tpm.state.nv.persistent.audit_hash_alg = 0;
@@ -115,7 +115,9 @@ fn set_command_code_audit_status_cmd(
 
 /// Executes `request` and returns the response code.
 fn execute_rc(
-    tpm: &mut TpmEngine<TpmPlatform<'_, common::FakeCrypto, FakeStorage, FakeTimer, FakeRng>>,
+    tpm: &mut TpmEngine<
+        TpmPlatform<'_, common::FakeCrypto, &'_ mut FakeStorage, FakeTimer, FakeRng>,
+    >,
     request: &[u8],
 ) -> u32 {
     let mut response = [0u8; 4096];
@@ -141,8 +143,8 @@ fn command_audit_state_persists_across_tpm_init() {
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
     let mut rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
-    let mut tpm = TpmEngine::new(platform).unwrap();
+    let platform = TpmPlatform::new(&mut crypto, &mut timer, &mut rng);
+    let mut tpm = TpmEngine::new(platform, &mut storage).unwrap();
     tpm.state.init_zeroed();
     tpm.init_storage();
     let startup = hex!("8001 0000000c 00000144 0000");
@@ -215,8 +217,8 @@ fn rejected_commands_leave_command_audit_state_unchanged() {
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
     let mut rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
-    let mut tpm = TpmEngine::new(platform).unwrap();
+    let platform = TpmPlatform::new(&mut crypto, &mut timer, &mut rng);
+    let mut tpm = TpmEngine::new(platform, &mut storage).unwrap();
     tpm.state.init_zeroed();
     tpm.init_storage();
     let startup = hex!("8001 0000000c 00000144 0000");

@@ -2,7 +2,7 @@
 
 //! Structured NV records: the layouts of everything tpm-rs keeps in NV, as typed records with
 //! their `decode` (bytes → record) and `encode` (record → bytes), and the helpers that read and
-//! write them through the [`StorageManager`].
+//! write them through the TPM's NV data structure ([`IndexState`]).
 //!
 //! NV holds the reserved header (the first [`HEADER_SIZE`] octets, [`NvHeader`]) and the storage
 //! manager's items. Besides the user's NV Indices ([`NvIndexRecord`], handles `0x01xx_xxxx`) and
@@ -24,8 +24,8 @@ use crate::command_audit::COMMAND_AUDIT_LIST_SIZE;
 use crate::engine::{COMMIT_NONCE_SIZE, DrbgState, MAX_ACTIVE_SESSIONS};
 use crate::handler::{MAX_PRIVATE_KEY_SIZE, TransientObject};
 use crate::owned::{OwnedAuth, OwnedDigest, OwnedName, OwnedPublic};
-use crate::storage::manager::{RESERVED_SIZE, StorageManager};
-use crate::storage::{NvStorage, StorageError, Tpm2Storage};
+use crate::storage::manager::RESERVED_SIZE;
+use crate::storage::{IndexState, StorageError};
 use tpm2::errors::TpmRc;
 use tpm2::{Marshal, Tpm2bAuth, Tpm2bNvPublic, TpmiAlgHash, TpmlPcrSelection, TpmsNvPublic};
 use tpm2::{Tpm2bDigest, Unmarshal};
@@ -153,9 +153,9 @@ impl NvHeader {
     }
 
     /// Reads the header from `storage`.
-    pub fn read(storage: &(impl NvStorage + ?Sized)) -> Result<Self, StorageError> {
+    pub fn read(storage: &(impl IndexState + ?Sized)) -> Result<Self, StorageError> {
         let mut b = [0u8; HEADER_SIZE];
-        storage.read_nv(0, &mut b)?;
+        storage.read_reserved(0, &mut b)?;
         Ok(Self::decode(&b))
     }
 }
@@ -166,8 +166,11 @@ impl NvHeader {
 
 /// Reads the whole payload of item `handle` into `buf`, returning its length, or `None` if the
 /// item is not defined, does not fit `buf`, or cannot be read.
-fn read_item<'b>(storage: &mut dyn NvStorage, handle: u32, buf: &'b mut [u8]) -> Option<&'b [u8]> {
-    let storage = StorageManager::new(storage);
+fn read_item<'b>(
+    storage: &mut (impl IndexState + ?Sized),
+    handle: u32,
+    buf: &'b mut [u8],
+) -> Option<&'b [u8]> {
     let meta = storage.get_metadata(handle).ok()?;
     let len = meta.data_size as usize;
     let buf = buf.get_mut(..len)?;
@@ -176,8 +179,11 @@ fn read_item<'b>(storage: &mut dyn NvStorage, handle: u32, buf: &'b mut [u8]) ->
 }
 
 /// Replaces item `handle` with `data` (defining it with exactly `data.len()` octets).
-fn replace_item(storage: &mut dyn NvStorage, handle: u32, data: &[u8]) -> Result<(), TpmRc> {
-    let mut storage = StorageManager::new(storage);
+fn replace_item(
+    storage: &mut (impl IndexState + ?Sized),
+    handle: u32,
+    data: &[u8],
+) -> Result<(), TpmRc> {
     let _ = storage.undefine_space(handle);
     storage
         .define_space(handle, data.len() as u16, 0)
@@ -188,8 +194,8 @@ fn replace_item(storage: &mut dyn NvStorage, handle: u32, data: &[u8]) -> Result
 }
 
 /// Removes item `handle`, if it exists.
-pub fn delete_item(storage: &mut dyn NvStorage, handle: u32) {
-    let _ = StorageManager::new(storage).undefine_space(handle);
+pub fn delete_item(storage: &mut (impl IndexState + ?Sized), handle: u32) {
+    let _ = storage.undefine_space(handle);
 }
 
 /// A writer over a fixed buffer for the record encoders.
@@ -514,9 +520,9 @@ impl NvHierarchyRecord {
     }
 
     /// Reads the record from `storage` (`None` if it is missing or malformed).
-    pub fn read(storage: &mut dyn NvStorage) -> Option<Self> {
+    pub fn read(storage: &mut (impl IndexState + ?Sized)) -> Option<Self> {
         let mut buf = [0u8; HIERARCHY_RECORD_SIZE];
-        let storage_mgr = StorageManager::new(storage);
+        let storage_mgr = storage;
         let meta = storage_mgr.get_metadata(HIERARCHY_RECORD_HANDLE).ok()?;
         let len = core::cmp::min(meta.data_size as usize, HIERARCHY_RECORD_SIZE);
         storage_mgr
@@ -528,10 +534,9 @@ impl NvHierarchyRecord {
     /// Writes the record to `storage`. The item is (re)defined with [`HIERARCHY_RECORD_SIZE`]
     /// octets if it is missing or too small; NV write errors are ignored (as in
     /// `NV_SYNC_PERSISTENT`, a failed NV write does not fail the command).
-    pub fn write(&self, storage: &mut dyn NvStorage) {
+    pub fn write(&self, storage: &mut (impl IndexState + ?Sized)) {
         let mut buf = [0u8; HIERARCHY_RECORD_SIZE];
         let len = self.encode(&mut buf);
-        let mut storage = StorageManager::new(storage);
         match storage.get_metadata(HIERARCHY_RECORD_HANDLE) {
             Ok(meta) if (meta.data_size as usize) >= len => {}
             Ok(_) => {
@@ -720,13 +725,13 @@ impl NvStateSaveRecord {
     }
 
     /// Reads the record from `storage` (`None` if it is missing or malformed).
-    pub fn read(storage: &mut dyn NvStorage) -> Option<Self> {
+    pub fn read(storage: &mut (impl IndexState + ?Sized)) -> Option<Self> {
         let mut buf = [0u8; STATE_SAVE_MAX_LEN];
         Self::decode(read_item(storage, STATE_SAVE_HANDLE, &mut buf)?)
     }
 
     /// Writes the record to `storage` (replacing any previous one).
-    pub fn write(&self, storage: &mut dyn NvStorage) -> Result<(), TpmRc> {
+    pub fn write(&self, storage: &mut (impl IndexState + ?Sized)) -> Result<(), TpmRc> {
         let mut buf = [0u8; STATE_SAVE_MAX_LEN];
         let len = self.encode(&mut buf);
         replace_item(storage, STATE_SAVE_HANDLE, &buf[..len])
@@ -746,7 +751,7 @@ pub struct NvPcrAllocationRecord {
 
 impl NvPcrAllocationRecord {
     /// Reads the record from `storage` (`None` if it is missing or malformed).
-    pub fn read(storage: &mut dyn NvStorage) -> Option<Self> {
+    pub fn read(storage: &mut (impl IndexState + ?Sized)) -> Option<Self> {
         let mut buf = [0u8; TpmlPcrSelection::MAX_SIZE];
         let mut slice = read_item(storage, PCR_ALLOCATION_HANDLE, &mut buf)?;
         let allocation = TpmlPcrSelection::unmarshal(&mut slice).ok()?;
@@ -754,7 +759,7 @@ impl NvPcrAllocationRecord {
     }
 
     /// Writes the record to `storage` (replacing any previous one).
-    pub fn write(&self, storage: &mut dyn NvStorage) -> Result<(), TpmRc> {
+    pub fn write(&self, storage: &mut (impl IndexState + ?Sized)) -> Result<(), TpmRc> {
         let mut buf = [0u8; TpmlPcrSelection::MAX_SIZE];
         let len = self.allocation.marshal(&mut buf);
         replace_item(storage, PCR_ALLOCATION_HANDLE, &buf[..len])
@@ -791,8 +796,7 @@ impl NvPlatformSettingsRecord {
     }
 
     /// Reads the record from `storage` (`None` if it is missing).
-    pub fn read(storage: &mut dyn NvStorage) -> Option<Self> {
-        let storage = StorageManager::new(storage);
+    pub fn read(storage: &mut (impl IndexState + ?Sized)) -> Option<Self> {
         let mut b = [0u8; PLATFORM_SETTINGS_LEN];
         storage.get_metadata(PLATFORM_SETTINGS_HANDLE).ok()?;
         storage
@@ -802,8 +806,7 @@ impl NvPlatformSettingsRecord {
     }
 
     /// Writes the record to `storage`, defining it if needed; NV write errors are ignored.
-    pub fn write(&self, storage: &mut dyn NvStorage) {
-        let mut storage = StorageManager::new(storage);
+    pub fn write(&self, storage: &mut (impl IndexState + ?Sized)) {
         if storage.get_metadata(PLATFORM_SETTINGS_HANDLE).is_err() {
             let _ = storage.define_space(PLATFORM_SETTINGS_HANDLE, PLATFORM_SETTINGS_LEN as u16, 0);
         }
@@ -1020,8 +1023,8 @@ impl NvPersistentObjectRecord {
 
     /// Reads the persistent object `handle` from `storage`: `TPM_RC_HANDLE` if it is not
     /// defined, `TPM_RC_FAILURE` if it cannot be read or decoded.
-    pub fn read(storage: &mut dyn NvStorage, handle: u32) -> Result<Self, TpmRc> {
-        let storage_mgr = StorageManager::new(storage);
+    pub fn read(storage: &mut (impl IndexState + ?Sized), handle: u32) -> Result<Self, TpmRc> {
+        let storage_mgr = storage;
         let metadata = storage_mgr
             .get_metadata(handle)
             .map_err(|_| TpmRc::HANDLE.to_rc())?;
@@ -1036,7 +1039,11 @@ impl NvPersistentObjectRecord {
 
     /// Defines and writes the persistent object `handle` (`TPM_RC_NV_SPACE` if there is no room;
     /// on a write failure the item is removed again).
-    pub fn write(&self, storage: &mut StorageManager<'_>, handle: u32) -> Result<(), TpmRc> {
+    pub fn write(
+        &self,
+        storage: &mut (impl IndexState + ?Sized),
+        handle: u32,
+    ) -> Result<(), TpmRc> {
         let mut buf = [0u8; PERSISTENT_OBJECT_MAX_LEN];
         let len = self.encode(&mut buf)?;
         storage

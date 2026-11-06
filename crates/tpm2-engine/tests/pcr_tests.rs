@@ -11,8 +11,8 @@ fn test_hcrtm_pre_startup_sequence_and_slot_eviction() {
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer::new();
     let mut rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
-    let mut tpm = TpmEngine::new(platform).unwrap();
+    let platform = TpmPlatform::new(&mut crypto, &mut timer, &mut rng);
+    let mut tpm = TpmEngine::new(platform, &mut storage).unwrap();
     tpm.init_storage();
     tpm.state.nv_available = true;
     tpm.state.locality = 0;

@@ -17,9 +17,9 @@ fn test_time_epoch_monotonic_persistence_and_resume_preservation() {
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer::new();
     let mut rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
+    let platform = TpmPlatform::new(&mut crypto, &mut timer, &mut rng);
 
-    let mut tpm = TpmEngine::new(platform).unwrap();
+    let mut tpm = TpmEngine::new(platform, &mut storage).unwrap();
     tpm.init_storage();
     tpm.state.nv_available = true;
     tpm.state.g_nv_ok = true;
@@ -34,10 +34,7 @@ fn test_time_epoch_monotonic_persistence_and_resume_preservation() {
     assert_eq!(tpm.state.nv.persistent.time_epoch, 1);
 
     let mut nv_epoch_bytes = [0u8; 8];
-    tpm.platform
-        .storage
-        .read_nv(24, &mut nv_epoch_bytes)
-        .unwrap();
+    tpm.state.nv.index.read_nv(24, &mut nv_epoch_bytes).unwrap();
     assert_eq!(u64::from_be_bytes(nv_epoch_bytes), 1);
 
     // 2. Orderly Shutdown(STATE) -> Startup(STATE) (TPM Resume) preserves time_epoch == 1
@@ -65,9 +62,6 @@ fn test_time_epoch_monotonic_persistence_and_resume_preservation() {
     assert_eq!(&resp[6..10], &[0, 0, 0, 0]);
     assert_eq!(tpm.state.nv.persistent.time_epoch, 2);
 
-    tpm.platform
-        .storage
-        .read_nv(24, &mut nv_epoch_bytes)
-        .unwrap();
+    tpm.state.nv.index.read_nv(24, &mut nv_epoch_bytes).unwrap();
     assert_eq!(u64::from_be_bytes(nv_epoch_bytes), 2);
 }

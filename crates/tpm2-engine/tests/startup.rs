@@ -11,8 +11,8 @@ fn test_adv_total_reset_count_overflow() {
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
     let mut rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
-    let mut tpm = TpmEngine::new(platform).unwrap();
+    let platform = TpmPlatform::new(&mut crypto, &mut timer, &mut rng);
+    let mut tpm = TpmEngine::new(platform, &mut storage).unwrap();
     tpm.init_storage();
     tpm.state.nv_available = true;
     tpm.state.locality = 0;
@@ -37,8 +37,8 @@ fn test_adv_nv_storage_failure() {
     storage.fail_on_write = true;
     let mut timer = FakeTimer;
     let mut rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
-    let mut tpm = TpmEngine::new(platform).unwrap();
+    let platform = TpmPlatform::new(&mut crypto, &mut timer, &mut rng);
+    let mut tpm = TpmEngine::new(platform, &mut storage).unwrap();
     tpm.init_storage();
     tpm.state.nv_available = true;
     tpm.state.locality = 0;
@@ -64,8 +64,8 @@ fn test_startup_preserves_custom_platform_unique_details_and_allows_policy_secre
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
     let mut rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
-    let mut tpm = TpmEngine::new(platform).unwrap();
+    let platform = TpmPlatform::new(&mut crypto, &mut timer, &mut rng);
+    let mut tpm = TpmEngine::new(platform, &mut storage).unwrap();
     tpm.init_storage();
     tpm.state.nv_available = true;
     tpm.state.locality = 0;

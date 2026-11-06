@@ -1,6 +1,6 @@
 use crate::Platform;
 use crate::handle_checks::{Tpmi, check};
-use crate::storage::Tpm2Storage;
+use crate::storage::IndexState;
 use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
 use tpm2::Handle;
 #[allow(unused_imports)]
@@ -171,10 +171,8 @@ impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
             // Find the next entity to delete, re-reading the TOC after every deletion (like the
             // C code re-iterates from the beginning after `NvDelete`).
             let toc = {
-                let storage = crate::storage::manager::StorageManager::new(
-                    self.context.platform.storage_mut(),
-                );
-                storage.read_toc().map_err(|_| TpmRc::FAILURE)?
+                let storage = &mut self.context.state.nv.index;
+                storage.items().map_err(|_| TpmRc::FAILURE)?
             };
             let mut victim = None;
             for item in toc.iter().filter(|item| item.in_use != 0) {
@@ -183,9 +181,7 @@ impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
                     if hierarchy != Handle::RH_OWNER.0 {
                         continue;
                     }
-                    let storage = crate::storage::manager::StorageManager::new(
-                        self.context.platform.storage_mut(),
-                    );
+                    let storage = &mut self.context.state.nv.index;
                     if let Ok(meta) = storage.get_metadata(item.handle)
                         && (meta.attributes & PLATFORMCREATE) == 0
                     {
@@ -210,16 +206,14 @@ impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
             if (handle >> 24) == tpm2::TpmHt::NVIndex as u32 {
                 self.fold_nv_counter_into_max_counter(handle);
             }
-            let mut storage =
-                crate::storage::manager::StorageManager::new(self.context.platform.storage_mut());
+            let storage = &mut self.context.state.nv.index;
             storage.undefine_space(handle).map_err(|_| TpmRc::FAILURE)?;
         }
     }
 
     /// If `handle` is a written NV counter index, raises `max_counter` to its current value.
     fn fold_nv_counter_into_max_counter(&mut self, handle: u32) {
-        let storage =
-            crate::storage::manager::StorageManager::new(self.context.platform.storage_mut());
+        let storage = &mut self.context.state.nv.index;
         let Ok(meta) = storage.get_metadata(handle) else {
             return;
         };

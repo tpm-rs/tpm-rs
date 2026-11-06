@@ -3,8 +3,7 @@ use crate::handle_checks::{Tpmi, check};
 use crate::handler::{CommandHandler, TransientObject};
 use crate::owned::OwnedAuthCommand;
 use crate::req_resp::RequestThenResponse;
-use crate::storage::Tpm2Storage;
-use crate::storage::manager::StorageManager;
+use crate::storage::IndexState;
 use crate::storage::nv_capacity;
 #[allow(unused_imports)]
 use tpm2::TpmCc;
@@ -106,7 +105,11 @@ impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
             // 3. Persist the transient object to NV storage. C checks `TPM_RC_NV_DEFINED`
             // before `NvAddEvictObject`, which fails with `TPM_RC_NV_UNAVAILABLE` before NV
             // is modified.
-            if StorageManager::new(self.context.platform.storage_mut())
+            if self
+                .context
+                .state
+                .nv
+                .index
                 .get_metadata(persistent_handle)
                 .is_ok()
             {
@@ -119,15 +122,14 @@ impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
             // like the reference (`storage::nv_capacity`): every persistent object takes
             // `NV_EVICT_OBJECT_SIZE` bytes whatever its type.
             let usage =
-                nv_capacity::scan(&StorageManager::new(self.context.platform.storage_mut()))
-                    .map_err(|_| TpmRc::FAILURE)?;
+                nv_capacity::scan(&self.context.state.nv.index).map_err(|_| TpmRc::FAILURE)?;
             if !usage.can_add_evict_object() {
                 return Err(TpmRc::NV_SPACE);
             }
             self.return_if_nv_is_not_available()?;
             self.nv_clear_orderly()?;
-            let mut storage = StorageManager::new(self.context.platform.storage_mut());
-            Self::persist_transient_object(persistent_handle, &obj, &mut storage)?;
+            let storage = &mut self.context.state.nv.index;
+            Self::persist_transient_object(persistent_handle, &obj, storage)?;
         } else {
             // 4. Evict persistent object from storage
             // C ObjectLoadEvict exempts EvictControl from the ehEnable check, so read the
@@ -146,7 +148,10 @@ impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
             // `NvDeleteEvict` fails with `TPM_RC_NV_UNAVAILABLE` before NV is modified.
             self.return_if_nv_is_not_available()?;
             self.nv_clear_orderly()?;
-            StorageManager::new(self.context.platform.storage_mut())
+            self.context
+                .state
+                .nv
+                .index
                 .undefine_space(object_handle)
                 .map_err(|_| TpmRc::HANDLE.with(Position::handle(2)))?;
         }
@@ -234,7 +239,7 @@ impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
     fn persist_transient_object(
         persistent_handle: u32,
         obj: &TransientObject,
-        storage: &mut StorageManager<'_>,
+        storage: &mut (impl IndexState + ?Sized),
     ) -> Result<(), TpmRc> {
         crate::storage::nv::NvPersistentObjectRecord::from_object(obj)
             .write(storage, persistent_handle)

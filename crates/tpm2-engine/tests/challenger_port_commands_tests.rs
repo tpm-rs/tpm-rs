@@ -30,9 +30,9 @@ fn setup_tpm<'a>(
     storage: &'a mut FakeStorage,
     timer: &'a mut FakeTimer,
     rng: &'a mut FakeRng,
-) -> TpmEngine<TpmPlatform<'a, StressTestCrypto, FakeStorage, FakeTimer, FakeRng>> {
-    let platform = TpmPlatform::new(crypto, storage, timer, rng);
-    let mut tpm = TpmEngine::new(platform).unwrap();
+) -> TpmEngine<TpmPlatform<'a, StressTestCrypto, &'a mut FakeStorage, FakeTimer, FakeRng>> {
+    let platform = TpmPlatform::new(crypto, timer, rng);
+    let mut tpm = TpmEngine::new(platform, storage).unwrap();
     tpm.init_storage();
     tpm.state.nv_available = true;
     tpm.state.locality = 0;
@@ -46,7 +46,7 @@ fn setup_tpm<'a>(
 }
 
 fn execute_tpm_command_with_auths<C: Command>(
-    tpm: &mut TpmEngine<TpmPlatform<'_, StressTestCrypto, FakeStorage, FakeTimer, FakeRng>>,
+    tpm: &mut TpmEngine<TpmPlatform<'_, StressTestCrypto, &'_ mut FakeStorage, FakeTimer, FakeRng>>,
     cmd: &C,
     auths: &[TpmsAuthCommand],
 ) -> Result<C::Response<'static>, u32>
@@ -59,7 +59,7 @@ where
 /// Like [`execute_tpm_command_with_auths`], but `patch` may modify the marshaled parameter area
 /// before the command is sent (e.g. to send a value the `tpm2` types cannot represent).
 fn execute_tpm_command_with_patched_parameters<C: Command>(
-    tpm: &mut TpmEngine<TpmPlatform<'_, StressTestCrypto, FakeStorage, FakeTimer, FakeRng>>,
+    tpm: &mut TpmEngine<TpmPlatform<'_, StressTestCrypto, &'_ mut FakeStorage, FakeTimer, FakeRng>>,
     cmd: &C,
     auths: &[TpmsAuthCommand],
     patch: impl FnOnce(&mut [u8]),
@@ -147,7 +147,9 @@ where
 /// `commandCode` is `TPM2_Duplicate` (C `IsPolicySessionRequired()` / `CheckPolicyAuthSession()`).
 /// Installs such a session (its policyDigest equals the object's empty authPolicy) and returns the
 /// authorization that uses it.
-fn dup_policy_auth(global_state: &mut tpm2_engine::State) -> TpmsAuthCommand<'static> {
+fn dup_policy_auth<P: tpm2_engine::Platform>(
+    global_state: &mut tpm2_engine::State<P>,
+) -> TpmsAuthCommand<'static> {
     const SESSION: u32 = 0x0300_0000;
     let _ = global_state.flush_session(SESSION);
     let mut session = common::make_test_session_state(

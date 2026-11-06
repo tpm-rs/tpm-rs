@@ -1,4 +1,5 @@
 use crate::Platform;
+use crate::storage::IndexState;
 use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
 #[allow(unused_imports)]
 use tpm2::TpmCc;
@@ -540,10 +541,8 @@ impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
                         as u32,
                 );
                 let (persistent_count, nv_index_count) = {
-                    let storage = crate::storage::manager::StorageManager::new(
-                        self.context.platform.storage_mut(),
-                    );
-                    if let Ok(toc) = storage.read_toc() {
+                    let storage = &mut self.context.state.nv.index;
+                    if let Ok(toc) = storage.items() {
                         let p = toc
                             .iter()
                             .filter(|item| item.in_use != 0 && (item.handle >> 24) == 0x81)
@@ -560,12 +559,8 @@ impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
                 // The reference's NV space ledger (`NvCapGetPersistentAvail()`,
                 // `NvCapGetCounterNumber()`, `NvCapGetCounterAvail()`), see
                 // `storage::nv_capacity`.
-                let nv_usage = crate::storage::nv_capacity::scan(
-                    &crate::storage::manager::StorageManager::new(
-                        self.context.platform.storage_mut(),
-                    ),
-                )
-                .unwrap_or_default();
+                let nv_usage = crate::storage::nv_capacity::scan(&self.context.state.nv.index)
+                    .unwrap_or_default();
 
                 let mut permanent_attr = tpm2::TpmaPermanent::empty();
                 if self.context.state.nv.persistent.owner_auth.get_size() > 0 {
@@ -908,10 +903,8 @@ impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
                     {
                         return Err(TpmRc::VALUE.with(property_pos));
                     }
-                    let storage = crate::storage::manager::StorageManager::new(
-                        self.context.platform.storage_mut(),
-                    );
-                    if let Ok(toc) = storage.read_toc() {
+                    let storage = &mut self.context.state.nv.index;
+                    if let Ok(toc) = storage.items() {
                         let mut matching = [0u32; crate::storage::manager::MAX_ITEMS];
                         let mut match_count = 0;
                         for item in toc.iter() {

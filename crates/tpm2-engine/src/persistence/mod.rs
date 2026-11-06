@@ -1,8 +1,8 @@
 #![forbid(unsafe_code)]
 
 //! Persistence of the complete TPM state: a `no_std`, allocation-free [`PersistedTpmState`] and
-//! bidirectional conversion between it and the engine's [`State`] plus its
-//! [`NvStorage`].
+//! bidirectional conversion between it and the engine's [`State`] (with its NV data,
+//! [`crate::Nv::index`]).
 //!
 //! Ported from `tpm_rs_serializer_core` (`tpm-migration-proof`), whose
 //! `PersistedTpmState` is the input of the wire-format serializer and of the round trip with
@@ -79,82 +79,76 @@ pub mod types;
 pub use conversion::{DeserializeError, SerializeError};
 pub use types::*;
 
-use crate::Platform;
-use crate::storage::NvStorage;
-use crate::timer::TpmTimer;
-use crate::{State, TpmEngine};
+use crate::{Platform, State, TpmEngine};
 use tpm2::crypto::Crypto;
 use tpm2::crypto::backend::Hash;
 
-/// Extracts the persisted state of `global_state` and `storage` into `persisted`; `now_ms` is
-/// the current reading of the platform timer (see the module documentation).
+/// Extracts the persisted state of `global_state` (including its NV data, [`crate::Nv::index`])
+/// into `persisted`; `now_ms` is the current reading of the platform timer (see the module
+/// documentation).
 ///
 /// Fails if a value does not fit its persisted field (e.g. more NV data than
-/// [`MAX_NV_DATA_SIZE`]), if `storage` cannot be read or holds an invalid record, or if the
+/// [`MAX_NV_DATA_SIZE`]), if the NV data cannot be read or holds an invalid record, or if the
 /// state is inconsistent.
-pub fn try_serialize<S: NvStorage>(
-    global_state: &State,
-    storage: &S,
+pub fn try_serialize<P: Platform>(
+    global_state: &State<P>,
     now_ms: u64,
     persisted: &mut PersistedTpmState,
 ) -> Result<(), SerializeError> {
-    persisted.extract_from_global_state_and_storage(global_state, storage, now_ms)
+    persisted.extract_from_global_state(global_state, now_ms)
 }
 
 /// Like [`try_serialize`], panicking on failure.
-pub fn serialize<S: NvStorage>(
-    global_state: &State,
-    storage: &S,
+pub fn serialize<P: Platform>(
+    global_state: &State<P>,
     now_ms: u64,
     persisted: &mut PersistedTpmState,
 ) {
-    try_serialize(global_state, storage, now_ms, persisted).expect("Failed to serialize");
+    try_serialize(global_state, now_ms, persisted).expect("Failed to serialize");
 }
 
-/// Restores `global_state` and `storage` from `persisted`; `now_ms` is the current reading of
-/// the target's platform timer (see the module documentation), and the hashes of the crypto
-/// backend `H` compute the Names of the loaded objects.
+/// Restores `global_state` (including its NV data, [`crate::Nv::index`]) from `persisted`;
+/// `now_ms` is the current reading of the target's platform timer (see the module
+/// documentation), and the hashes of the crypto backend `H` compute the Names of the loaded
+/// objects.
 ///
-/// `persisted` is validated before `global_state` is modified; `storage` is then erased and
+/// `persisted` is validated before `global_state` is modified; its NV data is then erased and
 /// rewritten.
-pub fn try_deserialize<H: Hash, S: NvStorage>(
+pub fn try_deserialize<H: Hash, P: Platform>(
     persisted: &PersistedTpmState,
-    global_state: &mut State,
-    storage: &mut S,
+    global_state: &mut State<P>,
     now_ms: u64,
 ) -> Result<(), DeserializeError> {
-    persisted.apply_to_global_state::<H, S>(global_state, storage, now_ms)
+    persisted.apply_to_global_state::<H, P>(global_state, now_ms)
 }
 
 /// Like [`try_deserialize`], panicking on failure.
-pub fn deserialize<H: Hash, S: NvStorage>(
+pub fn deserialize<H: Hash, P: Platform>(
     persisted: &PersistedTpmState,
-    global_state: &mut State,
-    storage: &mut S,
+    global_state: &mut State<P>,
     now_ms: u64,
 ) {
-    try_deserialize::<H, S>(persisted, global_state, storage, now_ms)
-        .expect("Failed to deserialize");
+    try_deserialize::<H, P>(persisted, global_state, now_ms).expect("Failed to deserialize");
 }
 
 impl<C: Crypto, P: Platform<Crypto = C>> TpmEngine<P> {
-    /// Extracts the complete state of the TPM (its [`State`], its NV storage and its
-    /// algorithm self-test state) into `persisted`, relative to the current reading of its
-    /// platform timer.
+    /// Extracts the complete state of the TPM (its [`State`] with its NV data and its algorithm
+    /// self-test state) into `persisted`, with the platform's serialization
+    /// ([`Platform::serialize`]).
     pub fn save_persisted_state(
         &self,
         persisted: &mut PersistedTpmState,
     ) -> Result<(), SerializeError> {
-        let now_ms = self.platform.timer().timer_read();
-        try_serialize(&self.state, self.platform.storage(), now_ms, persisted)?;
+        self.platform.serialize(&self.state, persisted)?;
         persisted.extract_self_test(&self.self_test)
     }
 
-    /// Restores the complete state of the TPM (its [`State`], its NV storage and its
-    /// algorithm self-test state) from `persisted`, e.g. on the target of a live migration. The
-    /// platform time continues from the current reading of its platform timer, and the Names of
-    /// the loaded objects are recomputed with its crypto backend (directly, without the
-    /// algorithm self tests, which would change the self-test state).
+    /// Restores the complete state of the TPM (its [`State`] with its NV data and its algorithm
+    /// self-test state) from `persisted`, e.g. on the target of a live migration, with the
+    /// platform's deserialization ([`Platform::deserialize`]; by default the platform time
+    /// continues from the current reading of its platform timer, and the Names of the loaded
+    /// objects are recomputed with its crypto backend, directly, without the algorithm self
+    /// tests, which would change the self-test state).
     pub fn restore_persisted_state(
         &mut self,
         persisted: &PersistedTpmState,
@@ -162,13 +156,9 @@ impl<C: Crypto, P: Platform<Crypto = C>> TpmEngine<P> {
         // Validate the self-test state first, so that a failure leaves the TPM unchanged.
         let staged = crate::self_test::SelfTestState::default();
         persisted.apply_self_test(&staged)?;
-        let now_ms = self.platform.timer().timer_read();
-        try_deserialize::<C, P::Storage>(
-            persisted,
-            &mut self.state,
-            self.platform.storage_mut(),
-            now_ms,
-        )?;
-        persisted.apply_self_test(&self.self_test)
+        self.platform.deserialize(persisted, &mut self.state)?;
+        persisted.apply_self_test(&self.self_test)?;
+        self.platform.store_nv(&self.state.nv);
+        Ok(())
     }
 }

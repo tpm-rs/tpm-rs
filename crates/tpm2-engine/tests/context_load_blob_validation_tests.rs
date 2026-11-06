@@ -122,8 +122,8 @@ macro_rules! setup {
 
 /// Recomputes the context integrity HMAC over `enc_context` (white-box: uses
 /// the owner hierarchy proof and `totalResetCount`).
-fn forge_integrity(
-    gs: &tpm2_engine::State,
+fn forge_integrity<P: tpm2_engine::Platform>(
+    gs: &tpm2_engine::State<P>,
     context: &TpmsContext<'_>,
     enc_context: &[u8],
 ) -> Vec<u8> {
@@ -141,7 +141,11 @@ fn forge_integrity(
 }
 
 /// Builds `integrity || enc_context` with a correctly forged integrity value.
-fn forge_blob(gs: &tpm2_engine::State, context: &TpmsContext<'_>, enc_context: &[u8]) -> Vec<u8> {
+fn forge_blob<P: tpm2_engine::Platform>(
+    gs: &tpm2_engine::State<P>,
+    context: &TpmsContext<'_>,
+    enc_context: &[u8],
+) -> Vec<u8> {
     let integrity = forge_integrity(gs, context, enc_context);
     let mut blob = Vec::new();
     blob.extend_from_slice(&(integrity.len() as u16).to_be_bytes());
@@ -152,7 +156,12 @@ fn forge_blob(gs: &tpm2_engine::State, context: &TpmsContext<'_>, enc_context: &
 
 /// AES-128-CFB keystream for the context, as derived by the TPM
 /// (white-box: uses the owner hierarchy proof).
-fn context_cfb(gs: &tpm2_engine::State, context: &TpmsContext<'_>, data: &mut [u8], encrypt: bool) {
+fn context_cfb<P: tpm2_engine::Platform>(
+    gs: &tpm2_engine::State<P>,
+    context: &TpmsContext<'_>,
+    data: &mut [u8],
+    encrypt: bool,
+) {
     let proof = &gs.nv.persistent.sh_proof[..gs.nv.persistent.sh_proof_size as usize];
     let mut key_iv = [0u8; 32];
     tpm2::crypto::kdfa_bits::<TestCryptoProvider>(

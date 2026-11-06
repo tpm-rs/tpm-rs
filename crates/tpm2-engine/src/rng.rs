@@ -18,7 +18,7 @@
 
 use crate::Platform;
 #[cfg(feature = "reference-rng")]
-use crate::storage::NvStorage;
+use crate::storage::IndexState;
 use tpm2::crypto::{Crypto, Rng};
 use tpm2::errors::TpmRc;
 
@@ -93,7 +93,7 @@ impl<C: Crypto, P: Platform<Crypto = C>> TpmEngine<P> {
     /// manufacture, `TPM2_Shutdown`, `TPM2_Clear` and Clock updates).
     #[cfg(feature = "reference-rng")]
     pub(crate) fn save_drbg_state(&mut self) {
-        let _ = self.platform.storage_mut().write_nv(
+        let _ = self.state.nv.index.write_reserved(
             DRBG_STATE_NV_OFFSET,
             &self.state.nv.orderly.drbg_state.to_bytes(),
         );
@@ -106,9 +106,10 @@ impl<C: Crypto, P: Platform<Crypto = C>> TpmEngine<P> {
     pub(crate) fn load_drbg_state(&mut self) {
         let mut buf = [0u8; 76];
         if self
-            .platform
-            .storage()
-            .read_nv(DRBG_STATE_NV_OFFSET, &mut buf)
+            .state
+            .nv
+            .index
+            .read_reserved(DRBG_STATE_NV_OFFSET, &mut buf)
             .is_ok()
         {
             self.state.nv.orderly.drbg_state = crate::engine::DrbgState::from_bytes(&buf);

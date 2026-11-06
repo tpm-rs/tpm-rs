@@ -25,7 +25,7 @@ use std::time::Instant;
 use tpm2::crypto::{Crypto, CryptoError, Random, Rng};
 use tpm2::platform::TpmFirmware;
 use tpm2_engine::TpmPlatform;
-use tpm2_engine::storage::NvStorage;
+use tpm2_engine::storage::IndexState;
 use tpm2_engine::timer::TpmTimer;
 
 #[cfg(feature = "rust")]
@@ -256,19 +256,20 @@ impl Rng for LinuxRng {
 /// Helper function to instantiate a `TpmPlatform` with Linux hardware components and the
 /// firmware identity `firmware` (the Firmware Secret, Firmware SVN Secrets and SVNs of the
 /// firmware-limited and SVN-limited hierarchies; a simulator uses
-/// [`tpm2::platform::SimulatedFirmware`]).
-pub fn create_linux_platform<'a, C, S>(
+/// [`tpm2::platform::SimulatedFirmware`]). The TPM's NV data structure `I`
+/// ([`tpm2_engine::Platform::IndexState`], e.g. a mutable reference to an NV medium) is given
+/// to [`tpm2_engine::TpmEngine::new`].
+pub fn create_linux_platform<'a, C, I>(
     crypto: &'a mut C,
-    storage: &'a mut S,
     timer: &'a mut LinuxTimer,
     platform_rng: &'a mut LinuxRng,
     firmware: &'a (dyn TpmFirmware + Sync),
-) -> TpmPlatform<'a, C, S, LinuxTimer, LinuxRng>
+) -> TpmPlatform<'a, C, I, LinuxTimer, LinuxRng>
 where
     C: Crypto,
-    S: NvStorage,
+    I: IndexState,
 {
-    TpmPlatform::new(crypto, storage, timer, platform_rng).with_firmware(firmware)
+    TpmPlatform::new(crypto, timer, platform_rng).with_firmware(firmware)
 }
 
 impl Default for LinuxTimer {

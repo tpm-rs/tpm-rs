@@ -582,7 +582,7 @@ E2E test.
 
 62. **Time epoch after a power cycle with `TPM2_Startup(TPM_SU_STATE)`** — *C12 (`TPM2_PolicySecret` ticket HMACs differed).*
     Root cause: `tpm-rs` started a new time epoch on every TPM Reset and TPM Restart and never on a TPM Resume, instead of on every time discontinuity (a power on), whatever the startup type.
-    Fix: a power on marks the timer as stopped (`GlobalState::timer_stopped`); the time update of the next `TPM2_Startup` starts the new epoch — [engine.rs `time_update`, `platform_timer_reset`](../../crates/tpm2-engine/src/engine.rs), [startup.rs](../../crates/tpm2-engine/src/handler/startup.rs).
+    Fix: a power on marks the timer as stopped (`State::timer_stopped`); the time update of the next `TPM2_Startup` starts the new epoch — [engine.rs `time_update`, `platform_timer_reset`](../../crates/tpm2-engine/src/engine.rs), [startup.rs](../../crates/tpm2-engine/src/handler/startup.rs).
     Spec: Part 1: "a TPM is required to invalidate any time-based assertion that was created before a discontinuity in the TPM's measurement of time. Such a discontinuity can occur when *Time* does not advance or when *Time* is reset."
     Test: [tickets.rs](../tests/e2e/tickets.rs) (`policy_ticket_rejects_ticket_from_before_power_cycle_resume`, `policy_ticket_accepts_ticket_from_before_restart_without_power_loss`).
 

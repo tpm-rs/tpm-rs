@@ -1,5 +1,5 @@
 use super::types::{Handle, ItemMetadata};
-use super::{NvStorage, StorageError, Tpm2Storage};
+use super::{IndexState, NvStorage, StorageError};
 
 /// The maximum number of items (NV Indices, persistent objects and the engine's internal
 /// records) that can be stored simultaneously: a custom storage limitation, sized so that the
@@ -25,83 +25,45 @@ pub const TOC_SIZE: usize = MAX_ITEMS * ItemMetadata::SIZE;
 /// Custom storage design property.
 pub const RESERVED_SIZE: usize = 128;
 
-/// A simple block storage manager that operates without dynamic allocation.
-/// It uses a fixed-size Table of Contents (TOC) at the start of the storage space
-/// and maintains the data payloads in the same order as they appear in the TOC,
+/// The storage manager: the layout in which every byte-addressable NV medium ([`NvStorage`])
+/// holds an [`IndexState`], without dynamic allocation.
+///
+/// The medium starts with the reserved header ([`RESERVED_SIZE`] octets), followed by a
+/// fixed-size Table of Contents (TOC, [`TOC_SIZE`] octets: [`MAX_ITEMS`] [`ItemMetadata`]
+/// entries, the used ones first) and the item payloads, in the order of their TOC entries,
 /// tightly packed (contiguous).
-pub struct StorageManager<'a> {
-    storage: &'a mut dyn NvStorage,
-}
-
-impl<'a> StorageManager<'a> {
-    pub fn new(storage: &'a mut dyn NvStorage) -> Self {
-        Self { storage }
+impl<S: NvStorage + ?Sized> IndexState for S {
+    fn nv_capacity(&self) -> usize {
+        self.capacity()
     }
 
-    /// Read the entire TOC into a fixed-size array
-    pub fn read_toc(&self) -> Result<[ItemMetadata; MAX_ITEMS], StorageError> {
-        let mut toc = [ItemMetadata::empty(); MAX_ITEMS];
-        let mut buf = [0u8; ItemMetadata::SIZE];
-        for (i, item) in toc.iter_mut().enumerate() {
-            self.storage
-                .read_nv(RESERVED_SIZE + i * ItemMetadata::SIZE, &mut buf)?;
-            *item = ItemMetadata::from_bytes(&buf);
+    fn read_reserved(&self, offset: usize, buf: &mut [u8]) -> Result<(), StorageError> {
+        if offset + buf.len() > RESERVED_SIZE {
+            return Err(StorageError::OutOfBounds);
         }
-        Ok(toc)
+        self.read_nv(offset, buf).map(|_| ())
     }
 
-    /// Helper to find the index and data offset of a handle in the contiguous TOC/payload layout.
-    fn find_item(
-        &self,
-        handle: Handle,
-        toc: &[ItemMetadata; MAX_ITEMS],
-    ) -> Option<(usize, usize, ItemMetadata)> {
-        let mut offset = RESERVED_SIZE + TOC_SIZE;
-        for (i, item) in toc.iter().enumerate() {
-            if item.in_use == 0 {
-                break; // Because we keep TOC contiguous
-            }
-            if item.handle == handle {
-                return Some((i, offset, *item));
-            }
-            offset += item.data_size as usize;
+    fn write_reserved(&mut self, offset: usize, data: &[u8]) -> Result<(), StorageError> {
+        if offset + data.len() > RESERVED_SIZE {
+            return Err(StorageError::OutOfBounds);
         }
-        None
+        self.write_nv(offset, data).map(|_| ())
     }
 
-    /// Calculate total bytes currently used (TOC + all data items)
-    fn total_used_bytes(&self, toc: &[ItemMetadata; MAX_ITEMS]) -> usize {
-        let mut total = RESERVED_SIZE + TOC_SIZE;
-        for item in toc.iter() {
-            if item.in_use == 0 {
-                break;
-            }
-            total += item.data_size as usize;
-        }
-        total
+    fn items(&self) -> Result<[ItemMetadata; MAX_ITEMS], StorageError> {
+        read_toc(self)
     }
 
-    /// Commit the TOC back to storage
-    fn write_toc(&mut self, toc: &[ItemMetadata; MAX_ITEMS]) -> Result<(), StorageError> {
-        for (i, item) in toc.iter().enumerate() {
-            self.storage
-                .write_nv(RESERVED_SIZE + i * ItemMetadata::SIZE, &item.to_bytes())?;
-        }
-        // Force flush
-        self.storage.flush()
-    }
-}
-
-impl<'a> Tpm2Storage for StorageManager<'a> {
     fn define_space(
         &mut self,
         handle: Handle,
         size: u16,
         attributes: u32,
     ) -> Result<(), StorageError> {
-        let mut toc = self.read_toc()?;
+        let mut toc = read_toc(self)?;
 
-        if self.find_item(handle, &toc).is_some() {
+        if find_item(handle, &toc).is_some() {
             return Err(StorageError::AccessDenied); // Item already exists
         }
 
@@ -115,8 +77,8 @@ impl<'a> Tpm2Storage for StorageManager<'a> {
 
         let free_idx = free_idx.ok_or(StorageError::OutOfBounds)?; // No room in TOC
 
-        let current_usage = self.total_used_bytes(&toc);
-        if current_usage + (size as usize) > self.storage.capacity() {
+        let current_usage = total_used_bytes(&toc);
+        if current_usage + (size as usize) > self.capacity() {
             return Err(StorageError::OutOfBounds); // No room in physical storage
         }
 
@@ -127,17 +89,15 @@ impl<'a> Tpm2Storage for StorageManager<'a> {
             in_use: 1,
         };
 
-        self.write_toc(&toc)
+        write_toc(self, &toc)
     }
 
     fn undefine_space(&mut self, handle: Handle) -> Result<(), StorageError> {
-        let mut toc = self.read_toc()?;
-        let (idx, offset, item) = self
-            .find_item(handle, &toc)
-            .ok_or(StorageError::AccessDenied)?;
+        let mut toc = read_toc(self)?;
+        let (idx, offset, item) = find_item(handle, &toc).ok_or(StorageError::AccessDenied)?;
 
         let size = item.data_size as usize;
-        let total_used = self.total_used_bytes(&toc);
+        let total_used = total_used_bytes(&toc);
         let end_of_data = total_used;
 
         // Shift data down (compaction) to overwrite the removed item
@@ -149,9 +109,8 @@ impl<'a> Tpm2Storage for StorageManager<'a> {
 
         while shift_src < end_of_data {
             let bytes_to_copy = core::cmp::min(64, end_of_data - shift_src);
-            self.storage
-                .read_nv(shift_src, &mut chunk[..bytes_to_copy])?;
-            self.storage.write_nv(shift_dst, &chunk[..bytes_to_copy])?;
+            self.read_nv(shift_src, &mut chunk[..bytes_to_copy])?;
+            self.write_nv(shift_dst, &chunk[..bytes_to_copy])?;
             shift_src += bytes_to_copy;
             shift_dst += bytes_to_copy;
         }
@@ -162,14 +121,12 @@ impl<'a> Tpm2Storage for StorageManager<'a> {
         }
         toc[MAX_ITEMS - 1] = ItemMetadata::empty();
 
-        self.write_toc(&toc)
+        write_toc(self, &toc)
     }
 
     fn resize_item(&mut self, handle: Handle, new_size: u16) -> Result<(), StorageError> {
-        let mut toc = self.read_toc()?;
-        let (idx, offset, item) = self
-            .find_item(handle, &toc)
-            .ok_or(StorageError::AccessDenied)?;
+        let mut toc = read_toc(self)?;
+        let (idx, offset, item) = find_item(handle, &toc).ok_or(StorageError::AccessDenied)?;
 
         let old_size = item.data_size as usize;
         let new_size_usize = new_size as usize;
@@ -177,12 +134,12 @@ impl<'a> Tpm2Storage for StorageManager<'a> {
             return Ok(());
         }
 
-        let total_used = self.total_used_bytes(&toc);
+        let total_used = total_used_bytes(&toc);
         let end_of_data = total_used;
 
         if new_size_usize > old_size {
             let diff = new_size_usize - old_size;
-            if end_of_data + diff > self.storage.capacity() {
+            if end_of_data + diff > self.capacity() {
                 return Err(StorageError::OutOfBounds);
             }
             let mut shift_src = end_of_data;
@@ -190,28 +147,24 @@ impl<'a> Tpm2Storage for StorageManager<'a> {
             while shift_src > offset + old_size {
                 let bytes_to_copy = core::cmp::min(64, shift_src - (offset + old_size));
                 shift_src -= bytes_to_copy;
-                self.storage
-                    .read_nv(shift_src, &mut chunk[..bytes_to_copy])?;
-                self.storage
-                    .write_nv(shift_src + diff, &chunk[..bytes_to_copy])?;
+                self.read_nv(shift_src, &mut chunk[..bytes_to_copy])?;
+                self.write_nv(shift_src + diff, &chunk[..bytes_to_copy])?;
             }
         } else {
-            let _diff = old_size - new_size_usize;
             let mut shift_src = offset + old_size;
             let mut shift_dst = offset + new_size_usize;
             let mut chunk = [0u8; 64];
             while shift_src < end_of_data {
                 let bytes_to_copy = core::cmp::min(64, end_of_data - shift_src);
-                self.storage
-                    .read_nv(shift_src, &mut chunk[..bytes_to_copy])?;
-                self.storage.write_nv(shift_dst, &chunk[..bytes_to_copy])?;
+                self.read_nv(shift_src, &mut chunk[..bytes_to_copy])?;
+                self.write_nv(shift_dst, &chunk[..bytes_to_copy])?;
                 shift_src += bytes_to_copy;
                 shift_dst += bytes_to_copy;
             }
         }
 
         toc[idx].data_size = new_size;
-        self.write_toc(&toc)
+        write_toc(self, &toc)
     }
 
     fn write_item(
@@ -220,18 +173,15 @@ impl<'a> Tpm2Storage for StorageManager<'a> {
         item_offset: u16,
         data: &[u8],
     ) -> Result<(), StorageError> {
-        let toc = self.read_toc()?;
-        let (_, base_offset, item) = self
-            .find_item(handle, &toc)
-            .ok_or(StorageError::AccessDenied)?;
+        let toc = read_toc(self)?;
+        let (_, base_offset, item) = find_item(handle, &toc).ok_or(StorageError::AccessDenied)?;
 
         if item_offset as usize + data.len() > item.data_size as usize {
             return Err(StorageError::OutOfBounds);
         }
 
-        self.storage
-            .write_nv(base_offset + item_offset as usize, data)?;
-        self.storage.flush()
+        self.write_nv(base_offset + item_offset as usize, data)?;
+        self.flush()
     }
 
     fn read_item(
@@ -240,25 +190,86 @@ impl<'a> Tpm2Storage for StorageManager<'a> {
         item_offset: u16,
         buf: &mut [u8],
     ) -> Result<(), StorageError> {
-        let toc = self.read_toc()?;
-        let (_, base_offset, item) = self
-            .find_item(handle, &toc)
-            .ok_or(StorageError::AccessDenied)?;
+        let toc = read_toc(self)?;
+        let (_, base_offset, item) = find_item(handle, &toc).ok_or(StorageError::AccessDenied)?;
 
         if item_offset as usize + buf.len() > item.data_size as usize {
             return Err(StorageError::OutOfBounds);
         }
 
-        self.storage
-            .read_nv(base_offset + item_offset as usize, buf)?;
+        self.read_nv(base_offset + item_offset as usize, buf)?;
         Ok(())
     }
 
     fn get_metadata(&self, handle: Handle) -> Result<ItemMetadata, StorageError> {
-        let toc = self.read_toc()?;
-        let (_, _, item) = self
-            .find_item(handle, &toc)
-            .ok_or(StorageError::AccessDenied)?;
+        let toc = read_toc(self)?;
+        let (_, _, item) = find_item(handle, &toc).ok_or(StorageError::AccessDenied)?;
         Ok(item)
     }
+
+    fn erase(&mut self) -> Result<(), StorageError> {
+        let zero_block = [0u8; 128];
+        let cap = self.capacity();
+        let mut pos = 0;
+        while pos < cap {
+            let len = (cap - pos).min(zero_block.len());
+            self.write_nv(pos, &zero_block[..len])?;
+            pos += len;
+        }
+        self.flush()
+    }
+}
+
+/// Reads the entire TOC into a fixed-size array.
+fn read_toc<S: NvStorage + ?Sized>(storage: &S) -> Result<[ItemMetadata; MAX_ITEMS], StorageError> {
+    let mut toc = [ItemMetadata::empty(); MAX_ITEMS];
+    let mut buf = [0u8; ItemMetadata::SIZE];
+    for (i, item) in toc.iter_mut().enumerate() {
+        storage.read_nv(RESERVED_SIZE + i * ItemMetadata::SIZE, &mut buf)?;
+        *item = ItemMetadata::from_bytes(&buf);
+    }
+    Ok(toc)
+}
+
+/// Finds the TOC index, the data offset and the metadata of `handle` in the contiguous
+/// TOC/payload layout.
+fn find_item(
+    handle: Handle,
+    toc: &[ItemMetadata; MAX_ITEMS],
+) -> Option<(usize, usize, ItemMetadata)> {
+    let mut offset = RESERVED_SIZE + TOC_SIZE;
+    for (i, item) in toc.iter().enumerate() {
+        if item.in_use == 0 {
+            break; // Because we keep TOC contiguous
+        }
+        if item.handle == handle {
+            return Some((i, offset, *item));
+        }
+        offset += item.data_size as usize;
+    }
+    None
+}
+
+/// The total number of octets in use (the reserved header, the TOC and all item payloads).
+fn total_used_bytes(toc: &[ItemMetadata; MAX_ITEMS]) -> usize {
+    let mut total = RESERVED_SIZE + TOC_SIZE;
+    for item in toc.iter() {
+        if item.in_use == 0 {
+            break;
+        }
+        total += item.data_size as usize;
+    }
+    total
+}
+
+/// Commits the TOC back to storage (and flushes it).
+fn write_toc<S: NvStorage + ?Sized>(
+    storage: &mut S,
+    toc: &[ItemMetadata; MAX_ITEMS],
+) -> Result<(), StorageError> {
+    for (i, item) in toc.iter().enumerate() {
+        storage.write_nv(RESERVED_SIZE + i * ItemMetadata::SIZE, &item.to_bytes())?;
+    }
+    // Force flush
+    storage.flush()
 }

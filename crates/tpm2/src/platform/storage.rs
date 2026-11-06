@@ -42,3 +42,23 @@ pub trait NvStorage {
     /// * `StorageError::HardwareError` - Returned if a power-fail or system-level fault interrupts the atomic commit process.
     fn flush(&mut self) -> Result<(), StorageError>;
 }
+
+/// A mutable reference to an NV storage medium is an NV storage medium, so that a platform can
+/// lend its medium to the TPM.
+impl<S: NvStorage + ?Sized> NvStorage for &mut S {
+    fn capacity(&self) -> usize {
+        (**self).capacity()
+    }
+
+    fn read_nv(&self, offset: usize, buffer: &mut [u8]) -> Result<usize, StorageError> {
+        (**self).read_nv(offset, buffer)
+    }
+
+    fn write_nv(&mut self, offset: usize, buffer: &[u8]) -> Result<usize, StorageError> {
+        (**self).write_nv(offset, buffer)
+    }
+
+    fn flush(&mut self) -> Result<(), StorageError> {
+        (**self).flush()
+    }
+}

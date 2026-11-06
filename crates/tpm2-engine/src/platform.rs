@@ -1,16 +1,24 @@
 //! The platform a [`TpmEngine`](crate::TpmEngine) runs on.
 //!
 //! Everything the engine needs from its environment is behind the [`Platform`] trait: the
-//! cryptography backend, the monotonic timer, the platform random number generator, NV
-//! storage, the firmware identity, the secure transport layer and the immutable platform
-//! [`Info`]. The component interfaces themselves ([`NvStorage`], [`TpmTimer`],
+//! cryptography backend, the monotonic timer, the platform random number generator, the type
+//! of the structure that holds the NV data ([`IndexState`], kept in the TPM state as
+//! [`Nv::index`]), the firmware identity, the secure transport layer and the immutable
+//! platform [`Info`]. The platform also decides how the NV data reaches external storage
+//! ([`Platform::load_nv`], [`Platform::store_nv`]) and how the runtime state is serialized
+//! for migration ([`Platform::serialize`], [`Platform::deserialize`], with the `persistence`
+//! feature). The component interfaces themselves ([`crate::storage::NvStorage`], [`TpmTimer`],
 //! [`TpmFirmware`], [`SecureChannel`]) live in [`tpm2::platform`].
 //!
 //! [`TpmPlatform`] is the generic platform that borrows its components; most users (the
 //! simulator, the Linux platform and the tests) build a [`TpmEngine`](crate::TpmEngine) over it.
 
-use crate::storage::NvStorage;
+use crate::state::Nv;
+#[cfg(feature = "persistence")]
+use crate::state::State;
+use crate::storage::IndexState;
 use crate::timer::TpmTimer;
+use core::marker::PhantomData;
 use tpm2::crypto::{Crypto, Rng};
 use tpm2::platform::{SecureChannel, TpmFirmware};
 
@@ -60,31 +68,30 @@ impl Default for Info {
 /// Trait all platforms must implement to use `tpm2-engine`.
 ///
 /// A platform provides the components the engine uses (as associated types, so that the
-/// engine is monomorphized over them) and the immutable platform [`Info`].
-pub trait Platform {
+/// engine is monomorphized over them), the immutable platform [`Info`] and the
+/// customizations of how the TPM state reaches storage: loading and storing the NV data
+/// ([`Platform::load_nv`], [`Platform::store_nv`]) and serializing the runtime state
+/// ([`Platform::serialize`], [`Platform::deserialize`]).
+pub trait Platform: Sized {
     /// Cryptography backend ([`Crypto`]). The backend's interfaces are static (its algorithms
     /// are associated types); the platform only selects it.
     type Crypto: Crypto;
-    /// NV storage medium.
-    type Storage: NvStorage;
     /// Monotonic timer.
     type Timer: TpmTimer;
     /// Platform random number generator ([`Rng::fill_bytes`] draws random bytes,
     /// [`Rng::stir_bytes`] mixes additional entropy into its state and [`Rng::init`]
     /// reinitializes its entropy source at `_TPM_Init`).
     type Rng: Rng + Sync;
+    /// Structure used to hold the NV data (the `Handle -> [u8]` mapping of the NV Indices,
+    /// persistent objects and internal records, see [`IndexState`]). The TPM state owns it
+    /// ([`Nv::index`]); every [`crate::storage::NvStorage`] medium is one.
+    type IndexState: IndexState;
 
     /// Immutable info from the platform (firmware version, vendor ID, ...). Defaults to
     /// [`Info::DEFAULT`].
     fn info(&self) -> &Info {
         &Info::DEFAULT
     }
-
-    /// The NV storage medium.
-    fn storage(&self) -> &Self::Storage;
-
-    /// The NV storage medium, mutably.
-    fn storage_mut(&mut self) -> &mut Self::Storage;
 
     /// The monotonic timer.
     fn timer(&self) -> &Self::Timer;
@@ -110,21 +117,72 @@ pub trait Platform {
     fn secure_channel(&self) -> Option<&(dyn SecureChannel + Sync)> {
         None
     }
+
+    /// Reads the NV data from external storage into `nv`.
+    ///
+    /// Called at `_TPM_Init` ([`crate::TpmEngine::reset`]), before the engine reloads its
+    /// NV-synced state ([`crate::PersistentState`], [`crate::OrderlyState`] and the state saved
+    /// by `TPM2_Shutdown(TPM_SU_STATE)`) from [`Nv::index`]. A platform whose
+    /// [`Platform::IndexState`] is the NV medium itself (the default) has nothing to do.
+    fn load_nv(&mut self, nv: &mut Nv<Self>) {
+        let _ = nv;
+    }
+
+    /// Syncs the NV data in `nv` back to external storage.
+    ///
+    /// Called after every command, `_TPM_Init` and manufacture
+    /// ([`crate::TpmEngine::init_storage`]), once the engine has written its NV-synced state
+    /// to [`Nv::index`]. A platform whose [`Platform::IndexState`] is the NV medium itself
+    /// (the default) has nothing to do.
+    fn store_nv(&mut self, nv: &Nv<Self>) {
+        let _ = nv;
+    }
+
+    /// Serializes the runtime state `state` into `persisted` (for migrating the TPM, see
+    /// [`crate::persistence`]). The default is the lossless
+    /// [`crate::persistence::PersistedTpmState`] of the state, relative to the current reading
+    /// of the platform timer.
+    #[cfg(feature = "persistence")]
+    fn serialize(
+        &self,
+        state: &State<Self>,
+        persisted: &mut crate::persistence::PersistedTpmState,
+    ) -> Result<(), crate::persistence::SerializeError> {
+        crate::persistence::try_serialize(state, self.timer().timer_read(), persisted)
+    }
+
+    /// Restores the runtime state `state` from `persisted` (written by
+    /// [`Platform::serialize`], possibly on another platform). The default rebases the
+    /// platform time on the current reading of the platform timer and recomputes the Names of
+    /// the loaded objects with the crypto backend; a rejected state leaves `state` unchanged.
+    #[cfg(feature = "persistence")]
+    fn deserialize(
+        &self,
+        persisted: &crate::persistence::PersistedTpmState,
+        state: &mut State<Self>,
+    ) -> Result<(), crate::persistence::DeserializeError> {
+        crate::persistence::try_deserialize::<Self::Crypto, Self>(
+            persisted,
+            state,
+            self.timer().timer_read(),
+        )
+    }
 }
 
 /// The generic [`Platform`] that borrows its components.
-pub struct TpmPlatform<'a, C, S, T, R>
+///
+/// `I` is the [`Platform::IndexState`] of the TPM, which the engine owns
+/// ([`crate::TpmEngine::new`]); typically an NV medium or a mutable reference to one.
+pub struct TpmPlatform<'a, C, I, T, R>
 where
     C: Crypto,
-    S: NvStorage,
+    I: IndexState,
     T: TpmTimer,
     R: Rng,
 {
     /// Cryptography backend ([`Crypto`]). The backend's interfaces are static (its
     /// algorithms are associated types); the reference only selects and borrows it.
     pub crypto: &'a mut C,
-    /// NV storage provider.
-    pub storage: &'a mut S,
     /// Monotonic timer.
     pub timer: &'a mut T,
     /// Platform random number generator ([`Platform::Rng`]).
@@ -137,25 +195,27 @@ where
     /// Immutable platform information ([`Platform::info`]); [`Info::DEFAULT`] by default
     /// ([`TpmPlatform::new`]).
     pub info: Info,
+    /// The type of the TPM's NV data structure ([`Platform::IndexState`]).
+    index: PhantomData<fn() -> I>,
 }
 
-impl<'a, C, S, T, R> TpmPlatform<'a, C, S, T, R>
+impl<'a, C, I, T, R> TpmPlatform<'a, C, I, T, R>
 where
     C: Crypto,
-    S: NvStorage,
+    I: IndexState,
     T: TpmTimer,
     R: Rng,
 {
     /// Constructs a new `TpmPlatform` from mutable references to hardware providers.
-    pub fn new(crypto: &'a mut C, storage: &'a mut S, timer: &'a mut T, rng: &'a mut R) -> Self {
+    pub fn new(crypto: &'a mut C, timer: &'a mut T, rng: &'a mut R) -> Self {
         Self {
             crypto,
-            storage,
             timer,
             rng,
             firmware: None,
             secure_channel: None,
             info: Info::DEFAULT,
+            index: PhantomData,
         }
     }
 
@@ -180,28 +240,20 @@ where
     }
 }
 
-impl<C, S, T, R> Platform for TpmPlatform<'_, C, S, T, R>
+impl<C, I, T, R> Platform for TpmPlatform<'_, C, I, T, R>
 where
     C: Crypto,
-    S: NvStorage,
+    I: IndexState,
     T: TpmTimer,
     R: Rng + Sync,
 {
     type Crypto = C;
-    type Storage = S;
     type Timer = T;
     type Rng = R;
+    type IndexState = I;
 
     fn info(&self) -> &Info {
         &self.info
-    }
-
-    fn storage(&self) -> &S {
-        self.storage
-    }
-
-    fn storage_mut(&mut self) -> &mut S {
-        self.storage
     }
 
     fn timer(&self) -> &T {

@@ -22,9 +22,9 @@ fn setup_tpm<'a>(
     storage: &'a mut FakeStorage,
     timer: &'a mut FakeTimer,
     rng: &'a mut FakeRng,
-) -> TpmEngine<TpmPlatform<'a, StressTestCrypto, FakeStorage, FakeTimer, FakeRng>> {
-    let platform = TpmPlatform::new(crypto, storage, timer, rng);
-    let mut tpm = TpmEngine::new(platform).unwrap();
+) -> TpmEngine<TpmPlatform<'a, StressTestCrypto, &'a mut FakeStorage, FakeTimer, FakeRng>> {
+    let platform = TpmPlatform::new(crypto, timer, rng);
+    let mut tpm = TpmEngine::new(platform, storage).unwrap();
     tpm.init_storage();
     tpm.state.nv_available = true;
     tpm.state.locality = 0;
@@ -38,7 +38,7 @@ fn setup_tpm<'a>(
 }
 
 fn execute_tpm_command_with_auths<C: Command>(
-    tpm: &mut TpmEngine<TpmPlatform<'_, StressTestCrypto, FakeStorage, FakeTimer, FakeRng>>,
+    tpm: &mut TpmEngine<TpmPlatform<'_, StressTestCrypto, &'_ mut FakeStorage, FakeTimer, FakeRng>>,
     cmd: &C,
     auths: &[TpmsAuthCommand],
 ) -> Result<(), u32>

@@ -641,12 +641,12 @@ impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
     }
 
     #[inline]
-    pub fn state(&self) -> &State {
+    pub fn state(&self) -> &State<P> {
         &self.context.state
     }
 
     #[inline]
-    pub fn state_mut(&mut self) -> &mut State {
+    pub fn state_mut(&mut self) -> &mut State<P> {
         &mut self.context.state
     }
 
@@ -1731,7 +1731,7 @@ mod tests {
     }
 
     type TestHandler<'a, 'b> =
-        CommandHandler<'b, TpmPlatform<'a, FakeCrypto, FakeStorage, FakeTimer, FakeRng>>;
+        CommandHandler<'b, TpmPlatform<'a, FakeCrypto, &'a mut FakeStorage, FakeTimer, FakeRng>>;
 
     /// Where the response handle area starts (after the 10-byte response header).
     const RESPONSE_OFFSET: usize = 10;
@@ -1742,8 +1742,8 @@ mod tests {
         let mut storage = FakeStorage::default();
         let mut timer = FakeTimer;
         let mut rng = FakeRng::new();
-        let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
-        let mut engine = crate::TpmEngine::new(platform).unwrap();
+        let platform = TpmPlatform::new(&mut crypto, &mut timer, &mut rng);
+        let mut engine = crate::TpmEngine::new(platform, &mut storage).unwrap();
         engine.state.in_shadow_execution = in_shadow_execution;
         let handler = CommandHandler::new(&mut engine);
         f(&handler)

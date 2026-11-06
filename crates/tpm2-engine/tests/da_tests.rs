@@ -6,7 +6,8 @@ use common::{FakeCrypto, FakeRng, FakeStorage, FakeTimer};
 use hex_literal::hex;
 use tpm2_engine::{TpmEngine, TpmPlatform};
 
-fn setup_tpm() -> TpmEngine<TpmPlatform<'static, FakeCrypto, FakeStorage, FakeTimer, FakeRng>> {
+fn setup_tpm()
+-> TpmEngine<TpmPlatform<'static, FakeCrypto, &'static mut FakeStorage, FakeTimer, FakeRng>> {
     // Create static references or owned items that match the test common setup
     // We can allocate them on the heap or leak box for tests or follow random_tests structure
     let crypto = FakeCrypto;
@@ -15,12 +16,11 @@ fn setup_tpm() -> TpmEngine<TpmPlatform<'static, FakeCrypto, FakeStorage, FakeTi
     let rng = FakeRng::new();
     let platform = TpmPlatform::new(
         Box::leak(Box::new(crypto)),
-        Box::leak(Box::new(storage)),
         Box::leak(Box::new(timer)),
         Box::leak(Box::new(rng)),
     );
 
-    let mut tpm = TpmEngine::new(platform).unwrap();
+    let mut tpm = TpmEngine::new(platform, Box::leak(Box::new(storage))).unwrap();
     tpm.init_storage();
     tpm.state.nv_available = true;
     tpm.state.g_nv_ok = true;
@@ -34,7 +34,7 @@ fn setup_tpm() -> TpmEngine<TpmPlatform<'static, FakeCrypto, FakeStorage, FakeTi
 }
 
 fn send_da_lock_reset(
-    tpm: &mut TpmEngine<TpmPlatform<'_, FakeCrypto, FakeStorage, FakeTimer, FakeRng>>,
+    tpm: &mut TpmEngine<TpmPlatform<'_, FakeCrypto, &'_ mut FakeStorage, FakeTimer, FakeRng>>,
     auth_handle: u32,
     tag: u16,
 ) -> u32 {
@@ -72,7 +72,7 @@ fn send_da_lock_reset(
 }
 
 fn send_da_parameters(
-    tpm: &mut TpmEngine<TpmPlatform<'_, FakeCrypto, FakeStorage, FakeTimer, FakeRng>>,
+    tpm: &mut TpmEngine<TpmPlatform<'_, FakeCrypto, &'_ mut FakeStorage, FakeTimer, FakeRng>>,
     auth_handle: u32,
     new_max_tries: u32,
     new_recovery_time: u32,
@@ -232,7 +232,7 @@ fn test_da_pending_on_nv_deferred_and_flushed_when_nv_becomes_available() {
 
     // Ensure NV offset 32 (failed_tries) starts at 0
     let mut nv_buf = [0u8; 4];
-    tpm.platform.storage.read_nv(32, &mut nv_buf).unwrap();
+    tpm.state.nv.index.read_nv(32, &mut nv_buf).unwrap();
     assert_eq!(u32::from_be_bytes(nv_buf), 0);
 
     // Transition to unorderly state (0xFFFF) and make NV temporarily unavailable
@@ -250,7 +250,7 @@ fn test_da_pending_on_nv_deferred_and_flushed_when_nv_becomes_available() {
     tpm.state.nv.persistent.failed_tries = 2;
 
     // Verify NV offset 32 was NOT written while nv_available == false
-    tpm.platform.storage.read_nv(32, &mut nv_buf).unwrap();
+    tpm.state.nv.index.read_nv(32, &mut nv_buf).unwrap();
     assert_eq!(u32::from_be_bytes(nv_buf), 0);
 
     // Restore NV availability
@@ -264,6 +264,6 @@ fn test_da_pending_on_nv_deferred_and_flushed_when_nv_becomes_available() {
 
     // Verify da_pending_on_nv was cleared and failed_tries (2) was flushed to NV offset 32
     assert!(!tpm.state.da_pending_on_nv);
-    tpm.platform.storage.read_nv(32, &mut nv_buf).unwrap();
+    tpm.state.nv.index.read_nv(32, &mut nv_buf).unwrap();
     assert_eq!(u32::from_be_bytes(nv_buf), 2);
 }

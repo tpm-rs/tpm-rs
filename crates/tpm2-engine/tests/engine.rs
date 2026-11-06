@@ -18,9 +18,9 @@ fn get_random_in_place() {
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
     let mut rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
+    let platform = TpmPlatform::new(&mut crypto, &mut timer, &mut rng);
 
-    let mut tpm = TpmEngine::new(platform).unwrap();
+    let mut tpm = TpmEngine::new(platform, &mut storage).unwrap();
     tpm.init_storage();
 
     let startup_request = hex!(
@@ -61,7 +61,7 @@ fn get_random_in_place() {
 
 #[test]
 fn test_find_empty_transient_slot_primary_vs_child_and_fallback_reuse() {
-    let mut state = tpm2_engine::State::default();
+    let mut state = common::TestState::default();
     // 1. When empty, both primary and child allocations assign sequential slots starting at index 0
     let (slot0, handle0) = state.find_empty_transient_slot(true).unwrap();
     assert_eq!(slot0, 0);
@@ -115,9 +115,9 @@ fn test_drbg_state_persistence_and_reseed_across_shutdown_startup() {
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
     let mut rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
+    let platform = TpmPlatform::new(&mut crypto, &mut timer, &mut rng);
 
-    let mut tpm = TpmEngine::new(platform).unwrap();
+    let mut tpm = TpmEngine::new(platform, &mut storage).unwrap();
     tpm.init_storage();
     tpm.state.g_nv_ok = true;
 
@@ -148,7 +148,7 @@ fn test_drbg_state_persistence_and_reseed_across_shutdown_startup() {
     tpm.execute_command_separate(&shutdown_state[..], &mut resp[..]);
 
     let mut nv_drbg_buf = [0u8; 76];
-    tpm.platform.storage.read_nv(36, &mut nv_drbg_buf).unwrap();
+    tpm.state.nv.index.read_nv(36, &mut nv_drbg_buf).unwrap();
     let persisted_drbg = tpm2_engine::DrbgState::from_bytes(&nv_drbg_buf);
     assert_eq!(persisted_drbg.magic, tpm2_engine::DRBG_MAGIC);
     assert_eq!(persisted_drbg.seed, seed_after_boot);
@@ -185,8 +185,8 @@ fn test_platform_construction_with_generic_rng() {
     let mut storage = RamStorageMock::<128>::new();
     let mut timer = SoftwareTimer { tick: 0 };
     let mut rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
-    let tpm = TpmEngine::new(platform).unwrap();
+    let platform = TpmPlatform::new(&mut crypto, &mut timer, &mut rng);
+    let tpm = TpmEngine::new(platform, &mut storage).unwrap();
 
     // Before manufacture there are no Primary Seeds.
     assert_eq!(tpm.state.nv.persistent.sp_seed_size, 0);

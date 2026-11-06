@@ -1,7 +1,6 @@
 use crate::Platform;
 use crate::handle_checks::{Tpmi, check};
-use crate::storage::Tpm2Storage;
-use crate::storage::manager::StorageManager;
+use crate::storage::IndexState;
 use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
 use tpm2::TpmaNv;
 use tpm2::commands::PolicyNV;
@@ -73,7 +72,7 @@ impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
         }
         let mut read_buf = [0u8; 1536];
         let (metadata_size, nv_public) = {
-            let storage = StorageManager::new(self.context.platform.storage_mut());
+            let storage = &mut self.context.state.nv.index;
             let metadata = storage
                 .get_metadata(nv_index.0)
                 .map_err(|_| TpmRc::HANDLE.with(Position::handle(2)))?;
@@ -106,7 +105,7 @@ impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
             // Read the data from NV index
             let mut operand_a = [0u8; 64];
             {
-                let storage = StorageManager::new(self.context.platform.storage_mut());
+                let storage = &mut self.context.state.nv.index;
                 storage
                     .read_item(
                         nv_index.0,

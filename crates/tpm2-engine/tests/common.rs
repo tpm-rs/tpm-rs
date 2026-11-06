@@ -700,7 +700,7 @@ where
 /// A [`tpm2_engine::TpmEngine`] backed by the real test crypto backend and the
 /// fake storage/timer/RNG.
 pub type RealCryptoEngine<'a> = tpm2_engine::TpmEngine<
-    tpm2_engine::TpmPlatform<'a, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng>,
+    tpm2_engine::TpmPlatform<'a, TestCryptoProvider, &'a mut FakeStorage, FakeTimer, FakeRng>,
 >;
 
 /// Builds a [`RealCryptoEngine`] plus its [`tpm2_engine::State`] and runs
@@ -712,8 +712,8 @@ pub fn setup_real_crypto_tpm<'a>(
     timer: &'a mut FakeTimer,
     rng: &'a mut FakeRng,
 ) -> RealCryptoEngine<'a> {
-    let platform = tpm2_engine::TpmPlatform::new(crypto, storage, timer, rng);
-    let mut tpm = tpm2_engine::TpmEngine::new(platform).unwrap();
+    let platform = tpm2_engine::TpmPlatform::new(crypto, timer, rng);
+    let mut tpm = tpm2_engine::TpmEngine::new(platform, storage).unwrap();
     tpm.init_storage();
     tpm.state.nv_available = true;
     tpm.state.locality = 0;
@@ -825,3 +825,14 @@ pub fn context_integrity_hash_alg() -> tpm2::TpmiAlgHash {
         tpm2::TpmiAlgHash::try_from(tpm2::Alg::SHA512).unwrap_or(tpm2::TpmiAlgHash::Sha384)
     }
 }
+
+/// A [`tpm2_engine::Platform`] over the fake components whose NV data structure is an owned
+/// [`FakeStorage`], for tests of a standalone [`TestState`].
+#[allow(dead_code)]
+pub type TestPlatform =
+    tpm2_engine::TpmPlatform<'static, FakeCrypto, FakeStorage, FakeTimer, FakeRng>;
+
+/// A standalone TPM state ([`tpm2_engine::State`]) over [`TestPlatform`]; its
+/// [`Default`](tpm2_engine::State::default) has a fresh [`FakeStorage`].
+#[allow(dead_code)]
+pub type TestState = tpm2_engine::State<TestPlatform>;

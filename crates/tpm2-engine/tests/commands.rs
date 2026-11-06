@@ -11,9 +11,9 @@ fn test_clear_overflow() {
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
     let mut rng = FakeRng::new();
-    let platform = TpmPlatform::new(&mut crypto, &mut storage, &mut timer, &mut rng);
+    let platform = TpmPlatform::new(&mut crypto, &mut timer, &mut rng);
 
-    let mut tpm = TpmEngine::new(platform).unwrap();
+    let mut tpm = TpmEngine::new(platform, &mut storage).unwrap();
     tpm.init_storage();
 
     // Startup

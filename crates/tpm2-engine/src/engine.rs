@@ -8,8 +8,8 @@
 //! The module is organized around three primary components:
 //!
 //! 1. **Context & State Management**:
-//!    - **[TpmEngine]**: The root orchestrator that owns the [TpmPlatform](lib.rs) (the platform dependencies: crypto, storage, timer, RNG) and the [State]. It implements [`tpm2::Connection`].
-//!    - **[State]**: Holds the volatile and persistent state of the TPM (e.g., loaded transient keys, active authorization/policy sessions, PCR tables, and execution flags).
+//!    - **[TpmEngine]**: The root orchestrator that owns its [`Platform`] (the platform dependencies: crypto, timer, RNG, firmware) and the [State]. It implements [`tpm2::Connection`].
+//!    - **[State]**: Holds the volatile state of the TPM (e.g., loaded transient keys, active authorization/policy sessions, PCR tables, and execution flags) and, in [`State::nv`](crate::Nv), its non-volatile state with the NV data structure ([`crate::Nv::index`]).
 //!
 //! 2. **Execution Gateway & Routing**:
 //!    - **[TpmEngine::execute_command]**: The primary entry point. Decodes the command tag to determine if the command has authorization sessions (tag `0x8002`) or is session-less (tag `0x8001`).
@@ -55,8 +55,7 @@ use crate::owned::{
 use crate::req_resp::RequestResponseCursor;
 use crate::self_test::kdfa_bits;
 use crate::state::State;
-use crate::storage::manager::StorageManager;
-use crate::storage::{NvStorage, Tpm2Storage};
+use crate::storage::IndexState;
 use crate::timer::TpmTimer;
 use tpm2::crypto::{Crypto, Direction};
 use tpm2::errors::{Position, TpmRc};
@@ -73,26 +72,27 @@ const CFB_MODE: TpmiAlgSymMode = TpmiAlgSymMode::Cipher(TpmiAlgCipherMode::Cfb);
 
 /// The object that processes incoming TPM requests and produces the corresponding TPM response.
 ///
-/// A `TpmEngine` owns everything a TPM needs: the platform dependencies ([`TpmPlatform`]: crypto,
-/// storage, timer, RNG) and the TPM state ([`State`]). Commands are sent to it as marshaled
-/// byte buffers, either with the inherent `execute_command*` methods or through its
-/// [`tpm2::Connection`] implementation.
+/// A `TpmEngine` owns everything a TPM needs: the platform dependencies ([`Platform`]: crypto,
+/// timer, RNG, firmware, e.g. a [`crate::TpmPlatform`]) and the TPM state ([`State`], with its
+/// NV data). Commands are sent to it as marshaled byte buffers, either with the inherent
+/// `execute_command*` methods or through its [`tpm2::Connection`] implementation.
 ///
 /// A new engine starts with a default (unmanufactured) state. A typical lifecycle is
 /// [`TpmEngine::init_storage`] once at manufacture, [`TpmEngine::reset`] on every `_TPM_Init`
 /// (power on), and then `TPM2_Startup`.
 #[non_exhaustive]
 pub struct TpmEngine<P: Platform> {
-    /// The platform dependencies (crypto, storage, timer, RNG).
+    /// The platform dependencies (crypto, timer, RNG, firmware, ...).
     pub platform: P,
-    /// The volatile and persistent TPM state.
-    pub state: State,
+    /// The volatile and non-volatile TPM state, including the NV data ([`crate::Nv::index`]).
+    pub state: State<P>,
     /// The algorithm self-test state (`g_toTest`, and whether a self test failed, i.e. Failure
     /// mode), which TPM 2.0 Part 1 ("Command Dispatch") considers "different from the command
     /// execution state": see [`crate::self_test`].
     pub self_test: crate::self_test::SelfTestState,
     /// The crypto backend's random number generator (`C::Rng`, created from the backend's
-    /// entropy source with [`tpm2::crypto::Random::from_entropy`] by [`TpmEngine::new`]). It
+    /// entropy source with [`tpm2::crypto::Random::from_entropy`] by [`TpmEngine::new`]). It is
+    /// not part of the [`State`]: it is neither persisted nor serialized. It
     /// draws the values the default build takes from the crypto backend (response nonces,
     /// TPM-generated keys and seeds, secrets, see the `rng` module), the randomness of the
     /// randomized key operations (RSA padding and blinding, signature nonces) and absorbs the
@@ -636,7 +636,7 @@ use crate::storage::nv::{
     STATE_SAVE_HANDLE,
 };
 
-impl State {
+impl<P: Platform> State<P> {
     pub fn init_zeroed(&mut self) {
         self.nv.persistent.total_reset_count = 1;
         self.nv_available = true;
@@ -1096,7 +1096,7 @@ impl<C: Crypto, P: Platform<Crypto = C>> TpmEngine<P> {
         } else if let Some(obj) = self.state.find_transient_object(handle) {
             obj.auth
         } else if Handle(handle).handle_type() == Some(TpmHt::NVIndex) {
-            let storage_mgr = StorageManager::new(self.platform.storage_mut());
+            let storage_mgr = &mut self.state.nv.index;
             if let Ok(metadata) = storage_mgr.get_metadata(handle) {
                 let read_len = core::cmp::min(metadata.data_size as usize, 1536);
                 let mut read_buf = [0u8; 1536];
@@ -1155,7 +1155,7 @@ impl<C: Crypto, P: Platform<Crypto = C>> TpmEngine<P> {
         } else if self.state.find_active_sequence(handle).is_some() {
             Ok(Default::default())
         } else if Handle(handle).handle_type() == Some(TpmHt::NVIndex) {
-            let storage_mgr = StorageManager::new(self.platform.storage_mut());
+            let storage_mgr = &mut self.state.nv.index;
             if let Ok(metadata) = storage_mgr.get_metadata(handle) {
                 let read_len = core::cmp::min(metadata.data_size as usize, 1536);
                 let mut read_buf = [0u8; 1536];
@@ -1215,7 +1215,7 @@ impl<C: Crypto, P: Platform<Crypto = C>> TpmEngine<P> {
             return true;
         }
         if Handle(handle).handle_type() == Some(TpmHt::NVIndex) {
-            let storage_mgr = StorageManager::new(self.platform.storage_mut());
+            let storage_mgr = &mut self.state.nv.index;
             if let Ok(metadata) = storage_mgr.get_metadata(handle) {
                 let read_len = core::cmp::min(metadata.data_size as usize, 1536);
                 let mut read_buf = [0u8; 1536];
@@ -1250,7 +1250,7 @@ impl<C: Crypto, P: Platform<Crypto = C>> TpmEngine<P> {
             if !self.state.nv_available {
                 return Err(TpmRc::NV_UNAVAILABLE);
             }
-            let _ = self.platform.storage_mut().write_nv(
+            let _ = self.state.nv.index.write_reserved(
                 crate::storage::nv::NvHeader::FAILED_TRIES_OFFSET,
                 &self.state.nv.persistent.failed_tries.to_be_bytes(),
             );
@@ -1314,10 +1314,7 @@ impl<C: Crypto, P: Platform<Crypto = C>> TpmEngine<P> {
     /// (`NvGetEvictObject`, [`NvPersistentObjectRecord`]). Returns `TPM_RC_HANDLE` if it is not
     /// defined.
     pub(crate) fn read_persistent_object(&mut self, handle: u32) -> Result<TransientObject, TpmRc> {
-        Ok(
-            NvPersistentObjectRecord::read(self.platform.storage_mut(), handle)?
-                .into_object(handle),
-        )
+        Ok(NvPersistentObjectRecord::read(&mut self.state.nv.index, handle)?.into_object(handle))
     }
 
     /// Manufactures the TPM (`TPM_Manufacture` / `HierarchyPreInstall_Init`): draws the three
@@ -1370,7 +1367,7 @@ impl<C: Crypto, P: Platform<Crypto = C>> TpmEngine<P> {
             self.state.nv.persistent.eh_proof,
             self.state.nv.persistent.eh_proof_size,
         ) = draw(self);
-        let mut storage = StorageManager::new(self.platform.storage_mut());
+        let storage = &mut self.state.nv.index;
         let _ = storage.undefine_space(HIERARCHY_RECORD_HANDLE);
         let _ = storage.undefine_space(PCR_ALLOCATION_HANDLE);
         // `PhysicalPresencePreInstall_Init()` and `gp.algorithmSet = 0`.
@@ -1379,14 +1376,15 @@ impl<C: Crypto, P: Platform<Crypto = C>> TpmEngine<P> {
         // `NvWrite(NV_ORDERLY_DATA, ...)`: the DRBG state after manufacture is persisted.
         #[cfg(feature = "reference-rng")]
         self.save_drbg_state();
+        self.platform.store_nv(&self.state.nv);
     }
 
-    /// Creates a new [`TpmEngine`] over `platform` with a default (unmanufactured)
-    /// [`State`].
-    pub fn new(platform: P) -> Result<Self, InternalError> {
+    /// Creates a new [`TpmEngine`] over `platform` with the state of a new (unmanufactured)
+    /// TPM ([`State::new`]) whose NV data is held in `index` (e.g. the platform's NV medium).
+    pub fn new(platform: P, index: P::IndexState) -> Result<Self, InternalError> {
         Ok(Self {
             platform,
-            state: State::default(),
+            state: State::new(index),
             self_test: Default::default(),
             crypto_rng: C::from_entropy().map_err(|_| InternalError::HardwareError)?,
         })
@@ -1427,6 +1425,9 @@ impl<C: Crypto, P: Platform<Crypto = C>> TpmEngine<P> {
         // `CryptInitializeToTest()` (`CryptInit()`): every algorithm needs its test again, and
         // Failure mode ends.
         self.self_test.initialize();
+        // The platform reads the NV data from external storage before the NV-synced state is
+        // reloaded from it.
+        self.platform.load_nv(&mut self.state.nv);
         self.restore_hierarchy_auths();
         self.restore_platform_settings();
         self.restore_persistent_state();
@@ -1434,13 +1435,14 @@ impl<C: Crypto, P: Platform<Crypto = C>> TpmEngine<P> {
         // `NvRead(&go, NV_ORDERLY_DATA, ...)`: the DRBG reverts to its last persisted state.
         #[cfg(feature = "reference-rng")]
         self.load_drbg_state();
+        self.platform.store_nv(&self.state.nv);
     }
 
     /// Replaces the active PCR allocation with the NV copy written by `TPM2_PCR_Allocate`
     /// ([`NvPcrAllocationRecord`]), if one exists. Called at `_TPM_Init`, mirroring the C
     /// reference where `gp.pcrAllocated` is (re)loaded from NV on initialization.
     fn restore_pcr_allocation(&mut self) {
-        if let Some(record) = NvPcrAllocationRecord::read(self.platform.storage_mut()) {
+        if let Some(record) = NvPcrAllocationRecord::read(&mut self.state.nv.index) {
             self.state.pcrs.pcr_allocation = record.allocation;
         }
     }
@@ -1493,7 +1495,7 @@ impl<C: Crypto, P: Platform<Crypto = C>> TpmEngine<P> {
                 commands: *s.nv.persistent.audit_commands.as_bytes(),
             }),
         };
-        record.write(self.platform.storage_mut());
+        record.write(&mut self.state.nv.index);
     }
 
     /// Reloads the hierarchy record ([`NvHierarchyRecord`]) at `_TPM_Init`. The record has no
@@ -1501,7 +1503,7 @@ impl<C: Crypto, P: Platform<Crypto = C>> TpmEngine<P> {
     /// they are `gc` state, which `TPM2_Startup` sets (TPM Reset/Restart; TPM 2.0 Part 1,
     /// "Hierarchy Control") or restores from the state-save record (TPM Resume).
     pub fn restore_hierarchy_auths(&mut self) {
-        let Some(r) = NvHierarchyRecord::read(self.platform.storage_mut()) else {
+        let Some(r) = NvHierarchyRecord::read(&mut self.state.nv.index) else {
             return;
         };
         let st = &mut self.state;
@@ -1564,7 +1566,7 @@ impl<C: Crypto, P: Platform<Crypto = C>> TpmEngine<P> {
     /// was `TPM_SU_STATE` but the saved state could not be recovered (so that
     /// `TPM2_Startup(TPM_SU_STATE)` fails with `TPM_RC_NV_UNINITIALIZED`).
     fn restore_persistent_state(&mut self) {
-        let Ok(header) = NvHeader::read(self.platform.storage()) else {
+        let Ok(header) = NvHeader::read(&self.state.nv.index) else {
             self.state.g_nv_ok = false;
             return;
         };
@@ -1625,19 +1627,19 @@ impl<C: Crypto, P: Platform<Crypto = C>> TpmEngine<P> {
             act_saved_timeouts: s.act.saved_timeouts,
             act_policies: s.act.policies,
         };
-        record.write(self.platform.storage_mut())
+        record.write(&mut self.state.nv.index)
     }
 
     /// Deletes the saved `TPM_SU_STATE` data written by [`Self::save_state_data`] once it has been
     /// consumed (or invalidated) by `TPM2_Startup`, releasing its NV space.
     pub(crate) fn delete_state_data(&mut self) {
-        crate::storage::nv::delete_item(self.platform.storage_mut(), STATE_SAVE_HANDLE);
+        crate::storage::nv::delete_item(&mut self.state.nv.index, STATE_SAVE_HANDLE);
     }
 
     /// Restores the data written by [`Self::save_state_data`]. Returns `false` if it is missing
     /// or malformed.
     fn restore_state_data(&mut self) -> bool {
-        let Some(r) = NvStateSaveRecord::read(self.platform.storage_mut()) else {
+        let Some(r) = NvStateSaveRecord::read(&mut self.state.nv.index) else {
             return false;
         };
         let st = &mut self.state;
@@ -1859,7 +1861,7 @@ impl<C: Crypto, P: Platform<Crypto = C>> TpmEngine<P> {
             self.state.timer_stopped = false;
             self.state.nv.persistent.time_epoch =
                 self.state.nv.persistent.time_epoch.wrapping_add(1);
-            let _ = self.platform.storage_mut().write_nv(
+            let _ = self.state.nv.index.write_reserved(
                 crate::storage::nv::NvHeader::TIME_EPOCH_OFFSET,
                 &crate::storage::nv::NvHeader::encode_time_epoch(
                     self.state.nv.persistent.time_epoch,
@@ -1960,7 +1962,7 @@ impl<C: Crypto, P: Platform<Crypto = C>> TpmEngine<P> {
         if self.state.nv.persistent.failed_tries != 0 {
             if self.state.nv.persistent.recovery_time == 0 {
                 self.state.nv.persistent.failed_tries = 0;
-                let _ = self.platform.storage_mut().write_nv(
+                let _ = self.state.nv.index.write_reserved(
                     crate::storage::nv::NvHeader::FAILED_TRIES_OFFSET,
                     &self.state.nv.persistent.failed_tries.to_be_bytes(),
                 );
@@ -1983,7 +1985,7 @@ impl<C: Crypto, P: Platform<Crypto = C>> TpmEngine<P> {
                                     * (self.state.nv.persistent.recovery_time as u64)
                                     * 1000) as i64,
                             );
-                        let _ = self.platform.storage_mut().write_nv(
+                        let _ = self.state.nv.index.write_reserved(
                             crate::storage::nv::NvHeader::FAILED_TRIES_OFFSET,
                             &self.state.nv.persistent.failed_tries.to_be_bytes(),
                         );
@@ -2026,7 +2028,17 @@ impl<C: Crypto, P: Platform<Crypto = C>> TpmEngine<P> {
         crate::act::act_index(handle).is_some_and(|index| self.state.act.counters[index].signaled)
     }
 
+    /// Processes the TPM command `cmd_buf` and writes its response to `resp_buf`, returning the
+    /// size of the response, or the response code of a command that fails before its response
+    /// is written. The NV data is then synced to external storage ([`Platform::store_nv`]).
     pub fn execute_command(&mut self, cmd_buf: &[u8], resp_buf: &mut [u8]) -> Result<usize, TpmRc> {
+        let result = self.dispatch_command(cmd_buf, resp_buf);
+        self.platform.store_nv(&self.state.nv);
+        result
+    }
+
+    /// Implementation of [`Self::execute_command`] (without the NV sync).
+    fn dispatch_command(&mut self, cmd_buf: &[u8], resp_buf: &mut [u8]) -> Result<usize, TpmRc> {
         // The ACTs count down with the platform timer, whatever the state of the TPM (the ticks
         // are dropped before TPM2_Startup; Part 1, ACT "Failure Mode": "the ACT should continue
         // to count down").
@@ -2258,7 +2270,7 @@ impl<C: Crypto, P: Platform<Crypto = C>> TpmEngine<P> {
         if self.state.clear_orderly && self.state.nv.persistent.orderly_state < 0xFFFE {
             self.state.nv.persistent.orderly_state =
                 if self.state.da_used { 0xFFFE } else { 0xFFFF };
-            let _ = self.platform.storage_mut().write_nv(
+            let _ = self.state.nv.index.write_reserved(
                 crate::storage::nv::NvHeader::ORDERLY_STATE_OFFSET,
                 &self.state.nv.persistent.orderly_state.to_be_bytes(),
             );
@@ -2944,7 +2956,7 @@ impl<C: Crypto, P: Platform<Crypto = C>> TpmEngine<P> {
     ///
     /// Returns `None` if the index is not defined or its header cannot be parsed.
     fn read_nv_index_public(&mut self, handle: u32) -> Option<(u16, crate::owned::OwnedNvPublic)> {
-        let storage_mgr = StorageManager::new(self.platform.storage_mut());
+        let storage_mgr = &mut self.state.nv.index;
         let metadata = storage_mgr.get_metadata(handle).ok()?;
         let read_len = core::cmp::min(metadata.data_size as usize, 1536);
         let mut read_buf = [0u8; 1536];
@@ -3112,7 +3124,9 @@ impl<C: Crypto, P: Platform<Crypto = C>> TpmEngine<P> {
     /// Index stored at `data_offset`.
     fn read_nv_pin(&mut self, handle: u32, data_offset: u16) -> Option<(u32, u32)> {
         let mut pin = [0u8; 8];
-        StorageManager::new(self.platform.storage_mut())
+        self.state
+            .nv
+            .index
             .read_item(handle, data_offset, &mut pin)
             .ok()?;
         Some((
@@ -3157,7 +3171,7 @@ impl<C: Crypto, P: Platform<Crypto = C>> TpmEngine<P> {
         let mut pin = [0u8; 8];
         pin[..4].copy_from_slice(&new_count.to_be_bytes());
         pin[4..].copy_from_slice(&limit.to_be_bytes());
-        let mut storage_mgr = StorageManager::new(self.platform.storage_mut());
+        let storage_mgr = &mut self.state.nv.index;
         if storage_mgr.write_item(handle, data_offset, &pin).is_ok() {
             self.state.update_nv |= if attrs.contains(tpm2::TpmaNv::ORDERLY) {
                 UT_ORDERLY
@@ -3190,7 +3204,7 @@ impl<C: Crypto, P: Platform<Crypto = C>> TpmEngine<P> {
             }
             self.state.da_used = true;
             self.state.nv.persistent.orderly_state = 0xFFFE;
-            let _ = self.platform.storage_mut().write_nv(
+            let _ = self.state.nv.index.write_reserved(
                 crate::storage::nv::NvHeader::ORDERLY_STATE_OFFSET,
                 &self.state.nv.persistent.orderly_state.to_be_bytes(),
             );
@@ -3220,7 +3234,7 @@ impl<C: Crypto, P: Platform<Crypto = C>> TpmEngine<P> {
                 self.state.nv.persistent.failed_tries =
                     self.state.nv.persistent.failed_tries.saturating_add(1);
                 if self.state.nv_available {
-                    let _ = self.platform.storage_mut().write_nv(
+                    let _ = self.state.nv.index.write_reserved(
                         crate::storage::nv::NvHeader::FAILED_TRIES_OFFSET,
                         &self.state.nv.persistent.failed_tries.to_be_bytes(),
                     );
@@ -3234,7 +3248,7 @@ impl<C: Crypto, P: Platform<Crypto = C>> TpmEngine<P> {
             self.state.da_used = true;
             if self.state.nv_available {
                 self.state.nv.persistent.orderly_state = 0xFFFE;
-                let _ = self.platform.storage_mut().write_nv(
+                let _ = self.state.nv.index.write_reserved(
                     crate::storage::nv::NvHeader::ORDERLY_STATE_OFFSET,
                     &self.state.nv.persistent.orderly_state.to_be_bytes(),
                 );
@@ -3667,7 +3681,7 @@ impl<C: Crypto, P: Platform<Crypto = C>> TpmEngine<P> {
                 .ok()
                 .and_then(|obj| obj.public.name_alg)
         } else if Handle(handle).handle_type() == Some(TpmHt::NVIndex) {
-            let storage_mgr = StorageManager::new(self.platform.storage_mut());
+            let storage_mgr = &mut self.state.nv.index;
             let metadata = storage_mgr.get_metadata(handle).ok()?;
             let read_len = core::cmp::min(metadata.data_size as usize, 1536);
             let mut read_buf = [0u8; 1536];
@@ -3843,7 +3857,7 @@ impl<C: Crypto, P: Platform<Crypto = C>> TpmEngine<P> {
             if Handle(entity_handle).handle_type() != Some(TpmHt::NVIndex) {
                 return Err(TpmRc::POLICY_FAIL.with(pos));
             }
-            let storage_mgr = StorageManager::new(self.platform.storage_mut());
+            let storage_mgr = &self.state.nv.index;
             let metadata = storage_mgr
                 .get_metadata(entity_handle)
                 .map_err(|_| TpmRc::POLICY_FAIL.with(pos))?;
@@ -5234,7 +5248,7 @@ impl<C: Crypto, P: Platform<Crypto = C>> TpmEngine<P> {
     ///
     /// Returns `TPM_RC_HANDLE` at `pos` if the index is not accessible.
     fn check_nv_index_accessible(&mut self, handle: u32, pos: Position) -> Result<(), TpmRc> {
-        let storage = crate::storage::manager::StorageManager::new(self.platform.storage_mut());
+        let storage = &mut self.state.nv.index;
         let metadata = storage
             .get_metadata(handle)
             .map_err(|_| TpmRc::HANDLE.with(pos))?;
@@ -6136,7 +6150,7 @@ fn handle_name<C: Crypto, P: Platform<Crypto = C>>(
         }
     }
     if Handle(handle).handle_type() == Some(TpmHt::NVIndex) {
-        let storage_mgr = StorageManager::new(ctx.platform.storage_mut());
+        let storage_mgr = &mut ctx.state.nv.index;
         if let Ok(metadata) = storage_mgr.get_metadata(handle) {
             let read_len = core::cmp::min(metadata.data_size as usize, 1536);
             let mut read_buf = [0u8; 1536];
@@ -6379,8 +6393,8 @@ struct SessionRoles {
 /// the session handle range (`TPM_RC_VALUE`), its slot must hold a loaded session
 /// (`TPM_RC_REFERENCE_H0 + h_idx`), and that session must be of the type named by the handle
 /// (`TPM_RC_HANDLE`).
-fn check_session_handle_status(
-    global_state: &State,
+fn check_session_handle_status<P: Platform>(
+    global_state: &State<P>,
     handle: u32,
     h_idx: usize,
     is_policy: bool,

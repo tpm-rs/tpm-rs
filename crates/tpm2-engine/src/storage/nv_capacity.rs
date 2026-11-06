@@ -24,8 +24,7 @@
 //! and `v185`, and `ibmswtpm2`, with the RSA and ECC profile of the build; `sizeof` taken from
 //! the compiled C structures).
 
-use super::manager::StorageManager;
-use super::{StorageError, Tpm2Storage};
+use super::{IndexState, StorageError};
 
 /// `NV_MEMORY_SIZE`: the size of the reference's NV memory image: 16384 octets (the TCG
 /// reference profile), 32768 with the `nv-memory-size-32k` feature (`ibmswtpm2`) or 131072 with
@@ -287,13 +286,9 @@ const MAX_INDEX_RECORD_PREFIX: usize = 66 + 80;
 ///
 /// # Errors
 /// A storage error, or [`StorageError::HardwareError`] for an Index record that does not parse.
-pub fn scan(storage: &StorageManager<'_>) -> Result<NvUsage, StorageError> {
+pub fn scan(storage: &(impl IndexState + ?Sized)) -> Result<NvUsage, StorageError> {
     let mut usage = NvUsage::default();
-    for item in storage
-        .read_toc()?
-        .iter()
-        .take_while(|item| item.in_use != 0)
-    {
+    for item in storage.items()?.iter().take_while(|item| item.in_use != 0) {
         match item.handle >> 24 {
             0x01 => {
                 let mut record = [0u8; MAX_INDEX_RECORD_PREFIX];

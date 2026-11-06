@@ -547,7 +547,7 @@ impl<'b, C: Crypto, P: Platform<Crypto = C>> CommandHandler<'b, P> {
         crate::storage::nv::NvPcrAllocationRecord {
             allocation: *allocation,
         }
-        .write(self.context.platform.storage_mut())
+        .write(&mut self.context.state.nv.index)
     }
 
     /// Handles the [TpmCc::PCRSetAuthValue] (`0x183`) command.
