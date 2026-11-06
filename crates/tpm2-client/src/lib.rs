@@ -13,16 +13,20 @@
 //! ## Example
 //!
 //! ```rust,no_run
+//! # // The TCP transport needs the (default) `connection-tcp` feature.
+//! # #[cfg(feature = "connection-tcp")]
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! use tpm2_client::{run_command, connection::tcp::TcpConnection, protocol::RESP_BUFFER_SIZE};
 //! use tpm2::commands::GetRandom;
 //!
-//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let mut tpm = TcpConnection::connect("127.0.0.1", None, None)?;
 //! let cmd = GetRandom { bytes_requested: 16 };
 //! let mut resp_buffer = [0u8; RESP_BUFFER_SIZE];
 //! let resp = run_command(&cmd, &mut tpm, &mut resp_buffer)?;
 //! # Ok(())
 //! # }
+//! # #[cfg(not(feature = "connection-tcp"))]
+//! # fn main() {}
 //! ```
 #![no_std]
 #![cfg_attr(docsrs, feature(doc_cfg))]
