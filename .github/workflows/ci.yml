@@ -76,7 +76,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: rustc --version
-      - run: cargo clippy --all-targets --all-features -- -D warnings
+      # tpm2-boringssl (and the `boringssl` tests) are checked by the BoringSSL job.
+      - run: cargo clippy --workspace --exclude tpm2-boringssl --exclude testing-crypto --all-targets --all-features -- -D warnings
+      - run: cargo clippy -p testing-crypto --all-targets -- -D warnings
+
+  boringssl:
+    name: BoringSSL Backend
+    runs-on: ubuntu-latest
+    # BoringSSL builds with `-Werror`, and GCC 15 reports false positives
+    # (`-Wstringop-overflow`) in it.
+    env:
+      CC: clang
+      CXX: clang++
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y clang cmake libclang-dev
+      - run: rustc --version
+      - run: cargo install --locked bindgen-cli
+      - run: crates/tpm2-boringssl/boringssl.py build
+      - run: cargo clippy -p tpm2-boringssl -p testing-crypto --all-targets --no-default-features --features testing-crypto/boringssl,testing-crypto/rustcrypto -- -D warnings
+      - run: cargo test -p testing-crypto --no-default-features --features boringssl,rustcrypto
 
   docs:
     name: Docs
@@ -95,4 +114,4 @@ jobs:
       - uses: actions/checkout@v4
       - run: rustup component add miri --toolchain nightly
       - run: rustc +nightly --version
-      - run: cargo +nightly miri test --workspace --exclude testing-crypto
+      - run: cargo +nightly miri test --workspace --exclude tpm2-boringssl --exclude testing-crypto

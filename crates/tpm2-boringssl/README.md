@@ -40,3 +40,40 @@ so a binary can't also link OpenSSL's `libcrypto` (e.g. through `openssl-sys`):
 the linker would use BoringSSL's library for both. Even a symbol-prefixed
 BoringSSL build (`-DBORINGSSL_PREFIX`) doesn't help, as the library names still
 clash.
+
+## Developing in this workspace
+
+This workspace's `.cargo/config.toml` patches `bssl-sys` to BoringSSL's git
+repository at a pinned revision, and sets `BORINGSSL_BUILD_DIR` to
+`target/boringssl`. `tpm2-boringssl` isn't one of the workspace's default
+members, so `cargo build`, `cargo check`, and `cargo test` at the workspace root
+work without a BoringSSL build.
+
+Before building `tpm2-boringssl` (including `cargo check`, `cargo clippy`, and
+`cargo doc`), and again after `cargo clean` or after changing the `bssl-sys`
+revision, run:
+
+```sh
+crates/tpm2-boringssl/boringssl.py build
+```
+
+This builds Cargo's checkout of the patched `bssl-sys` (so the source always
+matches the pinned revision) into `$BORINGSSL_BUILD_DIR`. It needs CMake, a
+C/C++ compiler, Python 3, and the `bindgen` CLI (`cargo install bindgen-cli`). Until
+it has run, building fails with `Could not copy bindings from
+'.../target/boringssl/rust/bssl-sys/wrapper_<target>.rs'`.
+
+Then run the shared backend tests, and the interop tests against RustCrypto:
+
+```sh
+cargo test -p testing-crypto --no-default-features --features boringssl,rustcrypto
+```
+
+| Variable | Read by | Description |
+|----------|---------|-------------|
+| `BORINGSSL_BUILD_DIR` | `bssl-sys`, `boringssl.py` | Prebuilt BoringSSL directory (default: `target/boringssl`). |
+| `BORINGSSL_RUST_CPPLIB` | `bssl-sys` | C++ runtime library to link (default: `c++` on macOS, `stdc++` on other Unix targets). |
+| `BINDGEN` | `boringssl.py` | Path to the `bindgen` CLI (default: `bindgen` on `PATH`). |
+| `RUST_TARGET` | `boringssl.py build` | Rust target to generate bindings for (default: the host). |
+| `CMAKE_GENERATOR` | CMake | Build tool for a new build directory, e.g. `Ninja` (default: Make, on Unix). |
+| `CMAKE_BUILD_PARALLEL_LEVEL` | CMake | Number of parallel build jobs (default: the number of CPUs). |

@@ -1,0 +1,11 @@
+[patch.crates-io]
+# BoringSSL's own `bssl-sys`, replacing the crates.io placeholder that
+# tpm2-boringssl depends on. `crates/tpm2-boringssl/boringssl.py build` builds
+# BoringSSL from this same revision.
+bssl-sys = { git = "https://boringssl.googlesource.com/boringssl", rev = "fd0ed4d0a1273570612a08a31bace08e4dd73c81" }
+
+[env]
+# Where `bssl-sys` finds a prebuilt BoringSSL: by default, the output of
+# `crates/tpm2-boringssl/boringssl.py build`. Setting `BORINGSSL_BUILD_DIR` in
+# the environment overrides this.
+BORINGSSL_BUILD_DIR = { value = "target/boringssl", relative = true }
