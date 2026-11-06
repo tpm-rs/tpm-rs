@@ -1,8 +1,8 @@
 //! White-box regression tests for the `lifecycle` findings in command-handlers.toml that cannot
-//! be observed through the in-process simulator, because it keeps `GlobalState` in RAM across a
+//! be observed through the in-process simulator, because it keeps `State` in RAM across a
 //! simulated power cycle:
 //!
-//! - state that must be reloaded from NV storage by `_TPM_Init` (a fresh `GlobalState` over the
+//! - state that must be reloaded from NV storage by `_TPM_Init` (a fresh `State` over the
 //!   same NV models a real reboot where RAM is lost), and
 //! - a failing platform RNG (`TPM2_GetRandom` must not panic).
 
@@ -11,7 +11,7 @@ mod common;
 use common::{FakeCrypto, FakeRng, FakeStorage, FakeTimer};
 use std::sync::atomic::{AtomicBool, Ordering};
 use tpm2::crypto::{CryptoError, Rng};
-use tpm2_engine::{GlobalState, TpmEngine, TpmPlatform};
+use tpm2_engine::{State, TpmEngine, TpmPlatform};
 
 /// Builds a `TPM_ST_SESSIONS` command authorized with one empty password session per handle.
 fn pw_command(cc: u32, handles: &[u32], params: &[u8]) -> Vec<u8> {
@@ -88,8 +88,8 @@ fn tpm2_startup_missing_nv_loads_for_orderly_counters_and_lockout() {
     tpm.init_storage();
     power_on_startup(&mut tpm);
     power_on_startup(&mut tpm);
-    let reset_count = tpm.state.reset_count;
-    let total_reset_count = tpm.state.total_reset_count;
+    let reset_count = tpm.state.nv.persistent.reset_count;
+    let total_reset_count = tpm.state.nv.persistent.total_reset_count;
     assert!(reset_count >= 2);
 
     // DictionaryAttackParameters(maxTries = 7, recoveryTime = 0, lockoutRecovery = 55).
@@ -102,35 +102,38 @@ fn tpm2_startup_missing_nv_loads_for_orderly_counters_and_lockout() {
 
     // Model a lockoutAuth failure and the disableClear state, persisted by the next
     // ClearControl (which itself must persist disableClear).
-    tpm.state.lockout_auth_enabled = false;
+    tpm.state.nv.persistent.lockout_auth_enabled = false;
     let cmd = pw_command(TPM_CC_CLEAR_CONTROL, &[TPM_RH_PLATFORM], &[1]);
     assert_eq!(run(&mut tpm, &cmd), 0);
     // Shutdown(CLEAR) so that the next boot is orderly.
     assert_eq!(run(&mut tpm, &plain_command(TPM_CC_SHUTDOWN, &[0, 0])), 0);
 
     // Real reboot: RAM is lost, only NV survives.
-    tpm.state = GlobalState::default();
+    tpm.state = State::default();
     tpm.reset();
-    assert_eq!(tpm.state.max_tries, 7);
-    assert_eq!(tpm.state.recovery_time, 0);
-    assert_eq!(tpm.state.lockout_recovery, 55);
-    assert!(tpm.state.disable_clear, "disableClear not reloaded from NV");
+    assert_eq!(tpm.state.nv.persistent.max_tries, 7);
+    assert_eq!(tpm.state.nv.persistent.recovery_time, 0);
+    assert_eq!(tpm.state.nv.persistent.lockout_recovery, 55);
     assert!(
-        !tpm.state.lockout_auth_enabled,
+        tpm.state.nv.persistent.disable_clear,
+        "disableClear not reloaded from NV"
+    );
+    assert!(
+        !tpm.state.nv.persistent.lockout_auth_enabled,
         "lockOutAuthEnabled not reloaded from NV (lockoutRecovery bypass)"
     );
-    assert_eq!(tpm.state.reset_count, reset_count);
-    assert_eq!(tpm.state.total_reset_count, total_reset_count);
+    assert_eq!(tpm.state.nv.persistent.reset_count, reset_count);
+    assert_eq!(tpm.state.nv.persistent.total_reset_count, total_reset_count);
     assert_eq!(
-        tpm.state.orderly_state, 0x0000,
+        tpm.state.nv.persistent.orderly_state, 0x0000,
         "orderly state not reloaded"
     );
     assert!(tpm.state.g_nv_ok);
 
     // lockoutRecovery != 0, so Startup must not re-enable lockoutAuth.
     assert_eq!(run(&mut tpm, &plain_command(TPM_CC_STARTUP, &[0, 0])), 0);
-    assert!(!tpm.state.lockout_auth_enabled);
-    assert_eq!(tpm.state.reset_count, reset_count + 1);
+    assert!(!tpm.state.nv.persistent.lockout_auth_enabled);
+    assert_eq!(tpm.state.nv.persistent.reset_count, reset_count + 1);
 }
 
 /// A platform RNG that can be switched into a failing state.
@@ -204,23 +207,23 @@ fn rng_failure_at_manufacture_leaves_seeds_and_proofs_unprovisioned() {
     let mut tpm = TpmEngine::new(platform).unwrap();
     tpm.init_storage();
     for size in [
-        tpm.state.ep_seed_size,
-        tpm.state.sp_seed_size,
-        tpm.state.pp_seed_size,
-        tpm.state.ph_proof_size,
-        tpm.state.sh_proof_size,
-        tpm.state.eh_proof_size,
+        tpm.state.nv.persistent.ep_seed_size,
+        tpm.state.nv.persistent.sp_seed_size,
+        tpm.state.nv.persistent.pp_seed_size,
+        tpm.state.nv.persistent.ph_proof_size,
+        tpm.state.nv.persistent.sh_proof_size,
+        tpm.state.nv.persistent.eh_proof_size,
     ] {
         assert_eq!(size, 0);
     }
     assert_eq!(
         [
-            tpm.state.ep_seed,
-            tpm.state.sp_seed,
-            tpm.state.pp_seed,
-            tpm.state.ph_proof,
-            tpm.state.sh_proof,
-            tpm.state.eh_proof
+            tpm.state.nv.persistent.ep_seed,
+            tpm.state.nv.persistent.sp_seed,
+            tpm.state.nv.persistent.pp_seed,
+            tpm.state.nv.persistent.ph_proof,
+            tpm.state.nv.persistent.sh_proof,
+            tpm.state.nv.persistent.eh_proof
         ],
         [[0u8; 64]; 6]
     );

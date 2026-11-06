@@ -147,7 +147,7 @@ where
 /// `commandCode` is `TPM2_Duplicate` (C `IsPolicySessionRequired()` / `CheckPolicyAuthSession()`).
 /// Installs such a session (its policyDigest equals the object's empty authPolicy) and returns the
 /// authorization that uses it.
-fn dup_policy_auth(global_state: &mut tpm2_engine::GlobalState) -> TpmsAuthCommand<'static> {
+fn dup_policy_auth(global_state: &mut tpm2_engine::State) -> TpmsAuthCommand<'static> {
     const SESSION: u32 = 0x0300_0000;
     let _ = global_state.flush_session(SESSION);
     let mut session = common::make_test_session_state(

@@ -123,15 +123,16 @@ macro_rules! setup {
 /// Recomputes the context integrity HMAC over `enc_context` (white-box: uses
 /// the owner hierarchy proof and `totalResetCount`).
 fn forge_integrity(
-    gs: &tpm2_engine::GlobalState,
+    gs: &tpm2_engine::State,
     context: &TpmsContext<'_>,
     enc_context: &[u8],
 ) -> Vec<u8> {
-    let proof = &gs.sh_proof[..gs.sh_proof_size as usize];
+    let proof = &gs.nv.persistent.sh_proof[..gs.nv.persistent.sh_proof_size as usize];
     let mut hmac =
         HmacContext::<TestCryptoProvider>::new(common::context_integrity_hash_alg(), proof)
             .unwrap();
-    hmac.update(&gs.total_reset_count.to_be_bytes()).unwrap();
+    hmac.update(&gs.nv.persistent.total_reset_count.to_be_bytes())
+        .unwrap();
     hmac.update(&context.sequence.to_be_bytes()).unwrap();
     hmac.update(&context.saved_handle.0.to_be_bytes()).unwrap();
     hmac.update(enc_context).unwrap();
@@ -140,11 +141,7 @@ fn forge_integrity(
 }
 
 /// Builds `integrity || enc_context` with a correctly forged integrity value.
-fn forge_blob(
-    gs: &tpm2_engine::GlobalState,
-    context: &TpmsContext<'_>,
-    enc_context: &[u8],
-) -> Vec<u8> {
+fn forge_blob(gs: &tpm2_engine::State, context: &TpmsContext<'_>, enc_context: &[u8]) -> Vec<u8> {
     let integrity = forge_integrity(gs, context, enc_context);
     let mut blob = Vec::new();
     blob.extend_from_slice(&(integrity.len() as u16).to_be_bytes());
@@ -155,13 +152,8 @@ fn forge_blob(
 
 /// AES-128-CFB keystream for the context, as derived by the TPM
 /// (white-box: uses the owner hierarchy proof).
-fn context_cfb(
-    gs: &tpm2_engine::GlobalState,
-    context: &TpmsContext<'_>,
-    data: &mut [u8],
-    encrypt: bool,
-) {
-    let proof = &gs.sh_proof[..gs.sh_proof_size as usize];
+fn context_cfb(gs: &tpm2_engine::State, context: &TpmsContext<'_>, data: &mut [u8], encrypt: bool) {
+    let proof = &gs.nv.persistent.sh_proof[..gs.nv.persistent.sh_proof_size as usize];
     let mut key_iv = [0u8; 32];
     tpm2::crypto::kdfa_bits::<TestCryptoProvider>(
         common::context_integrity_hash_alg(),

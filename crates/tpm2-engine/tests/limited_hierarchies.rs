@@ -160,9 +160,12 @@ fn limited_proofs_are_derived_from_the_base_proofs() {
     let mut tpm = setup_real_crypto_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
     tpm.platform.firmware = Some(&firmware);
 
-    let sh_proof = tpm.state.sh_proof[..tpm.state.sh_proof_size as usize].to_vec();
-    let eh_proof = tpm.state.eh_proof[..tpm.state.eh_proof_size as usize].to_vec();
-    let null_proof = tpm.state.null_proof[..tpm.state.null_proof_size as usize].to_vec();
+    let sh_proof =
+        tpm.state.nv.persistent.sh_proof[..tpm.state.nv.persistent.sh_proof_size as usize].to_vec();
+    let eh_proof =
+        tpm.state.nv.persistent.eh_proof[..tpm.state.nv.persistent.eh_proof_size as usize].to_vec();
+    let null_proof =
+        tpm.state.nv.reset.null_proof[..tpm.state.nv.reset.null_proof_size as usize].to_vec();
     let fw_secret: Vec<u8> = (0..64).map(|i| [0x44, 0x33, 0x22, 0x11][i % 4]).collect();
     let svn_secret = |svn: u16| -> Vec<u8> { (0..64).map(|i| svn.to_le_bytes()[i % 2]).collect() };
 

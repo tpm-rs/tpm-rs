@@ -55,7 +55,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         // `clock_offset` holds `Clock - Time` in two's complement, so every `newTime` up to
         // `0xFFFF_0000_0000_0000` is represented exactly (see `TpmEngine::get_clock`).
-        self.context.state.clock_offset =
+        self.context.state.nv.orderly.clock_offset =
             cmd.new_time.wrapping_sub(self.context.state.tpm_time_ms) as i64;
         // `TimeClockUpdate(newTime)`: persists the clock and SETs `clockSafe` when an
         // `NV_CLOCK_UPDATE_INTERVAL` boundary is crossed.

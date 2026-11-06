@@ -10,11 +10,11 @@
 //! requires confirmation with PP. If so, PP is checked before the TPM performs any other
 //! authorization checks." `TPM2_PP_Commands()` "cannot be removed from the list".
 //!
-//! Physical Presence itself is a platform input ([`GlobalState::physical_presence`], set by
+//! Physical Presence itself is a platform input ([`State::physical_presence`], set by
 //! [`TpmEngine::set_physical_presence`], the `PhysicalPresenceOn`/`Off` platform signals of the
 //! simulator).
 //!
-//! [`GlobalState::physical_presence`]: crate::GlobalState::physical_presence
+//! [`State::physical_presence`]: crate::State::physical_presence
 
 use crate::engine::{TpmEngine, is_command_supported};
 use crate::storage::manager::StorageManager;
@@ -144,7 +144,7 @@ impl<C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<'_, C, S, T,
     /// Physical Presence and Physical Presence is not asserted (C `CheckAuthSession()`:
     /// `PhysicalPresenceIsRequired(command->index) && !_plat__PhysicalPresenceAsserted()`).
     pub(crate) fn physical_presence_missing(&self, cc: TpmCc) -> bool {
-        self.state.pp_list.is_required(cc) && !self.state.physical_presence
+        self.state.nv.persistent.pp_list.is_required(cc) && !self.state.physical_presence
     }
 
     #[cfg(any(feature = "cc-pp-commands", feature = "cc-set-algorithm-set"))]
@@ -152,8 +152,8 @@ impl<C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<'_, C, S, T,
     /// `NV_SYNC_PERSISTENT(algorithmSet)`).
     pub(crate) fn save_platform_settings(&mut self) {
         crate::storage::nv::NvPlatformSettingsRecord {
-            pp_list: self.state.pp_list.bits(),
-            algorithm_set: self.state.algorithm_set,
+            pp_list: self.state.nv.persistent.pp_list.bits(),
+            algorithm_set: self.state.nv.persistent.algorithm_set,
         }
         .write(&mut *self.platform.storage);
     }
@@ -164,8 +164,8 @@ impl<C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<'_, C, S, T,
         if let Some(record) =
             crate::storage::nv::NvPlatformSettingsRecord::read(&mut *self.platform.storage)
         {
-            self.state.pp_list = PpList::from_bits(record.pp_list);
-            self.state.algorithm_set = record.algorithm_set;
+            self.state.nv.persistent.pp_list = PpList::from_bits(record.pp_list);
+            self.state.nv.persistent.algorithm_set = record.algorithm_set;
         }
     }
 
@@ -173,8 +173,8 @@ impl<C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<'_, C, S, T,
     pub(crate) fn clear_platform_settings(&mut self) {
         let mut storage = StorageManager::new(&mut *self.platform.storage);
         let _ = storage.undefine_space(PLATFORM_SETTINGS_HANDLE);
-        self.state.pp_list = PpList::manufacture_default();
-        self.state.algorithm_set = 0;
+        self.state.nv.persistent.pp_list = PpList::manufacture_default();
+        self.state.nv.persistent.algorithm_set = 0;
     }
 }
 

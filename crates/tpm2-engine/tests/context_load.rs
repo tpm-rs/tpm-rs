@@ -20,8 +20,8 @@ fn test_context_save_load_uses_hierarchy_proof_and_ignores_sp_seed() {
     tpm.init_storage();
     tpm.state.nv_available = true;
     tpm.state.initialized = true;
-    tpm.state.sh_proof = [0x42; 64];
-    tpm.state.sh_proof_size = 64;
+    tpm.state.nv.persistent.sh_proof = [0x42; 64];
+    tpm.state.nv.persistent.sh_proof_size = 64;
 
     let handle: u32 = 0x80000001;
     let mut tpmt_public_buf = [0u8; 1024];
@@ -67,7 +67,7 @@ fn test_context_save_load_uses_hierarchy_proof_and_ignores_sp_seed() {
         .unwrap();
 
     // Mutate sp_seed completely: ContextLoad should still succeed since proof is used instead of sp_seed
-    tpm.state.sp_seed = [0xFF; 64];
+    tpm.state.nv.persistent.sp_seed = [0xFF; 64];
 
     let req2_cmd = tpm2::commands::ContextLoad {
         context: rsp1_parsed.context,
@@ -88,7 +88,7 @@ fn test_context_save_load_uses_hierarchy_proof_and_ignores_sp_seed() {
     );
 
     // Mutate sh_proof: ContextLoad should fail with INTEGRITY
-    tpm.state.sh_proof[0] ^= 0x01;
+    tpm.state.nv.persistent.sh_proof[0] ^= 0x01;
     let mut rsp3 = [0u8; 4096];
     tpm.execute_command_separate(&req2[..total_len2 as usize], &mut rsp3[..]);
     let rc_fail = u32::from_be_bytes([rsp3[6], rsp3[7], rsp3[8], rsp3[9]]);

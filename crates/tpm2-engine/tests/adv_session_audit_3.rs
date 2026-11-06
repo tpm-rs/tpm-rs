@@ -128,7 +128,7 @@ fn test_flush_exclusive_audit_session_clears_exclusivity() {
         command_code: 0,
         start_time: 0,
         timeout: 0,
-        epoch: tpm.state.time_epoch,
+        epoch: tpm.state.nv.persistent.time_epoch,
         is_auth_value_needed: false,
         is_password_needed: false,
         pcr_counter: None,

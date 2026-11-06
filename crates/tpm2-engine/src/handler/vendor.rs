@@ -9,7 +9,7 @@
 //!   `NTC2_PreConfig`, `NTC2_LockPreConfig` and `NTC2_GetConfig`, which are not part of the
 //!   TPM 2.0 specification and follow `ibmswtpm2`'s emulation (`ntc2.c`, built with
 //!   `TPM_NUVOTON`) exactly: no handles, no sessions (`NO_SESSIONS`), and a configuration
-//!   ([`crate::engine::GlobalState::ntc2_config`]) kept in RAM only.
+//!   ([`crate::State::ntc2_config`]) kept in RAM only.
 
 #[allow(unused_imports)]
 use tpm2::TpmCc;
@@ -247,9 +247,6 @@ mod tests {
                 0xff, 0xff, 0xaa, 0xff,
             ]
         );
-        assert_eq!(
-            crate::engine::GlobalState::default().ntc2_config,
-            NTC2_INITIAL_CONFIG
-        );
+        assert_eq!(crate::State::default().ntc2_config, NTC2_INITIAL_CONFIG);
     }
 }

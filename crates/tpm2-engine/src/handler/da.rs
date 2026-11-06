@@ -49,7 +49,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         // The command needs NV update (`RETURN_IF_NV_IS_NOT_AVAILABLE`).
         self.return_if_nv_is_not_available()?;
 
-        self.context.state.failed_tries = 0;
+        self.context.state.nv.persistent.failed_tries = 0;
         self.nv_sync_persistent_failed_tries()?;
         self.context.state.da_pending_on_nv = false;
 
@@ -97,11 +97,11 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         // The command needs NV update (`RETURN_IF_NV_IS_NOT_AVAILABLE`).
         self.return_if_nv_is_not_available()?;
 
-        self.context.state.max_tries = cmd.new_max_tries;
-        self.context.state.recovery_time = cmd.new_recovery_time;
-        self.context.state.lockout_recovery = cmd.lockout_recovery;
+        self.context.state.nv.persistent.max_tries = cmd.new_max_tries;
+        self.context.state.nv.persistent.recovery_time = cmd.new_recovery_time;
+        self.context.state.nv.persistent.lockout_recovery = cmd.lockout_recovery;
         if cmd.new_recovery_time == 0 {
-            self.context.state.failed_tries = 0;
+            self.context.state.nv.persistent.failed_tries = 0;
         }
 
         // Record the changes to NV (`NV_SYNC_PERSISTENT` of failedTries, maxTries, recoveryTime

@@ -24,7 +24,7 @@ fn test_no_direct_nv_write() {
     tpm.state.timer_stopped = false;
     tpm.state.locality = 0;
 
-    tpm.state.platform_auth = tpm2::Tpm2bAuth::from_bytes(&[1, 2, 3]).unwrap().into();
+    tpm.state.nv.clear.platform_auth = tpm2::Tpm2bAuth::from_bytes(&[1, 2, 3]).unwrap().into();
 
     let request_auth = tpm2::TpmsAuthCommand {
         session_handle: tpm2::Handle::RS_PW,
@@ -121,7 +121,7 @@ fn test_no_nv_writes_stress() {
     tpm.state.timer_stopped = false;
     tpm.state.locality = 0;
 
-    tpm.state.owner_auth = tpm2::Tpm2bAuth::from_bytes(&[1, 2, 3]).unwrap().into();
+    tpm.state.nv.persistent.owner_auth = tpm2::Tpm2bAuth::from_bytes(&[1, 2, 3]).unwrap().into();
 
     let request_auth = tpm2::TpmsAuthCommand {
         session_handle: tpm2::Handle::RS_PW,

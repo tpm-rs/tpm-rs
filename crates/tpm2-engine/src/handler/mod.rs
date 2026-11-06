@@ -131,7 +131,7 @@ use crate::req_resp::RequestThenResponse;
 use crate::self_test::kdfa_bits;
 use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
-use crate::{GlobalState, TpmEngine};
+use crate::{State, TpmEngine};
 use tpm2::Alg;
 use tpm2::crypto::{
     CipherInput, Crypto, CryptoError, Direction, Rng, RsaPrivateKey, RsaPublicKey, SymmetricKey,
@@ -658,12 +658,12 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     }
 
     #[inline]
-    pub fn state(&self) -> &GlobalState {
+    pub fn state(&self) -> &State {
         &self.context.state
     }
 
     #[inline]
-    pub fn state_mut(&mut self) -> &mut GlobalState {
+    pub fn state_mut(&mut self) -> &mut State {
         &mut self.context.state
     }
 
@@ -1441,7 +1441,9 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             // `RETURN_IF_NV_IS_NOT_AVAILABLE` in C `PolicyParameterChecks`.
             self.return_if_nv_is_not_available()?;
             let current_time = self.context.state.tpm_time_ms;
-            if auth_timeout < current_time || session.epoch != self.context.state.time_epoch {
+            if auth_timeout < current_time
+                || session.epoch != self.context.state.nv.persistent.time_epoch
+            {
                 return Err(TpmRc::EXPIRED.with(blame_expiration));
             }
         }
@@ -1521,8 +1523,8 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 &self.crypto(),
                 context_integrity_hash_alg(),
                 provisioned_secret(
-                    &self.context.state.sh_proof,
-                    self.context.state.sh_proof_size,
+                    &self.context.state.nv.persistent.sh_proof,
+                    self.context.state.nv.persistent.sh_proof_size,
                 )?,
                 b"OBFUSCATE",
                 qualified_signer.get_buffer(),

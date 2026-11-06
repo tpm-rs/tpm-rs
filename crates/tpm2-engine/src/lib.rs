@@ -15,7 +15,7 @@
 //!
 //! ### 1. [TpmEngine](engine.rs) (Outer Security and Session Envelope)
 //!
-//! The engine owns the physical resources, global TPM state ([GlobalState](engine.rs)), and manages the session lifecycle.
+//! The engine owns the physical resources, global TPM state ([State](state.rs)), and manages the session lifecycle.
 //! It acts as a shield around command execution, handling:
 //! - **Request Parsing (Outer Frame)**: Unmarshals the command tag, size, and command code.
 //!   - **Session Verification & Integrity**: Verifies authentication sessions and HMACs for incoming requests.
@@ -89,13 +89,15 @@ pub mod timer;
 mod util;
 
 mod engine;
+pub mod state;
+pub use state::{ClearState, Nv, OrderlyState, PersistentState, ResetState, State};
 mod req_resp;
 mod rng;
 mod rsa;
 #[cfg(feature = "sec-channel")]
 mod sec_channel;
 pub use engine::{
-    ActiveSequence, DRBG_MAGIC, DrbgState, GlobalState, MAX_ACTIVE_SEQUENCES, MAX_COMMAND_SIZE,
+    ActiveSequence, DRBG_MAGIC, DrbgState, MAX_ACTIVE_SEQUENCES, MAX_COMMAND_SIZE,
     MAX_LOADED_OBJECTS, MAX_LOADED_SESSIONS, MAX_RESPONSE_SIZE, ResponseBufferTooSmall,
     SequenceType, SignatureSequence, TpmEngine, command_handles_count, command_returns_handle,
     get_command_attribute, handle_requires_auth,

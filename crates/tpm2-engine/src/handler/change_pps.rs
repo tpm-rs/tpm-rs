@@ -56,16 +56,26 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         self.nv_clear_orderly()?;
 
         // Update state
-        self.context.state.pp_seed.copy_from_slice(&new_pp_seed);
-        self.context.state.pp_seed_size = 64;
+        self.context
+            .state
+            .nv
+            .persistent
+            .pp_seed
+            .copy_from_slice(&new_pp_seed);
+        self.context.state.nv.persistent.pp_seed_size = 64;
 
-        self.context.state.ph_proof.copy_from_slice(&new_ph_proof);
-        self.context.state.ph_proof_size = 64;
+        self.context
+            .state
+            .nv
+            .persistent
+            .ph_proof
+            .copy_from_slice(&new_ph_proof);
+        self.context.state.nv.persistent.ph_proof_size = 64;
 
-        self.context.state.platform_policy = crate::owned::OwnedDigest::default();
-        self.context.state.platform_alg = None;
-        self.context.state.pcr_policy_alg = None;
-        self.context.state.pcr_policy = crate::owned::OwnedDigest::default();
+        self.context.state.nv.clear.platform_policy = crate::owned::OwnedDigest::default();
+        self.context.state.nv.clear.platform_alg = None;
+        self.context.state.nv.persistent.pcr_policy_alg = None;
+        self.context.state.nv.persistent.pcr_policy = crate::owned::OwnedDigest::default();
 
         // Flush loaded objects in platform hierarchy
         for slot in self.context.state.transient_objects.iter_mut() {

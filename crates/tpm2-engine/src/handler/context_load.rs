@@ -330,11 +330,19 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             .hmac_stream(crate::handler::context_integrity_hash_alg(), proof)
             .map_err(|_| TpmRc::FAILURE)?;
         mac_ctx
-            .update(&self.context.state.total_reset_count.to_be_bytes())
+            .update(
+                &self
+                    .context
+                    .state
+                    .nv
+                    .persistent
+                    .total_reset_count
+                    .to_be_bytes(),
+            )
             .map_err(|_| TpmRc::FAILURE)?;
         if saved_handle.0 == 0x80000002 {
             mac_ctx
-                .update(&self.context.state.clear_count.to_be_bytes())
+                .update(&self.context.state.nv.reset.clear_count.to_be_bytes())
                 .map_err(|_| TpmRc::FAILURE)?;
         }
         mac_ctx

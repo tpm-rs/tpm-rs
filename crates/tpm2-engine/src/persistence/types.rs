@@ -88,7 +88,7 @@ const _: () = assert!(tpm2::platform::PcrState::IMPLEMENTED_BANKS.len() <= MAX_P
 ///
 /// Only `data[..len]` is meaningful. A `len` larger than `N` (which only a corrupted or hostile
 /// persisted state can contain) is clamped by the accessors and rejected by the conversion into
-/// a `GlobalState` (`DeserializeError::InvalidLength`).
+/// a `State` (`DeserializeError::InvalidLength`).
 #[derive(Clone, Copy, Debug)]
 pub struct Array<T, const N: usize> {
     pub len: usize,
@@ -583,7 +583,7 @@ pub struct PersistedCommitState {
 }
 
 /// Algorithm self-test state (`g_toTest` and Failure mode), which the engine keeps outside
-/// `GlobalState` (`TpmEngine::self_test`). The Failure-mode diagnostics of the references
+/// `State` (`TpmEngine::self_test`). The Failure-mode diagnostics of the references
 /// (`s_failFunction`, `s_failLine`, `s_failCode`) have no counterpart: in Failure mode `tpm-rs`
 /// always reports the location 0 and `FATAL_ERROR_SELF_TEST` (see the `persistence` module
 /// documentation).

@@ -55,9 +55,9 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::TYPE.with(Position::parameter(1))); // TPM_RCS_TYPE + RC_Shutdown_shutdownType equivalent
         }
 
-        self.context.state.orderly_state = shutdown_type;
+        self.context.state.nv.persistent.orderly_state = shutdown_type;
         // `go.time = g_time;`
-        self.context.state.shutdown_time_ms = self.context.state.tpm_time_ms;
+        self.context.state.nv.orderly.shutdown_time_ms = self.context.state.tpm_time_ms;
         self.context.state.da_used = false;
         if shutdown_type == 0x0001 {
             // `ActShutdown(TPM_SU_STATE)`: the ACT timeouts (halved unless written since
@@ -68,9 +68,9 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             // TPM_RC_NV_UNINITIALIZED and Startup(CLEAR) performs a TPM Reset.
             let _ = self.context.save_state_data();
             if self.context.state.drtm_pre_startup {
-                self.context.state.orderly_state = 0x0001 | PRE_STARTUP_FLAG;
+                self.context.state.nv.persistent.orderly_state = 0x0001 | PRE_STARTUP_FLAG;
             } else if self.context.state.startup_locality_3 {
-                self.context.state.orderly_state = 0x0001 | STARTUP_LOCALITY_3;
+                self.context.state.nv.persistent.orderly_state = 0x0001 | STARTUP_LOCALITY_3;
             }
         }
 

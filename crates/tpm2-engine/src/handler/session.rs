@@ -181,7 +181,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             command_code: 0,
             start_time: self.context.state.tpm_time_ms,
             timeout: 0,
-            epoch: self.context.state.time_epoch,
+            epoch: self.context.state.nv.persistent.time_epoch,
             is_auth_value_needed: false,
             is_password_needed: false,
             pcr_counter: None,
@@ -419,11 +419,15 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 && !self
                     .context
                     .state
+                    .nv
+                    .reset
                     .saved_sessions
                     .contains(&Some(hmac_candidate))
                 && !self
                     .context
                     .state
+                    .nv
+                    .reset
                     .saved_sessions
                     .contains(&Some(policy_candidate))
             {

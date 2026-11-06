@@ -702,7 +702,7 @@ where
 pub type RealCryptoEngine<'a> =
     tpm2_engine::TpmEngine<'a, TestCryptoProvider, FakeStorage, FakeTimer, FakeRng>;
 
-/// Builds a [`RealCryptoEngine`] plus its [`tpm2_engine::GlobalState`] and runs
+/// Builds a [`RealCryptoEngine`] plus its [`tpm2_engine::State`] and runs
 /// `TPM2_Startup(TPM_SU_CLEAR)`, so white-box tests can drive real commands
 /// while still being able to inspect and modify the internal state.
 pub fn setup_real_crypto_tpm<'a>(

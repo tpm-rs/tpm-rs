@@ -184,7 +184,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             // `CryptGenerateR()` without a counter: `r` for the current commit counter value
             // (this does not commit it).
             let (r, r_len) = self
-                .generate_r(self.context.state.commit_counter, &[], curve)
+                .generate_r(self.context.state.nv.reset.commit_counter, &[], curve)
                 .ok_or(TpmRc::NO_RESULT)?;
             let result =
                 self.crypto()

@@ -226,9 +226,9 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     ) -> Result<NvIndexHeader, TpmRc> {
         let header = self.nv_read_index_header(nv_index, TpmRc::HANDLE.with(pos))?;
         let enabled = if header.public.attributes.contains(TpmaNv::PLATFORMCREATE) {
-            self.context.state.ph_enable_nv
+            self.context.state.nv.clear.ph_enable_nv
         } else {
-            self.context.state.sh_enable
+            self.context.state.nv.clear.sh_enable
         };
         if !enabled {
             return Err(TpmRc::HANDLE.with(pos));
@@ -397,8 +397,8 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             .undefine_space(nv_index)
             .map_err(|_| TpmRc::FAILURE)?;
         if let Some(val) = counter_val {
-            if val > self.context.state.max_counter {
-                self.context.state.max_counter = val;
+            if val > self.context.state.nv.persistent.max_counter {
+                self.context.state.nv.persistent.max_counter = val;
             }
             self.nv_sync_persistent_max_counter()?;
         }
@@ -477,7 +477,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             nv_public_struct,
             auth_handle_u32,
             auth,
-            self.context.state.ph_enable_nv,
+            self.context.state.nv.clear.ph_enable_nv,
         )?;
 
         // C `NvDefineSpace()` checks TPM_RC_NV_DEFINED, then `NvDefineIndex()` tests the NV
@@ -1437,7 +1437,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let counter_val = if attributes.contains(TpmaNv::WRITTEN) {
             self.nv_read_u64_data(nv_index, &header)?
         } else {
-            self.context.state.max_counter
+            self.context.state.nv.persistent.max_counter
         };
         let counter_val = counter_val.checked_add(1).ok_or(TpmRc::FAILURE)?;
         self.nv_write_index_data(nv_index, &header, 0, &counter_val.to_be_bytes())?;

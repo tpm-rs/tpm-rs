@@ -1,12 +1,12 @@
 #![forbid(unsafe_code)]
 
-//! Bidirectional conversion between [`PersistedTpmState`] and `tpm-rs` [`GlobalState`] +
+//! Bidirectional conversion between [`PersistedTpmState`] and `tpm-rs` [`State`] +
 //! [`NvStorage`].
 //!
 //! Extraction copies the NV content (the reserved header and the canonical payloads of the
 //! storage manager's items, see [`PersistedNvImage`]) and the state that is ahead of NV or only
 //! in RAM. Restore rewrites the NV storage from the image, reloads every NV-synced field of
-//! [`GlobalState`] from the NV records of the image ([`crate::storage::nv`]: [`NvHeader`],
+//! [`State`] from the NV records of the image ([`crate::storage::nv`]: [`NvHeader`],
 //! [`NvHierarchyRecord`] and [`NvPlatformSettingsRecord`]), applies the RAM groups, recomputes
 //! the derivable values and sets the derived fields to the values they have between two
 //! commands with NV available (see the `persistence` module documentation).
@@ -38,8 +38,8 @@ use crate::storage::nv::{
 use crate::storage::types::ItemMetadata;
 use crate::storage::{NvStorage, StorageError, Tpm2Storage};
 use crate::{
-    ActiveSequence, DrbgState, GlobalState, MAX_ACTIVE_SEQUENCES, MAX_LOADED_OBJECTS,
-    MAX_LOADED_SESSIONS, SequenceType,
+    ActiveSequence, DrbgState, MAX_ACTIVE_SEQUENCES, MAX_LOADED_OBJECTS, MAX_LOADED_SESSIONS,
+    SequenceType, State,
 };
 
 use super::types::{
@@ -55,7 +55,7 @@ use super::types::{
 // A saved session is persisted with the low 16 bits (`CONTEXT_SLOT`) of its sequence number.
 const _: () = assert!(MAX_CONTEXT_GAP == 1 << 16);
 
-/// Errors that can occur when reconstructing a `GlobalState` or deserializing state.
+/// Errors that can occur when reconstructing a `State` or deserializing state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DeserializeError {
     MissingField(&'static str),
@@ -105,7 +105,7 @@ impl fmt::Display for DeserializeError {
 
 impl core::error::Error for DeserializeError {}
 
-/// Errors that can occur when extracting a [`PersistedTpmState`] from a `GlobalState` and its
+/// Errors that can occur when extracting a [`PersistedTpmState`] from a `State` and its
 /// NV storage.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SerializeError {
@@ -158,7 +158,7 @@ impl From<StorageError> for DeserializeError {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Extraction helpers (GlobalState -> PersistedTpmState).
+// Extraction helpers (State -> PersistedTpmState).
 // ---------------------------------------------------------------------------------------------
 
 /// Copies `src` into a persisted array, failing if it exceeds the capacity `N`.
@@ -197,7 +197,7 @@ fn alg_id(alg: Option<TpmiAlgHash>) -> Option<u16> {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Application helpers (PersistedTpmState -> GlobalState).
+// Application helpers (PersistedTpmState -> State).
 // ---------------------------------------------------------------------------------------------
 
 /// The active elements of a persisted array, rejecting a length beyond its capacity.
@@ -307,37 +307,40 @@ fn claim_slot(
 // ---------------------------------------------------------------------------------------------
 
 impl PersistedTpmState {
-    /// Extracts a structured [`PersistedTpmState`] from a live `tpm-rs` [`GlobalState`] and
+    /// Extracts a structured [`PersistedTpmState`] from a live `tpm-rs` [`State`] and
     /// [`NvStorage`].
     ///
     /// `now_ms` is the current reading of the platform timer: the platform time is persisted
-    /// relative to it. The self-test state, which is not part of [`GlobalState`], is set to its
+    /// relative to it. The self-test state, which is not part of [`State`], is set to its
     /// state after `_TPM_Init` (every algorithm needs its test, no Failure mode); see
     /// [`Self::extract_self_test`]. The platform state is not known to the engine (`None`).
     pub(crate) fn extract_from_global_state_and_storage<S: NvStorage>(
         &mut self,
-        state: &GlobalState,
+        state: &State,
         storage: &S,
         now_ms: u64,
     ) -> Result<(), SerializeError> {
         self.extract_nv(storage)?;
         self.reset = extract_reset(state)?;
         self.clear = PersistedClearData {
-            sh_enable: state.sh_enable,
-            eh_enable: state.eh_enable,
-            ph_enable_nv: state.ph_enable_nv,
-            platform_auth: persist(state.platform_auth.get_buffer(), "platform_auth")?,
-            platform_policy: persist(state.platform_policy.get_buffer(), "platform_policy")?,
-            platform_alg: alg_id(state.platform_alg),
-            pcr_auth_value: persist(state.pcr_auth_value.get_buffer(), "pcr_auth_value")?,
-            read_only: state.read_only,
+            sh_enable: state.nv.clear.sh_enable,
+            eh_enable: state.nv.clear.eh_enable,
+            ph_enable_nv: state.nv.clear.ph_enable_nv,
+            platform_auth: persist(state.nv.clear.platform_auth.get_buffer(), "platform_auth")?,
+            platform_policy: persist(
+                state.nv.clear.platform_policy.get_buffer(),
+                "platform_policy",
+            )?,
+            platform_alg: alg_id(state.nv.clear.platform_alg),
+            pcr_auth_value: persist(state.nv.clear.pcr_auth_value.get_buffer(), "pcr_auth_value")?,
+            read_only: state.nv.clear.read_only,
         };
         self.orderly = PersistedOrderlyData {
-            drbg: drbg_to_persisted(&state.drbg_state),
-            clock_safe: state.clock_safe,
-            self_heal_timer: state.self_heal_timer,
-            lockout_timer: state.lockout_timer,
-            shutdown_time_ms: state.shutdown_time_ms,
+            drbg: drbg_to_persisted(&state.nv.orderly.drbg_state),
+            clock_safe: state.nv.orderly.clock_safe,
+            self_heal_timer: state.nv.orderly.self_heal_timer,
+            lockout_timer: state.nv.orderly.lockout_timer,
+            shutdown_time_ms: state.nv.orderly.shutdown_time_ms,
         };
         // The platform time elapsed since the last timer read (none if the timer has not been
         // read since the TPM was created) and the remainder of the last update of *Time*.
@@ -346,7 +349,7 @@ impl PersistedTpmState {
             .map_or(0, |last| now_ms.saturating_sub(last));
         self.time = PersistedTimeState {
             time_ms: state.tpm_time_ms,
-            clock_offset: state.clock_offset,
+            clock_offset: state.nv.orderly.clock_offset,
             adjust_rate: state.clock_adjust_rate,
             pending_platform_ms: unread_ms.saturating_add(state.clock_adjust_remainder),
             timer_stopped: state.timer_stopped,
@@ -354,8 +357,8 @@ impl PersistedTpmState {
         };
         self.runtime = PersistedRuntimeState {
             initialized: state.initialized,
-            orderly_state: state.orderly_state,
-            failed_tries: state.failed_tries,
+            orderly_state: state.nv.persistent.orderly_state,
+            failed_tries: state.nv.persistent.failed_tries,
             da_pending_on_nv: state.da_pending_on_nv,
             nv_ok: state.g_nv_ok,
             prev_orderly_state: state.prev_orderly_state,
@@ -368,7 +371,7 @@ impl PersistedTpmState {
                 .then_some(state.drtm_handle),
             startup_locality_3: state.startup_locality_3,
             da_used: state.da_used,
-            lockout_auth_enabled: state.lockout_auth_enabled,
+            lockout_auth_enabled: state.nv.persistent.lockout_auth_enabled,
             locality: state.locality,
             physical_presence: state.physical_presence,
         };
@@ -577,14 +580,14 @@ fn nv_payload_len(handle: u32, rest: &[u8]) -> Option<usize> {
     (len <= rest.len()).then_some(len)
 }
 
-fn extract_reset(state: &GlobalState) -> Result<PersistedResetData, SerializeError> {
+fn extract_reset(state: &State) -> Result<PersistedResetData, SerializeError> {
     let mut saved_sessions = Array::new();
-    for (slot, saved) in state.saved_sessions.iter().enumerate() {
+    for (slot, saved) in state.nv.reset.saved_sessions.iter().enumerate() {
         if saved.is_some() {
-            let sequence = state.saved_session_sequences[slot];
+            let sequence = state.nv.reset.saved_session_sequences[slot];
             // The context gap keeps every saved session within `MAX_CONTEXT_GAP` of the
             // counter, so that the low bits identify its sequence number.
-            let gap = state.context_counter.checked_sub(sequence);
+            let gap = state.nv.reset.context_counter.checked_sub(sequence);
             if !gap.is_some_and(|gap| (1..=MAX_CONTEXT_GAP).contains(&gap)) {
                 return Err(SerializeError::InvalidState(
                     "saved session outside the context gap",
@@ -598,30 +601,34 @@ fn extract_reset(state: &GlobalState) -> Result<PersistedResetData, SerializeErr
     }
     Ok(PersistedResetData {
         null_proof: persist_prefix(
-            &state.null_proof,
-            state.null_proof_size as usize,
+            &state.nv.reset.null_proof,
+            state.nv.reset.null_proof_size as usize,
             "null_proof",
         )?,
-        null_seed: persist_prefix(&state.null_seed, state.null_seed_size as usize, "null_seed")?,
-        object_context_counter: state.object_context_counter,
-        context_counter: state.context_counter,
+        null_seed: persist_prefix(
+            &state.nv.reset.null_seed,
+            state.nv.reset.null_seed_size as usize,
+            "null_seed",
+        )?,
+        object_context_counter: state.nv.reset.object_context_counter,
+        context_counter: state.nv.reset.context_counter,
         saved_sessions,
         command_audit_digest: persist(
-            state.command_audit_digest.get_buffer(),
+            state.nv.reset.command_audit_digest.get_buffer(),
             "command_audit_digest",
         )?,
-        restart_count: state.restart_count,
-        clear_count: state.clear_count,
+        restart_count: state.nv.reset.restart_count,
+        clear_count: state.nv.reset.clear_count,
         pcr_update_counter: state.pcrs.update_counter,
         commit: PersistedCommitState {
-            counter: state.commit_counter,
-            array: state.commit_array,
-            nonce: persist(&state.commit_nonce, "commit.nonce")?,
+            counter: state.nv.reset.commit_counter,
+            array: state.nv.reset.commit_array,
+            nonce: persist(&state.nv.reset.commit_nonce, "commit.nonce")?,
         },
     })
 }
 
-fn extract_pcrs(state: &GlobalState) -> Result<PersistedPcrState, SerializeError> {
+fn extract_pcrs(state: &State) -> Result<PersistedPcrState, SerializeError> {
     let mut banks = Array::<PersistedPcrBank, MAX_PCR_BANKS>::new();
     for &alg in tpm2::platform::PcrState::IMPLEMENTED_BANKS {
         let mut bank = PersistedPcrBank::default();
@@ -646,7 +653,7 @@ fn extract_pcrs(state: &GlobalState) -> Result<PersistedPcrState, SerializeError
 }
 
 fn extract_transient_objects(
-    state: &GlobalState,
+    state: &State,
 ) -> Result<Array<PersistedTransientObject, MAX_LOADED_OBJECTS>, SerializeError> {
     let mut objects: Array<PersistedTransientObject, MAX_LOADED_OBJECTS> = Array::new();
     for obj in state.transient_objects.iter().flatten() {
@@ -674,7 +681,7 @@ fn extract_transient_objects(
 }
 
 fn extract_sessions(
-    state: &GlobalState,
+    state: &State,
 ) -> Result<Array<PersistedSessionState, MAX_LOADED_SESSIONS>, SerializeError> {
     let mut sessions: Array<PersistedSessionState, MAX_LOADED_SESSIONS> = Array::new();
     for sess in state.active_sessions.iter().flatten() {
@@ -747,7 +754,7 @@ fn extract_sessions(
 }
 
 fn extract_sequences(
-    state: &GlobalState,
+    state: &State,
 ) -> Result<Array<PersistedActiveSequence, MAX_ACTIVE_SEQUENCES>, SerializeError> {
     let mut sequences: Array<PersistedActiveSequence, MAX_ACTIVE_SEQUENCES> = Array::new();
     for seq in state.active_sequences.iter().flatten() {
@@ -792,7 +799,7 @@ fn extract_sequences(
     Ok(sequences)
 }
 
-fn extract_act(state: &GlobalState, now_ms: u64) -> Result<PersistedActState, SerializeError> {
+fn extract_act(state: &State, now_ms: u64) -> Result<PersistedActState, SerializeError> {
     let act = &state.act;
     let mut acts = Array::new();
     for i in 0..ACT_COUNT {
@@ -824,10 +831,10 @@ fn extract_act(state: &GlobalState, now_ms: u64) -> Result<PersistedActState, Se
 // ---------------------------------------------------------------------------------------------
 
 impl PersistedTpmState {
-    /// Applies this [`PersistedTpmState`] onto an existing `tpm-rs` [`GlobalState`] and
+    /// Applies this [`PersistedTpmState`] onto an existing `tpm-rs` [`State`] and
     /// [`NvStorage`].
     ///
-    /// The new state is built from scratch (`GlobalState::default()`, i.e. the derived fields
+    /// The new state is built from scratch (`State::default()`, i.e. the derived fields
     /// get their values between two commands with NV available): the NV-synced fields are
     /// reloaded from the NV records of [`Self::nv`], then the RAM groups are applied, with the
     /// platform time rebased on `now_ms` (the current reading of the target's platform timer)
@@ -836,12 +843,12 @@ impl PersistedTpmState {
     /// from the image. The self-test state is not applied (see [`Self::apply_self_test`]).
     pub(crate) fn apply_to_global_state<H: Hash, S: NvStorage>(
         &self,
-        state: &mut GlobalState,
+        state: &mut State,
         storage: &mut S,
         now_ms: u64,
     ) -> Result<(), DeserializeError> {
         self.validate_nv(storage.capacity())?;
-        let mut staged = GlobalState::default();
+        let mut staged = State::default();
         self.load_nv_synced(&mut staged)?;
         self.apply_ram_state::<H>(&mut staged, now_ms)?;
         self.write_nv(storage)?;
@@ -898,59 +905,59 @@ impl PersistedTpmState {
     /// manufacture defaults, like `_TPM_Init` does. The fields of the hierarchy record that
     /// are not authoritative in NV (`STATE_CLEAR_DATA`, `gp.lockOutAuthEnabled` and `go.clock`)
     /// come from the RAM groups instead.
-    fn load_nv_synced(&self, st: &mut GlobalState) -> Result<(), DeserializeError> {
+    fn load_nv_synced(&self, st: &mut State) -> Result<(), DeserializeError> {
         let header = NvHeader::decode(&self.nv.header);
-        st.reset_count = header.reset_count;
-        st.orderly_state = header.orderly_state;
-        st.total_reset_count = header.total_reset_count;
-        st.time_epoch = header.time_epoch;
-        st.failed_tries = header.failed_tries;
-        st.max_counter = header.max_counter;
+        st.nv.persistent.reset_count = header.reset_count;
+        st.nv.persistent.orderly_state = header.orderly_state;
+        st.nv.persistent.total_reset_count = header.total_reset_count;
+        st.nv.persistent.time_epoch = header.time_epoch;
+        st.nv.persistent.failed_tries = header.failed_tries;
+        st.nv.persistent.max_counter = header.max_counter;
 
         let record = self
             .nv_item(HIERARCHY_RECORD_HANDLE)?
             .and_then(|b| NvHierarchyRecord::decode(&b[..b.len().min(HIERARCHY_RECORD_SIZE)]));
         if let Some(r) = record {
-            st.owner_auth = r.owner_auth;
-            st.endorsement_auth = r.endorsement_auth;
-            st.lockout_auth = r.lockout_auth;
-            st.owner_policy = r.owner_policy;
-            st.endorsement_policy = r.endorsement_policy;
-            st.lockout_policy = r.lockout_policy;
-            st.owner_alg = r.owner_alg;
-            st.endorsement_alg = r.endorsement_alg;
-            st.lockout_alg = r.lockout_alg;
+            st.nv.persistent.owner_auth = r.owner_auth;
+            st.nv.persistent.endorsement_auth = r.endorsement_auth;
+            st.nv.persistent.lockout_auth = r.lockout_auth;
+            st.nv.persistent.owner_policy = r.owner_policy;
+            st.nv.persistent.endorsement_policy = r.endorsement_policy;
+            st.nv.persistent.lockout_policy = r.lockout_policy;
+            st.nv.persistent.owner_alg = r.owner_alg;
+            st.nv.persistent.endorsement_alg = r.endorsement_alg;
+            st.nv.persistent.lockout_alg = r.lockout_alg;
             if let Some(seeds) = &r.seeds {
-                st.sp_seed = seeds.sp_seed;
-                st.sp_seed_size = seeds.sp_seed_size;
-                st.sh_proof = seeds.sh_proof;
-                st.sh_proof_size = seeds.sh_proof_size;
-                st.eh_proof = seeds.eh_proof;
-                st.eh_proof_size = seeds.eh_proof_size;
-                st.clear_count = seeds.clear_count;
-                st.pp_seed = seeds.pp_seed;
-                st.pp_seed_size = seeds.pp_seed_size;
-                st.ph_proof = seeds.ph_proof;
-                st.ph_proof_size = seeds.ph_proof_size;
-                st.ep_seed = seeds.ep_seed;
-                st.ep_seed_size = seeds.ep_seed_size;
+                st.nv.persistent.sp_seed = seeds.sp_seed;
+                st.nv.persistent.sp_seed_size = seeds.sp_seed_size;
+                st.nv.persistent.sh_proof = seeds.sh_proof;
+                st.nv.persistent.sh_proof_size = seeds.sh_proof_size;
+                st.nv.persistent.eh_proof = seeds.eh_proof;
+                st.nv.persistent.eh_proof_size = seeds.eh_proof_size;
+                st.nv.reset.clear_count = seeds.clear_count;
+                st.nv.persistent.pp_seed = seeds.pp_seed;
+                st.nv.persistent.pp_seed_size = seeds.pp_seed_size;
+                st.nv.persistent.ph_proof = seeds.ph_proof;
+                st.nv.persistent.ph_proof_size = seeds.ph_proof_size;
+                st.nv.persistent.ep_seed = seeds.ep_seed;
+                st.nv.persistent.ep_seed_size = seeds.ep_seed_size;
                 if let Some(alg) = seeds.pcr_policy_alg {
-                    st.pcr_policy_alg = alg;
+                    st.nv.persistent.pcr_policy_alg = alg;
                 }
                 if let Some(policy) = seeds.pcr_policy {
-                    st.pcr_policy = policy;
+                    st.nv.persistent.pcr_policy = policy;
                 }
             }
             if let Some(ext) = &r.lifecycle {
-                st.disable_clear = ext.disable_clear;
-                st.max_tries = ext.max_tries;
-                st.recovery_time = ext.recovery_time;
-                st.lockout_recovery = ext.lockout_recovery;
+                st.nv.persistent.disable_clear = ext.disable_clear;
+                st.nv.persistent.max_tries = ext.max_tries;
+                st.nv.persistent.recovery_time = ext.recovery_time;
+                st.nv.persistent.lockout_recovery = ext.lockout_recovery;
             }
             if let Some(audit) = &r.audit {
-                st.audit_hash_alg = audit.hash_alg;
-                st.audit_counter = audit.counter;
-                st.audit_commands = CommandAuditList::from_bytes(&audit.commands);
+                st.nv.persistent.audit_hash_alg = audit.hash_alg;
+                st.nv.persistent.audit_counter = audit.counter;
+                st.nv.persistent.audit_commands = CommandAuditList::from_bytes(&audit.commands);
             }
         }
 
@@ -959,8 +966,8 @@ impl PersistedTpmState {
                 .map(|b| NvPlatformSettingsRecord::decode(b.try_into().unwrap()))
         });
         if let Some(settings) = settings {
-            st.pp_list = PpList::from_bits(settings.pp_list);
-            st.algorithm_set = settings.algorithm_set;
+            st.nv.persistent.pp_list = PpList::from_bits(settings.pp_list);
+            st.nv.persistent.algorithm_set = settings.algorithm_set;
         }
         Ok(())
     }
@@ -971,31 +978,31 @@ impl PersistedTpmState {
     /// NV.
     fn apply_ram_state<H: Hash>(
         &self,
-        state: &mut GlobalState,
+        state: &mut State,
         now_ms: u64,
     ) -> Result<(), DeserializeError> {
         self.apply_reset(state)?;
 
         let c = &self.clear;
-        state.sh_enable = c.sh_enable;
-        state.eh_enable = c.eh_enable;
-        state.ph_enable_nv = c.ph_enable_nv;
-        state.platform_auth = owned(&c.platform_auth, "clear.platform_auth")?;
-        state.platform_policy = owned(&c.platform_policy, "clear.platform_policy")?;
-        state.platform_alg = opt_alg_hash(c.platform_alg, "clear.platform_alg")?;
-        state.pcr_auth_value = owned(&c.pcr_auth_value, "clear.pcr_auth_value")?;
-        state.read_only = c.read_only;
+        state.nv.clear.sh_enable = c.sh_enable;
+        state.nv.clear.eh_enable = c.eh_enable;
+        state.nv.clear.ph_enable_nv = c.ph_enable_nv;
+        state.nv.clear.platform_auth = owned(&c.platform_auth, "clear.platform_auth")?;
+        state.nv.clear.platform_policy = owned(&c.platform_policy, "clear.platform_policy")?;
+        state.nv.clear.platform_alg = opt_alg_hash(c.platform_alg, "clear.platform_alg")?;
+        state.nv.clear.pcr_auth_value = owned(&c.pcr_auth_value, "clear.pcr_auth_value")?;
+        state.nv.clear.read_only = c.read_only;
 
         let o = &self.orderly;
-        state.drbg_state = drbg_from_persisted(&o.drbg);
-        state.clock_safe = o.clock_safe;
-        state.self_heal_timer = o.self_heal_timer;
-        state.lockout_timer = o.lockout_timer;
-        state.shutdown_time_ms = o.shutdown_time_ms;
+        state.nv.orderly.drbg_state = drbg_from_persisted(&o.drbg);
+        state.nv.orderly.clock_safe = o.clock_safe;
+        state.nv.orderly.self_heal_timer = o.self_heal_timer;
+        state.nv.orderly.lockout_timer = o.lockout_timer;
+        state.nv.orderly.shutdown_time_ms = o.shutdown_time_ms;
 
         let t = &self.time;
         state.tpm_time_ms = t.time_ms;
-        state.clock_offset = t.clock_offset;
+        state.nv.orderly.clock_offset = t.clock_offset;
         state.clock_adjust_rate = t.adjust_rate;
         // The pending platform time continues from the current reading of the target's timer.
         state.clock_adjust_remainder = t.pending_platform_ms;
@@ -1005,8 +1012,8 @@ impl PersistedTpmState {
 
         let r = &self.runtime;
         state.initialized = r.initialized;
-        state.orderly_state = r.orderly_state;
-        state.failed_tries = r.failed_tries;
+        state.nv.persistent.orderly_state = r.orderly_state;
+        state.nv.persistent.failed_tries = r.failed_tries;
         state.da_pending_on_nv = r.da_pending_on_nv;
         state.g_nv_ok = r.nv_ok;
         state.prev_orderly_state = r.prev_orderly_state;
@@ -1024,7 +1031,7 @@ impl PersistedTpmState {
         };
         state.startup_locality_3 = r.startup_locality_3;
         state.da_used = r.da_used;
-        state.lockout_auth_enabled = r.lockout_auth_enabled;
+        state.nv.persistent.lockout_auth_enabled = r.lockout_auth_enabled;
         state.locality = r.locality;
         state.physical_presence = r.physical_presence;
 
@@ -1055,25 +1062,25 @@ impl PersistedTpmState {
         Ok(())
     }
 
-    fn apply_reset(&self, state: &mut GlobalState) -> Result<(), DeserializeError> {
+    fn apply_reset(&self, state: &mut State) -> Result<(), DeserializeError> {
         let r = &self.reset;
         fixed_u16(
             &r.null_proof,
-            &mut state.null_proof,
-            &mut state.null_proof_size,
+            &mut state.nv.reset.null_proof,
+            &mut state.nv.reset.null_proof_size,
             "reset.null_proof",
         )?;
         fixed_u16(
             &r.null_seed,
-            &mut state.null_seed,
-            &mut state.null_seed_size,
+            &mut state.nv.reset.null_seed,
+            &mut state.nv.reset.null_seed_size,
             "reset.null_seed",
         )?;
-        state.object_context_counter = r.object_context_counter;
-        state.context_counter = r.context_counter;
+        state.nv.reset.object_context_counter = r.object_context_counter;
+        state.nv.reset.context_counter = r.context_counter;
 
-        state.saved_sessions = [None; MAX_ACTIVE_SESSIONS];
-        state.saved_session_sequences = [0; MAX_ACTIVE_SESSIONS];
+        state.nv.reset.saved_sessions = [None; MAX_ACTIVE_SESSIONS];
+        state.nv.reset.saved_session_sequences = [0; MAX_ACTIVE_SESSIONS];
         let mut used = [false; MAX_ACTIVE_SESSIONS];
         for saved in bytes(&r.saved_sessions, "reset.saved_sessions")? {
             let slot = claim_slot(saved.slot, &mut used, "reset.saved_sessions.slot")?;
@@ -1097,26 +1104,27 @@ impl PersistedTpmState {
                         "reset.saved_sessions.sequence",
                     ))?;
             // Only the slot of a saved session is observable, not its handle type.
-            state.saved_sessions[slot] = Some(Handle::HR_HMAC_SESSION.0 | slot as u32);
-            state.saved_session_sequences[slot] = sequence;
+            state.nv.reset.saved_sessions[slot] = Some(Handle::HR_HMAC_SESSION.0 | slot as u32);
+            state.nv.reset.saved_session_sequences[slot] = sequence;
         }
 
-        state.command_audit_digest = owned(&r.command_audit_digest, "reset.command_audit_digest")?;
-        state.restart_count = r.restart_count;
-        state.clear_count = r.clear_count;
+        state.nv.reset.command_audit_digest =
+            owned(&r.command_audit_digest, "reset.command_audit_digest")?;
+        state.nv.reset.restart_count = r.restart_count;
+        state.nv.reset.clear_count = r.clear_count;
         state.pcrs.update_counter = r.pcr_update_counter;
 
-        state.commit_counter = r.commit.counter;
-        state.commit_array = r.commit.array;
+        state.nv.reset.commit_counter = r.commit.counter;
+        state.nv.reset.commit_array = r.commit.array;
         exact(
             &r.commit.nonce,
-            &mut state.commit_nonce,
+            &mut state.nv.reset.commit_nonce,
             "reset.commit.nonce",
         )?;
         Ok(())
     }
 
-    fn apply_pcrs(&self, state: &mut GlobalState) -> Result<(), DeserializeError> {
+    fn apply_pcrs(&self, state: &mut State) -> Result<(), DeserializeError> {
         let banks = bytes(&self.pcrs.banks, "pcrs.banks")?;
         let implemented = tpm2::platform::PcrState::IMPLEMENTED_BANKS;
         if banks.len() != implemented.len() {
@@ -1146,10 +1154,7 @@ impl PersistedTpmState {
     }
 
     /// Applies the loaded objects, in the slots of their order, and recomputes their Names.
-    fn apply_transient_objects<H: Hash>(
-        &self,
-        state: &mut GlobalState,
-    ) -> Result<(), DeserializeError> {
+    fn apply_transient_objects<H: Hash>(&self, state: &mut State) -> Result<(), DeserializeError> {
         state.transient_objects = [const { None }; MAX_LOADED_OBJECTS];
         for (i, obj) in bytes(&self.loaded.objects, "loaded.objects")?
             .iter()
@@ -1185,7 +1190,7 @@ impl PersistedTpmState {
         Ok(())
     }
 
-    fn apply_sessions(&self, state: &mut GlobalState) -> Result<(), DeserializeError> {
+    fn apply_sessions(&self, state: &mut State) -> Result<(), DeserializeError> {
         state.active_sessions = [const { None }; MAX_LOADED_SESSIONS];
         for (i, sess) in bytes(&self.loaded.sessions, "loaded.sessions")?
             .iter()
@@ -1272,7 +1277,7 @@ impl PersistedTpmState {
         Ok(())
     }
 
-    fn apply_sequences(&self, state: &mut GlobalState) -> Result<(), DeserializeError> {
+    fn apply_sequences(&self, state: &mut State) -> Result<(), DeserializeError> {
         state.active_sequences = [const { None }; MAX_ACTIVE_SEQUENCES];
         for (i, seq) in bytes(&self.loaded.sequences, "loaded.sequences")?
             .iter()
@@ -1332,7 +1337,7 @@ impl PersistedTpmState {
         Ok(())
     }
 
-    fn apply_act(&self, state: &mut GlobalState, now_ms: u64) -> Result<(), DeserializeError> {
+    fn apply_act(&self, state: &mut State, now_ms: u64) -> Result<(), DeserializeError> {
         let acts = bytes(&self.act.acts, "act.acts")?;
         if acts.len() != ACT_COUNT {
             return Err(DeserializeError::InvalidLength {

@@ -27,7 +27,7 @@ fn test_clear_overflow() {
     tpm.execute_command_separate(&startup_request[..], &mut startup_response[..]);
 
     // Set clear_count to MAX
-    tpm.state.clear_count = u32::MAX;
+    tpm.state.nv.reset.clear_count = u32::MAX;
 
     // Clear command: authHandle=0x4000000A (TPM_RH_LOCKOUT), authorized with an empty password
     // session (C `CheckAuthNoSession()` returns TPM_RC_AUTH_MISSING without one).

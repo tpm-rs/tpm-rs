@@ -16,7 +16,7 @@ fn test_adv_total_reset_count_overflow() {
     tpm.init_storage();
     tpm.state.nv_available = true;
     tpm.state.locality = 0;
-    tpm.state.total_reset_count = u64::MAX;
+    tpm.state.nv.persistent.total_reset_count = u64::MAX;
 
     let request = [
         0x80, 0x01, // tag

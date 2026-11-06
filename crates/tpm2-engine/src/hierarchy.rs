@@ -154,8 +154,8 @@ impl<'a, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<'a, C, S
     /// is not a base hierarchy.
     pub(crate) fn base_hierarchy_enabled(&self, base: u32) -> Option<bool> {
         match base {
-            h if h == Handle::RH_OWNER.0 => Some(self.state.sh_enable),
-            h if h == Handle::RH_ENDORSEMENT.0 => Some(self.state.eh_enable),
+            h if h == Handle::RH_OWNER.0 => Some(self.state.nv.clear.sh_enable),
+            h if h == Handle::RH_ENDORSEMENT.0 => Some(self.state.nv.clear.eh_enable),
             h if h == Handle::RH_PLATFORM.0 => Some(self.state.ph_enable),
             h if h == Handle::RH_NULL.0 => Some(true),
             _ => None,
@@ -214,10 +214,16 @@ impl<'a, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<'a, C, S
         let (base, modifier) = decompose(handle);
         let gs = &self.state;
         let (proof, size) = match base {
-            h if h == Handle::RH_PLATFORM.0 => (&gs.ph_proof, gs.ph_proof_size),
-            h if h == Handle::RH_ENDORSEMENT.0 => (&gs.eh_proof, gs.eh_proof_size),
-            h if h == Handle::RH_OWNER.0 => (&gs.sh_proof, gs.sh_proof_size),
-            _ => (&gs.null_proof, gs.null_proof_size),
+            h if h == Handle::RH_PLATFORM.0 => {
+                (&gs.nv.persistent.ph_proof, gs.nv.persistent.ph_proof_size)
+            }
+            h if h == Handle::RH_ENDORSEMENT.0 => {
+                (&gs.nv.persistent.eh_proof, gs.nv.persistent.eh_proof_size)
+            }
+            h if h == Handle::RH_OWNER.0 => {
+                (&gs.nv.persistent.sh_proof, gs.nv.persistent.sh_proof_size)
+            }
+            _ => (&gs.nv.reset.null_proof, gs.nv.reset.null_proof_size),
         };
         self.mix_additional_secret(modifier, PROOF_SECRET_LABEL, proof, size)
     }
@@ -231,10 +237,16 @@ impl<'a, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<'a, C, S
         let (base, modifier) = decompose(handle);
         let gs = &self.state;
         let (seed, size) = match base {
-            h if h == Handle::RH_PLATFORM.0 => (&gs.pp_seed, gs.pp_seed_size),
-            h if h == Handle::RH_OWNER.0 => (&gs.sp_seed, gs.sp_seed_size),
-            h if h == Handle::RH_ENDORSEMENT.0 => (&gs.ep_seed, gs.ep_seed_size),
-            _ => (&gs.null_seed, gs.null_seed_size),
+            h if h == Handle::RH_PLATFORM.0 => {
+                (&gs.nv.persistent.pp_seed, gs.nv.persistent.pp_seed_size)
+            }
+            h if h == Handle::RH_OWNER.0 => {
+                (&gs.nv.persistent.sp_seed, gs.nv.persistent.sp_seed_size)
+            }
+            h if h == Handle::RH_ENDORSEMENT.0 => {
+                (&gs.nv.persistent.ep_seed, gs.nv.persistent.ep_seed_size)
+            }
+            _ => (&gs.nv.reset.null_seed, gs.nv.reset.null_seed_size),
         };
         self.mix_additional_secret(modifier, SEED_SECRET_LABEL, seed, size)
     }

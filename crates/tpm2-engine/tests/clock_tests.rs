@@ -1,4 +1,4 @@
-//! White-box clock tests that inspect `GlobalState` and NV storage directly.
+//! White-box clock tests that inspect `State` and NV storage directly.
 //!
 //! The black-box clock tests were moved to `testing/src/impl_clock_tests.rs`.
 
@@ -24,14 +24,14 @@ fn test_time_epoch_monotonic_persistence_and_resume_preservation() {
     tpm.state.nv_available = true;
     tpm.state.g_nv_ok = true;
 
-    assert_eq!(tpm.state.time_epoch, 0);
+    assert_eq!(tpm.state.nv.persistent.time_epoch, 0);
 
     // 1. Cold boot (power on) TPM Reset -> Startup(CLEAR) increments time_epoch to 1 and persists to NV
     let startup_clear = hex!("8001 0000000c 00000144 0000");
     let mut resp = [0u8; 256];
     tpm.execute_command_separate(&startup_clear[..], &mut resp[..]);
     assert_eq!(&resp[6..10], &[0, 0, 0, 0]);
-    assert_eq!(tpm.state.time_epoch, 1);
+    assert_eq!(tpm.state.nv.persistent.time_epoch, 1);
 
     let mut nv_epoch_bytes = [0u8; 8];
     tpm.platform
@@ -49,13 +49,13 @@ fn test_time_epoch_monotonic_persistence_and_resume_preservation() {
     let startup_state = hex!("8001 0000000c 00000144 0001");
     tpm.execute_command_separate(&startup_state[..], &mut resp[..]);
     assert_eq!(&resp[6..10], &[0, 0, 0, 0]);
-    assert_eq!(tpm.state.time_epoch, 1);
+    assert_eq!(tpm.state.nv.persistent.time_epoch, 1);
 
     // 3. A TPM Reset without a power loss keeps time_epoch (Time keeps running).
     tpm.state.initialized = false;
     tpm.execute_command_separate(&startup_clear[..], &mut resp[..]);
     assert_eq!(&resp[6..10], &[0, 0, 0, 0]);
-    assert_eq!(tpm.state.time_epoch, 1);
+    assert_eq!(tpm.state.nv.persistent.time_epoch, 1);
 
     // 4. Unorderly power cycle (the platform timer is reset) -> Startup(CLEAR) increments
     // time_epoch to 2 and persists it
@@ -63,7 +63,7 @@ fn test_time_epoch_monotonic_persistence_and_resume_preservation() {
     tpm.state.initialized = false;
     tpm.execute_command_separate(&startup_clear[..], &mut resp[..]);
     assert_eq!(&resp[6..10], &[0, 0, 0, 0]);
-    assert_eq!(tpm.state.time_epoch, 2);
+    assert_eq!(tpm.state.nv.persistent.time_epoch, 2);
 
     tpm.platform
         .storage

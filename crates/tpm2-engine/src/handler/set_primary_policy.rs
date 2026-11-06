@@ -38,11 +38,11 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let auth_handle = auth_handle.0;
 
         if auth_handle == Handle::RH_OWNER.0 {
-            if !self.context.state.sh_enable {
+            if !self.context.state.nv.clear.sh_enable {
                 return Err(TpmRc::HIERARCHY.with(Position::handle(1)));
             }
         } else if auth_handle == Handle::RH_ENDORSEMENT.0 {
-            if !self.context.state.eh_enable {
+            if !self.context.state.nv.clear.eh_enable {
                 return Err(TpmRc::HIERARCHY.with(Position::handle(1)));
             }
         } else if auth_handle == Handle::RH_PLATFORM.0 {
@@ -79,18 +79,18 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         let policy = crate::owned::OwnedDigest::from(cmd.auth_policy);
         if auth_handle == Handle::RH_OWNER.0 {
-            self.context.state.owner_policy = policy;
-            self.context.state.owner_alg = cmd.hash_alg;
+            self.context.state.nv.persistent.owner_policy = policy;
+            self.context.state.nv.persistent.owner_alg = cmd.hash_alg;
         } else if auth_handle == Handle::RH_ENDORSEMENT.0 {
-            self.context.state.endorsement_policy = policy;
-            self.context.state.endorsement_alg = cmd.hash_alg;
+            self.context.state.nv.persistent.endorsement_policy = policy;
+            self.context.state.nv.persistent.endorsement_alg = cmd.hash_alg;
         } else if auth_handle == Handle::RH_PLATFORM.0 {
             self.nv_clear_orderly()?;
-            self.context.state.platform_policy = policy;
-            self.context.state.platform_alg = cmd.hash_alg;
+            self.context.state.nv.clear.platform_policy = policy;
+            self.context.state.nv.clear.platform_alg = cmd.hash_alg;
         } else if auth_handle == Handle::RH_LOCKOUT.0 {
-            self.context.state.lockout_policy = policy;
-            self.context.state.lockout_alg = cmd.hash_alg;
+            self.context.state.nv.persistent.lockout_policy = policy;
+            self.context.state.nv.persistent.lockout_alg = cmd.hash_alg;
         } else if let Some(index) = crate::act::act_index(auth_handle) {
             // The ACT policies are orderly data, saved by TPM2_Shutdown(TPM_SU_STATE) and kept by
             // TPM Resume only (Part 1, "Authenticated Countdown Timer (ACT)": "The *authPolicy*

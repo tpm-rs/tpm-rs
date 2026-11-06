@@ -65,7 +65,7 @@ fn create_loaded_exhausting_object_slots_does_not_panic() {
         in_public,
     };
 
-    // GlobalState transient_objects has size 64. Calling this 65 times should panic!
+    // State transient_objects has size 64. Calling this 65 times should panic!
     for _ in 0..65 {
         let _ = execute_with_password_sessions(&mut sim, &create, 1, &[]);
     }

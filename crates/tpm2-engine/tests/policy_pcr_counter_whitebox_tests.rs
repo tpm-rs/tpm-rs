@@ -2,7 +2,7 @@
 //!
 //! Moved from the black-box `testing` crate: they force the TPM-internal PCR
 //! update counter to `u32::MAX` (unreachable through the command interface
-//! without ~4 billion PCR updates) via [`tpm2_engine::GlobalState`].
+//! without ~4 billion PCR updates) via [`tpm2_engine::State`].
 
 mod common;
 

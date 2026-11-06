@@ -582,9 +582,9 @@ pub struct NvStateSaveRecord {
     pub pcr_update_counter: u32,
     pub context_counter: u64,
     pub object_context_counter: u64,
-    /// The saved sessions by slot (`GlobalState::saved_sessions`).
+    /// The saved sessions by slot (`State::saved_sessions`).
     pub saved_sessions: [Option<u32>; MAX_ACTIVE_SESSIONS],
-    /// Their context sequence numbers (`GlobalState::saved_session_sequences`).
+    /// Their context sequence numbers (`State::saved_session_sequences`).
     pub saved_session_sequences: [u64; MAX_ACTIVE_SESSIONS],
     pub commit_counter: u64,
     pub commit_nonce: [u8; COMMIT_NONCE_SIZE],

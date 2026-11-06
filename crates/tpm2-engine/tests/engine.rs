@@ -61,7 +61,7 @@ fn get_random_in_place() {
 
 #[test]
 fn test_find_empty_transient_slot_primary_vs_child_and_fallback_reuse() {
-    let mut state = tpm2_engine::GlobalState::default();
+    let mut state = tpm2_engine::State::default();
     // 1. When empty, both primary and child allocations assign sequential slots starting at index 0
     let (slot0, handle0) = state.find_empty_transient_slot(true).unwrap();
     assert_eq!(slot0, 0);
@@ -131,9 +131,12 @@ fn test_drbg_state_persistence_and_reseed_across_shutdown_startup() {
     let mut resp = [0u8; 256];
     tpm.execute_command_separate(&startup_clear[..], &mut resp[..]);
 
-    assert_eq!(tpm.state.drbg_state.magic, tpm2_engine::DRBG_MAGIC);
-    assert_eq!(tpm.state.drbg_state.reseed_counter, 1);
-    let seed_after_boot = tpm.state.drbg_state.seed;
+    assert_eq!(
+        tpm.state.nv.orderly.drbg_state.magic,
+        tpm2_engine::DRBG_MAGIC
+    );
+    assert_eq!(tpm.state.nv.orderly.drbg_state.reseed_counter, 1);
+    let seed_after_boot = tpm.state.nv.orderly.drbg_state.seed;
 
     // 2. Orderly Shutdown (SU_STATE) persists the DRBG state to NV storage (offset 36..112)
     let shutdown_state = hex!(
@@ -162,10 +165,13 @@ fn test_drbg_state_persistence_and_reseed_across_shutdown_startup() {
     tpm.execute_command_separate(&startup_state[..], &mut resp[..]);
     assert_eq!(&resp[6..10], &[0, 0, 0, 0]);
 
-    assert_eq!(tpm.state.drbg_state.magic, tpm2_engine::DRBG_MAGIC);
-    assert_eq!(tpm.state.drbg_state.reseed_counter, 1);
+    assert_eq!(
+        tpm.state.nv.orderly.drbg_state.magic,
+        tpm2_engine::DRBG_MAGIC
+    );
+    assert_eq!(tpm.state.nv.orderly.drbg_state.reseed_counter, 1);
     assert_ne!(
-        tpm.state.drbg_state.seed, seed_after_boot,
+        tpm.state.nv.orderly.drbg_state.seed, seed_after_boot,
         "Orderly startup must reseed the saved DRBG seed with fresh entropy"
     );
 }
@@ -183,9 +189,9 @@ fn test_platform_construction_with_generic_rng() {
     let tpm = TpmEngine::new(platform).unwrap();
 
     // Before manufacture there are no Primary Seeds.
-    assert_eq!(tpm.state.sp_seed_size, 0);
-    assert_eq!(tpm.state.ep_seed_size, 0);
-    assert_eq!(tpm.state.pp_seed_size, 0);
+    assert_eq!(tpm.state.nv.persistent.sp_seed_size, 0);
+    assert_eq!(tpm.state.nv.persistent.ep_seed_size, 0);
+    assert_eq!(tpm.state.nv.persistent.pp_seed_size, 0);
 }
 
 /// Manufacture (`init_storage`) draws the three Primary Seeds and the three hierarchy proofs as
@@ -205,33 +211,49 @@ fn manufacture_draws_independent_seeds_and_proofs() {
 
     // FakeRng yields 1, 2, 3, ... (mod 256): each value is the next 64 bytes of the stream.
     let expected = |k: usize| -> [u8; 64] { core::array::from_fn(|i| (1 + 64 * k + i) as u8) };
-    assert_eq!(tpm.state.ep_seed, expected(0));
-    assert_eq!(tpm.state.sp_seed, expected(1));
-    assert_eq!(tpm.state.pp_seed, expected(2));
-    assert_eq!(tpm.state.ph_proof, expected(3));
-    assert_eq!(tpm.state.sh_proof, expected(4));
-    assert_eq!(tpm.state.eh_proof, expected(5));
+    assert_eq!(tpm.state.nv.persistent.ep_seed, expected(0));
+    assert_eq!(tpm.state.nv.persistent.sp_seed, expected(1));
+    assert_eq!(tpm.state.nv.persistent.pp_seed, expected(2));
+    assert_eq!(tpm.state.nv.persistent.ph_proof, expected(3));
+    assert_eq!(tpm.state.nv.persistent.sh_proof, expected(4));
+    assert_eq!(tpm.state.nv.persistent.eh_proof, expected(5));
     for size in [
-        tpm.state.ep_seed_size,
-        tpm.state.sp_seed_size,
-        tpm.state.pp_seed_size,
-        tpm.state.ph_proof_size,
-        tpm.state.sh_proof_size,
-        tpm.state.eh_proof_size,
+        tpm.state.nv.persistent.ep_seed_size,
+        tpm.state.nv.persistent.sp_seed_size,
+        tpm.state.nv.persistent.pp_seed_size,
+        tpm.state.nv.persistent.ph_proof_size,
+        tpm.state.nv.persistent.sh_proof_size,
+        tpm.state.nv.persistent.eh_proof_size,
     ] {
         assert_eq!(size, 64);
     }
 
     // `_TPM_Init` reloads them from NV unchanged.
-    let (ep, sp, pp) = (tpm.state.ep_seed, tpm.state.sp_seed, tpm.state.pp_seed);
-    let (ph, sh, eh) = (tpm.state.ph_proof, tpm.state.sh_proof, tpm.state.eh_proof);
+    let (ep, sp, pp) = (
+        tpm.state.nv.persistent.ep_seed,
+        tpm.state.nv.persistent.sp_seed,
+        tpm.state.nv.persistent.pp_seed,
+    );
+    let (ph, sh, eh) = (
+        tpm.state.nv.persistent.ph_proof,
+        tpm.state.nv.persistent.sh_proof,
+        tpm.state.nv.persistent.eh_proof,
+    );
     tpm.reset();
     assert_eq!(
-        (tpm.state.ep_seed, tpm.state.sp_seed, tpm.state.pp_seed),
+        (
+            tpm.state.nv.persistent.ep_seed,
+            tpm.state.nv.persistent.sp_seed,
+            tpm.state.nv.persistent.pp_seed
+        ),
         (ep, sp, pp)
     );
     assert_eq!(
-        (tpm.state.ph_proof, tpm.state.sh_proof, tpm.state.eh_proof),
+        (
+            tpm.state.nv.persistent.ph_proof,
+            tpm.state.nv.persistent.sh_proof,
+            tpm.state.nv.persistent.eh_proof
+        ),
         (ph, sh, eh)
     );
 }

@@ -1,5 +1,5 @@
 //! Tests of the persistence of the complete TPM state (`tpm2_engine::persistence`): the
-//! conversion between `GlobalState` + `NvStorage` and the `PersistedTpmState`
+//! conversion between `State` + `NvStorage` and the `PersistedTpmState`
 //! (ported from `tpm_rs_serializer_core`), its losslessness (a round trip reproduces the same
 //! persisted state and the same canonical NV storage), the reload of the NV-synced fields from
 //! the NV records of the persisted NV image and the RAM values that are ahead of NV
@@ -37,7 +37,7 @@ use tpm2_engine::storage::nv::{
     HIERARCHY_RECORD_HANDLE, HIERARCHY_RECORD_SIZE, NvHeader, NvHierarchyRecord,
 };
 use tpm2_engine::storage::ram_storage_mock::RamStorageMock;
-use tpm2_engine::{ActiveSequence, GlobalState, SequenceType};
+use tpm2_engine::{ActiveSequence, SequenceType, State};
 
 /// The size of the NV backing store of the simulator (twice the accounted NV memory).
 const NV_STORAGE_SIZE: usize = 2 * tpm2_engine::storage::nv_capacity::NV_MEMORY_SIZE as usize;
@@ -49,7 +49,7 @@ fn new_persisted() -> Box<PersistedTpmState> {
 
 /// The persisted state of `state` and `storage`, with the platform timer at `now_ms`.
 fn persisted_of<S: tpm2_engine::storage::NvStorage>(
-    state: &GlobalState,
+    state: &State,
     storage: &S,
     now_ms: u64,
 ) -> Box<PersistedTpmState> {
@@ -61,7 +61,7 @@ fn persisted_of<S: tpm2_engine::storage::NvStorage>(
 /// Restores `persisted` into `state` and `storage`, with the platform timer at `now_ms`.
 fn restore_into<S: tpm2_engine::storage::NvStorage>(
     persisted: &PersistedTpmState,
-    state: &mut GlobalState,
+    state: &mut State,
     storage: &mut S,
     now_ms: u64,
 ) -> Result<(), DeserializeError> {
@@ -390,8 +390,8 @@ fn nv_index_item(public: TpmsNvPublic<'_>, data: &[u8]) -> Vec<u8> {
     buf
 }
 
-/// A hand-built `GlobalState` with sessions, a sequence and an NV index survives
-/// `GlobalState` -> `PersistedTpmState` -> `GlobalState` -> `PersistedTpmState` unchanged,
+/// A hand-built `State` with sessions, a sequence and an NV index survives
+/// `State` -> `PersistedTpmState` -> `State` -> `PersistedTpmState` unchanged,
 /// and restoring both persisted states produces the same NV storage, which is the canonical
 /// storage of the original (items in handle order, their metadata derived). The NV-synced
 /// fields come from the NV image (here the reset count of the header) unless their RAM value is
@@ -400,13 +400,13 @@ fn nv_index_item(public: TpmsNvPublic<'_>, data: &[u8]) -> Vec<u8> {
 /// timer reading of the restore.
 #[test]
 fn global_state_to_persisted_and_back_round_trip() {
-    let mut state = Box::<GlobalState>::default();
+    let mut state = Box::<State>::default();
     state.initialized = true;
-    state.reset_count = 77;
-    state.restart_count = 5;
-    state.clear_count = 3;
-    state.orderly_state = 0xFFFF;
-    state.failed_tries = 2;
+    state.nv.persistent.reset_count = 77;
+    state.nv.reset.restart_count = 5;
+    state.nv.reset.clear_count = 3;
+    state.nv.persistent.orderly_state = 0xFFFF;
+    state.nv.persistent.failed_tries = 2;
     state.da_pending_on_nv = true;
     state.locality = 3;
     state.g_nv_ok = true;
@@ -416,26 +416,26 @@ fn global_state_to_persisted_and_back_round_trip() {
     state.drtm_handle = 0x8000_0001;
     state.startup_locality_3 = true;
     state.pcr_reconfig = true;
-    state.read_only = true;
+    state.nv.clear.read_only = true;
     state.exclusive_audit_session = Some(0x0200_0000);
 
-    state.drbg_state.reseed_counter = 99;
-    state.drbg_state.magic = 0x4742_5244;
-    state.drbg_state.seed = [0x42; 48];
-    state.drbg_state.last_value = [10, 20, 30, 40];
+    state.nv.orderly.drbg_state.reseed_counter = 99;
+    state.nv.orderly.drbg_state.magic = 0x4742_5244;
+    state.nv.orderly.drbg_state.seed = [0x42; 48];
+    state.nv.orderly.drbg_state.last_value = [10, 20, 30, 40];
 
-    state.platform_auth = Tpm2bAuth::from_bytes(&[0x11, 0x22, 0x33]).unwrap().into();
+    state.nv.clear.platform_auth = Tpm2bAuth::from_bytes(&[0x11, 0x22, 0x33]).unwrap().into();
     state.platform_unique_details = Tpm2bAuth::from_bytes(&[0x88; 16]).unwrap().into();
-    state.platform_alg = Some(TpmiAlgHash::Sha256);
-    state.null_proof = [0x22; 64];
-    state.null_proof_size = 48;
+    state.nv.clear.platform_alg = Some(TpmiAlgHash::Sha256);
+    state.nv.reset.null_proof = [0x22; 64];
+    state.nv.reset.null_proof_size = 48;
 
     state.da_used = true;
-    state.lockout_auth_enabled = false;
-    state.self_heal_timer = 15000;
-    state.lockout_timer = -30000;
+    state.nv.persistent.lockout_auth_enabled = false;
+    state.nv.orderly.self_heal_timer = 15000;
+    state.nv.orderly.lockout_timer = -30000;
     state.tpm_time_ms = 555_666_777;
-    state.clock_offset = -12;
+    state.nv.orderly.clock_offset = -12;
     state.last_timer_read_ms = Some(1234);
     state.clock_adjust_remainder = 6;
 
@@ -444,8 +444,8 @@ fn global_state_to_persisted_and_back_round_trip() {
     state.pcrs.sha384[23] = [0x03; 48];
     state.pcrs.update_counter = 27;
 
-    state.commit_counter = 0x1_0009;
-    state.commit_array[1] = 0x80;
+    state.nv.reset.commit_counter = 0x1_0009;
+    state.nv.reset.commit_array[1] = 0x80;
     state.act.tick_last_read_ms = 1000;
     state.act.tick_phase_ms = 300;
     state.physical_presence = true;
@@ -489,9 +489,9 @@ fn global_state_to_persisted_and_back_round_trip() {
     session.policy_digest[..32].fill(0x99);
     // The session is in the second slot: restore puts it in the first one.
     state.active_sessions[1] = Some(session);
-    state.context_counter = 0x2000;
-    state.saved_sessions[2] = Some(0x0200_0002);
-    state.saved_session_sequences[2] = 0x1234;
+    state.nv.reset.context_counter = 0x2000;
+    state.nv.reset.saved_sessions[2] = Some(0x0200_0002);
+    state.nv.reset.saved_session_sequences[2] = 0x1234;
 
     let mut seq = ActiveSequence::new(
         0x8000_0002,
@@ -573,20 +573,20 @@ fn global_state_to_persisted_and_back_round_trip() {
 
     // Restore on another platform timer, which reads 50.
     let mut restored_storage = Box::new(RamStorageMock::<NV_STORAGE_SIZE>::new());
-    let mut restored_state = Box::<GlobalState>::default();
+    let mut restored_state = Box::<State>::default();
     restore_into(&persisted, &mut restored_state, &mut *restored_storage, 50)
-        .expect("Conversion to GlobalState must succeed");
+        .expect("Conversion to State must succeed");
     assert!(restored_state.active_sessions[0].is_some());
     assert!(restored_state.active_sequences[0].is_some());
-    assert_eq!(restored_state.saved_sessions[2], Some(0x0200_0002));
-    assert_eq!(restored_state.saved_session_sequences[2], 0x1234);
-    assert_eq!(restored_state.reset_count, 77);
-    assert_eq!(restored_state.clear_count, 3);
-    assert_eq!(restored_state.failed_tries, 2);
+    assert_eq!(restored_state.nv.reset.saved_sessions[2], Some(0x0200_0002));
+    assert_eq!(restored_state.nv.reset.saved_session_sequences[2], 0x1234);
+    assert_eq!(restored_state.nv.persistent.reset_count, 77);
+    assert_eq!(restored_state.nv.reset.clear_count, 3);
+    assert_eq!(restored_state.nv.persistent.failed_tries, 2);
     assert!(restored_state.da_pending_on_nv);
     assert_eq!(restored_state.locality, 3);
-    assert!(!restored_state.lockout_auth_enabled);
-    assert_eq!(restored_state.update_nv, GlobalState::default().update_nv);
+    assert!(!restored_state.nv.persistent.lockout_auth_enabled);
+    assert_eq!(restored_state.update_nv, State::default().update_nv);
     assert!(!restored_state.clear_orderly);
     assert_eq!(restored_state.last_timer_read_ms, Some(50));
     assert_eq!(restored_state.clock_adjust_remainder, 772);
@@ -602,7 +602,7 @@ fn global_state_to_persisted_and_back_round_trip() {
     assert_eq!(persisted, re_persisted);
 
     let mut restored_storage_2 = Box::new(RamStorageMock::<NV_STORAGE_SIZE>::new());
-    let mut restored_state_2 = Box::<GlobalState>::default();
+    let mut restored_state_2 = Box::<State>::default();
     persistence::deserialize::<TestCryptoProvider, _>(
         &re_persisted,
         &mut restored_state_2,
@@ -626,12 +626,12 @@ fn global_state_to_persisted_and_back_round_trip() {
 /// An unknown hash algorithm in the persisted state is rejected.
 #[test]
 fn invalid_alg_hash_returns_deserialize_error() {
-    let state = Box::<GlobalState>::default();
+    let state = Box::<State>::default();
     let storage = Box::new(RamStorageMock::<NV_STORAGE_SIZE>::new());
     let mut persisted = persisted_of(&state, &*storage, 0);
     persisted.clear.platform_alg = Some(0xFFFF);
     let mut out_storage = Box::new(RamStorageMock::<NV_STORAGE_SIZE>::new());
-    let mut out_state = Box::<GlobalState>::default();
+    let mut out_state = Box::<State>::default();
     assert_eq!(
         restore_into(&persisted, &mut out_state, &mut *out_storage, 0).unwrap_err(),
         DeserializeError::InvalidValue("clear.platform_alg")
@@ -781,7 +781,7 @@ fn array_serde_uses_active_elements_and_checks_capacity() {
 #[cfg(feature = "serde")]
 #[test]
 fn fixed_byte_arrays_require_their_exact_length() {
-    let state = Box::<GlobalState>::default();
+    let state = Box::<State>::default();
     let storage = Box::new(RamStorageMock::<NV_STORAGE_SIZE>::new());
     let persisted = persisted_of(&state, &*storage, 0);
     let mut json: serde_json::Value = serde_json::to_value(&*persisted).unwrap();
@@ -902,10 +902,13 @@ fn migrated_tpm_keeps_its_persistent_state_across_a_tpm_reset() {
     assert_eq!(name_of(&mut target, recreated), primary_name);
 
     // The reset counter moved on from the source's.
-    assert_eq!(target.state.reset_count, source.state.reset_count + 1);
+    assert_eq!(
+        target.state.nv.persistent.reset_count,
+        source.state.nv.persistent.reset_count + 1
+    );
 }
 
-/// The algorithm self-test state (outside `GlobalState`) is persisted and restored by the
+/// The algorithm self-test state (outside `State`) is persisted and restored by the
 /// engine methods, including Failure mode; the free functions persist the state after
 /// `_TPM_Init`.
 #[test]
@@ -972,10 +975,22 @@ fn restore_reloads_nv_synced_fields_from_the_nv_records() {
     item.copy_from_slice(&buf[..len]);
 
     target.restore_persisted_state(&persisted).unwrap();
-    assert_eq!(target.state.owner_auth.get_buffer(), b"other-pw");
-    assert_eq!(target.state.reset_count, source.state.reset_count);
-    assert_eq!(target.state.clear_count, source.state.clear_count);
-    assert_eq!(target.state.sp_seed, source.state.sp_seed);
+    assert_eq!(
+        target.state.nv.persistent.owner_auth.get_buffer(),
+        b"other-pw"
+    );
+    assert_eq!(
+        target.state.nv.persistent.reset_count,
+        source.state.nv.persistent.reset_count
+    );
+    assert_eq!(
+        target.state.nv.reset.clear_count,
+        source.state.nv.reset.clear_count
+    );
+    assert_eq!(
+        target.state.nv.persistent.sp_seed,
+        source.state.nv.persistent.sp_seed
+    );
     let read = NVRead {
         auth_handle: Handle::RH_OWNER,
         nv_index: NV_INDEX,
@@ -1041,7 +1056,7 @@ fn clear_count_after_tpm_restart_survives_migration() {
         &[],
     )
     .expect("Startup");
-    assert_eq!(source.state.clear_count, 1);
+    assert_eq!(source.state.nv.reset.clear_count, 1);
 
     let mut persisted = new_persisted();
     source.save_persisted_state(&mut persisted).unwrap();
@@ -1051,7 +1066,7 @@ fn clear_count_after_tpm_restart_survives_migration() {
     assert_eq!(record.seeds.unwrap().clear_count, 0, "NV is behind RAM");
 
     target.restore_persisted_state(&persisted).unwrap();
-    assert_eq!(target.state.clear_count, 1);
+    assert_eq!(target.state.nv.reset.clear_count, 1);
 }
 
 /// A DA failure while NV is unavailable updates `failedTries` in RAM only and defers the NV
@@ -1073,7 +1088,7 @@ fn deferred_da_update_survives_migration() {
     source.set_nv_available(false);
     assert!(execute_command(&mut source, &change_auth, &[password_auth(b"wrong")]).is_err());
     source.set_nv_available(true);
-    assert_eq!(source.state.failed_tries, 2);
+    assert_eq!(source.state.nv.persistent.failed_tries, 2);
 
     let mut persisted = new_persisted();
     source.save_persisted_state(&mut persisted).unwrap();
@@ -1082,7 +1097,7 @@ fn deferred_da_update_survives_migration() {
     assert!(persisted.runtime.da_pending_on_nv);
 
     target.restore_persisted_state(&persisted).unwrap();
-    assert_eq!(target.state.failed_tries, 2);
+    assert_eq!(target.state.nv.persistent.failed_tries, 2);
     assert!(target.state.da_pending_on_nv);
 
     // The next DA-protected authorization writes the pending update to NV on both TPMs.
@@ -1135,7 +1150,7 @@ fn ram_orderly_state_after_failed_startup_survives_migration() {
     assert_eq!(persisted.runtime.orderly_state, 0xFFFF);
 
     target.restore_persisted_state(&persisted).unwrap();
-    let failed_tries = source.state.failed_tries;
+    let failed_tries = source.state.nv.persistent.failed_tries;
     for tpm in [&mut source, &mut target] {
         execute_command(
             tpm,
@@ -1145,6 +1160,6 @@ fn ram_orderly_state_after_failed_startup_survives_migration() {
             &[],
         )
         .expect("Startup");
-        assert_eq!(tpm.state.failed_tries, failed_tries);
+        assert_eq!(tpm.state.nv.persistent.failed_tries, failed_tries);
     }
 }

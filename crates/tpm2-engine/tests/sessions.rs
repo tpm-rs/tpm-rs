@@ -7,9 +7,9 @@ use common::make_test_session_state;
 fn test_global_state_session_lifecycle() {
     use tpm2::TpmSe;
     use tpm2::{Tpm2bNonce, TpmiAlgHash};
-    use tpm2_engine::GlobalState;
+    use tpm2_engine::State;
 
-    let mut state = GlobalState::default();
+    let mut state = State::default();
 
     // Verify empty state
     assert!(state.session(1).is_none());

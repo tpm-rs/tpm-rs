@@ -56,16 +56,26 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         self.nv_clear_orderly()?;
 
         // Update state
-        self.context.state.ep_seed.copy_from_slice(&new_ep_seed);
-        self.context.state.ep_seed_size = 64;
+        self.context
+            .state
+            .nv
+            .persistent
+            .ep_seed
+            .copy_from_slice(&new_ep_seed);
+        self.context.state.nv.persistent.ep_seed_size = 64;
 
-        self.context.state.eh_proof.copy_from_slice(&new_eh_proof);
-        self.context.state.eh_proof_size = 64;
+        self.context
+            .state
+            .nv
+            .persistent
+            .eh_proof
+            .copy_from_slice(&new_eh_proof);
+        self.context.state.nv.persistent.eh_proof_size = 64;
 
-        self.context.state.eh_enable = true;
-        self.context.state.endorsement_auth = crate::owned::OwnedAuth::default();
-        self.context.state.endorsement_policy = crate::owned::OwnedDigest::default();
-        self.context.state.endorsement_alg = None;
+        self.context.state.nv.clear.eh_enable = true;
+        self.context.state.nv.persistent.endorsement_auth = crate::owned::OwnedAuth::default();
+        self.context.state.nv.persistent.endorsement_policy = crate::owned::OwnedDigest::default();
+        self.context.state.nv.persistent.endorsement_alg = None;
 
         // Flush loaded objects in endorsement hierarchy
         for slot in self.context.state.transient_objects.iter_mut() {

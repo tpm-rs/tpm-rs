@@ -73,9 +73,9 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let audit_hash_alg = self.context.state.command_audit_hash_alg();
         let command_digest = self.context.command_audit_list_digest()?;
 
-        let saved_audit_digest = self.context.state.command_audit_digest;
+        let saved_audit_digest = self.context.state.nv.reset.command_audit_digest;
         let command_audit_info = TpmsCommandAuditInfo {
-            audit_counter: self.context.state.audit_counter,
+            audit_counter: self.context.state.nv.persistent.audit_counter,
             digest_alg: Alg::from(audit_hash_alg),
             audit_digest: saved_audit_digest.as_tpm2b(),
             command_digest: command_digest.as_tpm2b(),
@@ -103,7 +103,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         // Reset log if sign_handle != RH_Null
         if sign_handle.0 != 0x40000007 {
-            self.context.state.command_audit_digest = OwnedDigest::default();
+            self.context.state.nv.reset.command_audit_digest = OwnedDigest::default();
         }
 
         let rsp = responses::GetCommandAuditDigest {

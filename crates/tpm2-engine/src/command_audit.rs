@@ -23,9 +23,8 @@
 //! cleared from the list), except when it changes the audit hash algorithm, in which case the
 //! digest register is cleared and that execution is not audited.
 
-use crate::engine::{
-    GlobalState, TpmEngine, VENDOR_COMMANDS, command_resp_handles_size, is_command_supported,
-};
+use crate::State;
+use crate::engine::{TpmEngine, VENDOR_COMMANDS, command_resp_handles_size, is_command_supported};
 use crate::owned::OwnedDigest;
 use crate::storage::NvStorage;
 #[cfg(test)]
@@ -173,11 +172,11 @@ impl CommandAuditList {
     }
 }
 
-impl GlobalState {
+impl State {
     /// The command audit hash algorithm (`gp.auditHashAlg`). An invalid stored value (which a
     /// TPM state never contains) falls back to the manufacture default, SHA-512 (SHA-384 without SHA-512).
     pub fn command_audit_hash_alg(&self) -> TpmiAlgHash {
-        TpmiAlgHash::try_from(self.audit_hash_alg)
+        TpmiAlgHash::try_from(self.nv.persistent.audit_hash_alg)
             .unwrap_or_else(|_| crate::handler::context_integrity_hash_alg())
     }
 }
@@ -187,11 +186,11 @@ impl GlobalState {
 /// [`AUDIT_EXT_LEN`](crate::storage::nv::AUDIT_EXT_LEN) bytes. Returns the number
 /// of bytes written.
 #[cfg(test)]
-pub(crate) fn encode_audit_ext(global_state: &GlobalState, dst: &mut [u8]) -> usize {
+pub(crate) fn encode_audit_ext(global_state: &State, dst: &mut [u8]) -> usize {
     crate::storage::nv::NvAuditExt {
-        hash_alg: global_state.audit_hash_alg,
-        counter: global_state.audit_counter,
-        commands: *global_state.audit_commands.as_bytes(),
+        hash_alg: global_state.nv.persistent.audit_hash_alg,
+        counter: global_state.nv.persistent.audit_counter,
+        commands: *global_state.nv.persistent.audit_commands.as_bytes(),
     }
     .encode(dst)
 }
@@ -200,13 +199,13 @@ pub(crate) fn encode_audit_ext(global_state: &GlobalState, dst: &mut [u8]) -> us
 /// `src`. Returns `false` (leaving `global_state` untouched) if `src` does not start with a
 /// complete record or the record names an unsupported hash algorithm.
 #[cfg(test)]
-pub(crate) fn decode_audit_ext(global_state: &mut GlobalState, src: &[u8]) -> bool {
+pub(crate) fn decode_audit_ext(global_state: &mut State, src: &[u8]) -> bool {
     let Some(ext) = crate::storage::nv::NvAuditExt::decode(src) else {
         return false;
     };
-    global_state.audit_hash_alg = ext.hash_alg;
-    global_state.audit_counter = ext.counter;
-    global_state.audit_commands = CommandAuditList::from_bytes(&ext.commands);
+    global_state.nv.persistent.audit_hash_alg = ext.hash_alg;
+    global_state.nv.persistent.audit_counter = ext.counter;
+    global_state.nv.persistent.audit_commands = CommandAuditList::from_bytes(&ext.commands);
     true
 }
 
@@ -229,10 +228,11 @@ impl<C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<'_, C, S, T,
         parameters: &[u8],
     ) -> Result<(), TpmRc> {
         self.state.command_audit_cp_hash = None;
-        if !self.state.audit_commands.is_audited(cc) {
+        if !self.state.nv.persistent.audit_commands.is_audited(cc) {
             return Ok(());
         }
-        if (self.state.command_audit_digest.get_size() == 0 || cc == TpmCc::GetCommandAuditDigest)
+        if (self.state.nv.reset.command_audit_digest.get_size() == 0
+            || cc == TpmCc::GetCommandAuditDigest)
             && !self.state.nv_available
         {
             return Err(TpmRc::NV_UNAVAILABLE);
@@ -267,7 +267,7 @@ impl<C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<'_, C, S, T,
             return Ok(());
         };
         if core::mem::take(&mut self.state.command_audit_alg_changed) {
-            self.state.command_audit_digest = OwnedDigest::default();
+            self.state.nv.reset.command_audit_digest = OwnedDigest::default();
             return Ok(());
         }
         let rp_params = response_parameters(cc, response).ok_or(TpmRc::FAILURE)?;
@@ -283,24 +283,25 @@ impl<C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<'_, C, S, T,
         let mut rp_buf = [0u8; TpmtHa::MAX_DIGEST_SIZE];
         let rp_hash = ctx.finalize(&mut rp_buf).map_err(|_| TpmRc::FAILURE)?;
 
-        if self.state.command_audit_digest.get_size() == 0 {
+        if self.state.nv.reset.command_audit_digest.get_size() == 0 {
             let zeros = [0u8; TpmtHa::MAX_DIGEST_SIZE];
-            self.state.command_audit_digest =
+            self.state.nv.reset.command_audit_digest =
                 OwnedDigest::from_bytes(&zeros[..digest_size]).map_err(|_| TpmRc::FAILURE)?;
-            self.state.audit_counter = self.state.audit_counter.wrapping_add(1);
+            self.state.nv.persistent.audit_counter =
+                self.state.nv.persistent.audit_counter.wrapping_add(1);
             // NV_SYNC_PERSISTENT(auditCounter)
             self.save_hierarchy_auths();
         }
 
         let mut ctx = self.crypto().hash_stream(alg).map_err(|_| TpmRc::FAILURE)?;
-        ctx.update(self.state.command_audit_digest.get_buffer())
+        ctx.update(self.state.nv.reset.command_audit_digest.get_buffer())
             .map_err(|_| TpmRc::FAILURE)?;
         ctx.update(cp_hash.get_buffer())
             .map_err(|_| TpmRc::FAILURE)?;
         ctx.update(rp_hash.digest()).map_err(|_| TpmRc::FAILURE)?;
         let mut buf = [0u8; TpmtHa::MAX_DIGEST_SIZE];
         let digest = ctx.finalize(&mut buf).map_err(|_| TpmRc::FAILURE)?;
-        self.state.command_audit_digest =
+        self.state.nv.reset.command_audit_digest =
             OwnedDigest::from_bytes(digest.digest()).map_err(|_| TpmRc::FAILURE)?;
         Ok(())
     }
@@ -312,7 +313,7 @@ impl<C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<'_, C, S, T,
     pub(crate) fn command_audit_list_digest(&self) -> Result<OwnedDigest, TpmRc> {
         let alg = self.state.command_audit_hash_alg();
         let mut ctx = self.crypto().hash_stream(alg).map_err(|_| TpmRc::FAILURE)?;
-        for cc in self.state.audit_commands.iter() {
+        for cc in self.state.nv.persistent.audit_commands.iter() {
             ctx.update(&cc.code().to_be_bytes())
                 .map_err(|_| TpmRc::FAILURE)?;
         }
@@ -471,33 +472,38 @@ mod tests {
 
     #[test]
     fn audit_ext_round_trips() {
-        let mut state = GlobalState {
-            audit_hash_alg: 0x000B, // TPM_ALG_SHA256
-            audit_counter: 0x1122_3344_5566_7788,
-            ..Default::default()
-        };
-        state.audit_commands.set(TpmCc::NVRead);
+        let mut state = State::default();
+        state.nv.persistent.audit_hash_alg = 0x000B; // TPM_ALG_SHA256
+        state.nv.persistent.audit_counter = 0x1122_3344_5566_7788;
+        state.nv.persistent.audit_commands.set(TpmCc::NVRead);
         let mut buf = [0u8; AUDIT_EXT_LEN + 3];
         assert_eq!(encode_audit_ext(&state, &mut buf), AUDIT_EXT_LEN);
         assert_eq!(buf[0], AUDIT_EXT_MARKER);
 
-        let mut restored = GlobalState::default();
+        let mut restored = State::default();
         assert!(decode_audit_ext(&mut restored, &buf));
-        assert_eq!(restored.audit_hash_alg, state.audit_hash_alg);
-        assert_eq!(restored.audit_counter, state.audit_counter);
-        assert_eq!(restored.audit_commands, state.audit_commands);
+        assert_eq!(
+            restored.nv.persistent.audit_hash_alg,
+            state.nv.persistent.audit_hash_alg
+        );
+        assert_eq!(
+            restored.nv.persistent.audit_counter,
+            state.nv.persistent.audit_counter
+        );
+        assert_eq!(
+            restored.nv.persistent.audit_commands,
+            state.nv.persistent.audit_commands
+        );
     }
 
     #[test]
     fn audit_ext_rejects_malformed_records() {
-        let state = GlobalState {
-            audit_counter: 5,
-            ..Default::default()
-        };
+        let mut state = State::default();
+        state.nv.persistent.audit_counter = 5;
         let mut buf = [0u8; AUDIT_EXT_LEN];
         encode_audit_ext(&state, &mut buf);
 
-        let mut target = GlobalState::default();
+        let mut target = State::default();
         assert!(
             !decode_audit_ext(&mut target, &buf[..AUDIT_EXT_LEN - 1]),
             "short"
@@ -508,7 +514,7 @@ mod tests {
         let mut bad_alg = buf;
         bad_alg[1..3].copy_from_slice(&0x0001u16.to_be_bytes()); // TPM_ALG_RSA
         assert!(!decode_audit_ext(&mut target, &bad_alg), "hash algorithm");
-        assert_eq!(target.audit_counter, 0, "state untouched");
+        assert_eq!(target.nv.persistent.audit_counter, 0, "state untouched");
     }
 
     #[test]

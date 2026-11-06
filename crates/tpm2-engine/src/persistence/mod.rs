@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
 //! Persistence of the complete TPM state: a `no_std`, allocation-free [`PersistedTpmState`] and
-//! bidirectional conversion between it and the engine's [`GlobalState`] plus its
+//! bidirectional conversion between it and the engine's [`State`] plus its
 //! [`NvStorage`].
 //!
 //! Ported from `tpm_rs_serializer_core` (`tpm-migration-proof`), whose
@@ -66,7 +66,7 @@
 //!   the location 0 and `FATAL_ERROR_SELF_TEST`), so Failure mode is persisted as
 //!   `self_test.failed` only, and a converter from a reference loses its diagnostics.
 //!
-//! The algorithm self-test state is not part of [`GlobalState`] (`TpmEngine::self_test`): the
+//! The algorithm self-test state is not part of [`State`] (`TpmEngine::self_test`): the
 //! free functions persist the state after `_TPM_Init` (every algorithm needs its test) and do
 //! not apply it; [`TpmEngine::save_persisted_state`] and
 //! [`TpmEngine::restore_persisted_state`] persist and restore it as well.
@@ -81,7 +81,7 @@ pub use types::*;
 
 use crate::storage::NvStorage;
 use crate::timer::TpmTimer;
-use crate::{GlobalState, TpmEngine};
+use crate::{State, TpmEngine};
 use tpm2::crypto::backend::Hash;
 use tpm2::crypto::{Crypto, Rng};
 
@@ -92,7 +92,7 @@ use tpm2::crypto::{Crypto, Rng};
 /// [`MAX_NV_DATA_SIZE`]), if `storage` cannot be read or holds an invalid record, or if the
 /// state is inconsistent.
 pub fn try_serialize<S: NvStorage>(
-    global_state: &GlobalState,
+    global_state: &State,
     storage: &S,
     now_ms: u64,
     persisted: &mut PersistedTpmState,
@@ -102,7 +102,7 @@ pub fn try_serialize<S: NvStorage>(
 
 /// Like [`try_serialize`], panicking on failure.
 pub fn serialize<S: NvStorage>(
-    global_state: &GlobalState,
+    global_state: &State,
     storage: &S,
     now_ms: u64,
     persisted: &mut PersistedTpmState,
@@ -118,7 +118,7 @@ pub fn serialize<S: NvStorage>(
 /// rewritten.
 pub fn try_deserialize<H: Hash, S: NvStorage>(
     persisted: &PersistedTpmState,
-    global_state: &mut GlobalState,
+    global_state: &mut State,
     storage: &mut S,
     now_ms: u64,
 ) -> Result<(), DeserializeError> {
@@ -128,7 +128,7 @@ pub fn try_deserialize<H: Hash, S: NvStorage>(
 /// Like [`try_deserialize`], panicking on failure.
 pub fn deserialize<H: Hash, S: NvStorage>(
     persisted: &PersistedTpmState,
-    global_state: &mut GlobalState,
+    global_state: &mut State,
     storage: &mut S,
     now_ms: u64,
 ) {
@@ -137,7 +137,7 @@ pub fn deserialize<H: Hash, S: NvStorage>(
 }
 
 impl<C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<'_, C, S, T, R> {
-    /// Extracts the complete state of the TPM (its [`GlobalState`], its NV storage and its
+    /// Extracts the complete state of the TPM (its [`State`], its NV storage and its
     /// algorithm self-test state) into `persisted`, relative to the current reading of its
     /// platform timer.
     pub fn save_persisted_state(
@@ -149,7 +149,7 @@ impl<C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<'_, C, S, T,
         persisted.extract_self_test(&self.self_test)
     }
 
-    /// Restores the complete state of the TPM (its [`GlobalState`], its NV storage and its
+    /// Restores the complete state of the TPM (its [`State`], its NV storage and its
     /// algorithm self-test state) from `persisted`, e.g. on the target of a live migration. The
     /// platform time continues from the current reading of its platform timer, and the Names of
     /// the loaded objects are recomputed with its crypto backend (directly, without the

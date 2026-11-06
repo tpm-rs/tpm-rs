@@ -49,14 +49,14 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         self.return_if_nv_is_not_available()?;
 
-        let mut pp_list = self.context.state.pp_list;
+        let mut pp_list = self.context.state.nv.persistent.pp_list;
         for &cc in cmd.set_list.as_slice() {
             pp_list.set(cc);
         }
         for &cc in cmd.clear_list.as_slice() {
             pp_list.clear(cc);
         }
-        self.context.state.pp_list = pp_list;
+        self.context.state.nv.persistent.pp_list = pp_list;
         self.context.save_platform_settings();
 
         let response = request.into_response();
@@ -92,7 +92,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         self.return_if_nv_is_not_available()?;
 
-        self.context.state.algorithm_set = cmd.algorithm_set;
+        self.context.state.nv.persistent.algorithm_set = cmd.algorithm_set;
         self.context.save_platform_settings();
 
         let response = request.into_response();

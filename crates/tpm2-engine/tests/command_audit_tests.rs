@@ -22,7 +22,7 @@ fn test_get_command_audit_digest_with_zeroed_audit_hash_alg() {
     let mut tpm = TpmEngine::new(platform).unwrap();
     tpm.state.init_zeroed();
     // Intentionally test with audit_hash_alg = 0
-    tpm.state.audit_hash_alg = 0;
+    tpm.state.nv.persistent.audit_hash_alg = 0;
     tpm.init_storage();
 
     let startup_request = hex!("8001 0000000c 00000144 0000");
@@ -149,17 +149,23 @@ fn command_audit_state_persists_across_tpm_init() {
     assert_eq!(execute_rc(&mut tpm, &startup), 0);
 
     // Manufacture default.
-    let audited: Vec<TpmCc> = tpm.state.audit_commands.iter().collect();
+    let audited: Vec<TpmCc> = tpm.state.nv.persistent.audit_commands.iter().collect();
     assert_eq!(audited, [TpmCc::SetCommandCodeAuditStatus]);
-    assert_eq!(tpm.state.audit_counter, 0);
+    assert_eq!(tpm.state.nv.persistent.audit_counter, 0);
 
     // Add TPM2_GetRandom; the command itself is audited and starts a log.
     let cmd = set_command_code_audit_status_cmd(0x0010, &[0x17B], &[]);
     assert_eq!(execute_rc(&mut tpm, &cmd), 0);
-    assert!(tpm.state.audit_commands.is_audited(TpmCc::GetRandom));
-    assert_eq!(tpm.state.audit_counter, 1);
+    assert!(
+        tpm.state
+            .nv
+            .persistent
+            .audit_commands
+            .is_audited(TpmCc::GetRandom)
+    );
+    assert_eq!(tpm.state.nv.persistent.audit_counter, 1);
     assert_eq!(
-        usize::from(tpm.state.command_audit_digest.get_size()),
+        usize::from(tpm.state.nv.reset.command_audit_digest.get_size()),
         // The manufacture default is the context integrity hash.
         if cfg!(feature = "context-hash-sha256") {
             32
@@ -171,23 +177,32 @@ fn command_audit_state_persists_across_tpm_init() {
     // Change the algorithm: the digest is cleared and the counter unchanged.
     let cmd = set_command_code_audit_status_cmd(OTHER_AUDIT_ALG.0, &[], &[]);
     assert_eq!(execute_rc(&mut tpm, &cmd), 0);
-    assert_eq!(tpm.state.audit_hash_alg, OTHER_AUDIT_ALG.0);
-    assert_eq!(tpm.state.command_audit_digest.get_size(), 0);
-    assert_eq!(tpm.state.audit_counter, 1);
+    assert_eq!(tpm.state.nv.persistent.audit_hash_alg, OTHER_AUDIT_ALG.0);
+    assert_eq!(tpm.state.nv.reset.command_audit_digest.get_size(), 0);
+    assert_eq!(tpm.state.nv.persistent.audit_counter, 1);
 
     // An audited command starts a log of the other algorithm.
     let get_random = hex!("8001 0000000c 0000017b 0008");
     assert_eq!(execute_rc(&mut tpm, &get_random), 0);
-    assert_eq!(tpm.state.audit_counter, 2);
-    assert_eq!(tpm.state.command_audit_digest.get_size(), OTHER_AUDIT_ALG.1);
+    assert_eq!(tpm.state.nv.persistent.audit_counter, 2);
+    assert_eq!(
+        tpm.state.nv.reset.command_audit_digest.get_size(),
+        OTHER_AUDIT_ALG.1
+    );
 
     // `_TPM_Init` without an orderly shutdown, then TPM Reset.
     tpm.reset();
-    assert!(tpm.state.audit_commands.is_audited(TpmCc::GetRandom));
-    assert_eq!(tpm.state.audit_hash_alg, OTHER_AUDIT_ALG.0);
-    assert_eq!(tpm.state.audit_counter, 2);
+    assert!(
+        tpm.state
+            .nv
+            .persistent
+            .audit_commands
+            .is_audited(TpmCc::GetRandom)
+    );
+    assert_eq!(tpm.state.nv.persistent.audit_hash_alg, OTHER_AUDIT_ALG.0);
+    assert_eq!(tpm.state.nv.persistent.audit_counter, 2);
     assert_eq!(execute_rc(&mut tpm, &startup), 0);
-    assert_eq!(tpm.state.command_audit_digest.get_size(), 0);
+    assert_eq!(tpm.state.nv.reset.command_audit_digest.get_size(), 0);
 }
 
 /// An algorithm change combined with a command list is `TPM_RC_VALUE + P1` and changes
@@ -209,7 +224,13 @@ fn rejected_commands_leave_command_audit_state_unchanged() {
 
     let cmd = set_command_code_audit_status_cmd(OTHER_AUDIT_ALG.0, &[0x17B], &[]);
     assert_eq!(execute_rc(&mut tpm, &cmd), 0x1C4);
-    assert!(!tpm.state.audit_commands.is_audited(TpmCc::GetRandom));
+    assert!(
+        !tpm.state
+            .nv
+            .persistent
+            .audit_commands
+            .is_audited(TpmCc::GetRandom)
+    );
     // The context integrity hash: SHA-512, or SHA-384 without it (SHA-256 with
     // `context-hash-sha256`).
     let default_alg = if cfg!(feature = "context-hash-sha256") {
@@ -219,17 +240,17 @@ fn rejected_commands_leave_command_audit_state_unchanged() {
     } else {
         0x000C
     };
-    assert_eq!(tpm.state.audit_hash_alg, default_alg);
-    assert_eq!(tpm.state.audit_counter, 0);
-    assert_eq!(tpm.state.command_audit_digest.get_size(), 0);
+    assert_eq!(tpm.state.nv.persistent.audit_hash_alg, default_alg);
+    assert_eq!(tpm.state.nv.persistent.audit_counter, 0);
+    assert_eq!(tpm.state.nv.reset.command_audit_digest.get_size(), 0);
 
     // GetRandom with an oversized request still succeeds (it is clamped), so use a malformed
     // one: a trailing byte is TPM_RC_SIZE and must not be audited.
     let cmd = set_command_code_audit_status_cmd(0x0010, &[0x17B], &[]);
     assert_eq!(execute_rc(&mut tpm, &cmd), 0);
-    let digest = tpm.state.command_audit_digest;
+    let digest = tpm.state.nv.reset.command_audit_digest;
     let bad_get_random = hex!("8001 0000000d 0000017b 0008 00");
     assert_ne!(execute_rc(&mut tpm, &bad_get_random), 0);
-    assert_eq!(tpm.state.command_audit_digest, digest);
-    assert_eq!(tpm.state.audit_counter, 1);
+    assert_eq!(tpm.state.nv.reset.command_audit_digest, digest);
+    assert_eq!(tpm.state.nv.persistent.audit_counter, 1);
 }

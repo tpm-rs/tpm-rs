@@ -169,7 +169,7 @@ impl<'a> Simulator<'a> {
         self.firmware
             .set_firmware_svn(SimulatedFirmware::DEFAULT_SVN);
         // What `TpmEngine::new` + `Simulator::new` do.
-        self.context.state = tpm2_engine::GlobalState::default();
+        self.context.state = tpm2_engine::State::default();
         self.context.crypto_rng = <PlatformCryptoProvider as tpm2::crypto::Random>::from_entropy()
             .expect("the crypto backend's entropy source failed");
         self.context.init_storage();
@@ -535,7 +535,7 @@ impl PlatformConnection for Simulator<'_> {
 #[cfg(feature = "persistence")]
 impl Simulator<'_> {
     /// Extracts the complete state of the simulated TPM into `persisted`: the engine's state
-    /// (its `GlobalState`, NV storage and self-test state) and the simulator's platform state
+    /// (its `State`, NV storage and self-test state) and the simulator's platform state
     /// ([`PersistedPlatformState`]: the installed firmware image). Like the vTPM's Serialize, it
     /// is meant to be called between commands of a powered-on simulator with NV enabled; power
     /// and NV availability are not saved.

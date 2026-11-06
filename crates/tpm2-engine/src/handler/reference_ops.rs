@@ -147,10 +147,10 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             Some(p) if p.endorsement => {
                 let state = &self.context.state;
                 let (mut sh, mut eh) = ([0u8; 64], [0u8; 64]);
-                let sh_len = usize::from(state.sh_proof_size).min(64);
-                let eh_len = usize::from(state.eh_proof_size).min(64);
-                sh[..sh_len].copy_from_slice(&state.sh_proof[..sh_len]);
-                eh[..eh_len].copy_from_slice(&state.eh_proof[..eh_len]);
+                let sh_len = usize::from(state.nv.persistent.sh_proof_size).min(64);
+                let eh_len = usize::from(state.nv.persistent.eh_proof_size).min(64);
+                sh[..sh_len].copy_from_slice(&state.nv.persistent.sh_proof[..sh_len]);
+                eh[..eh_len].copy_from_slice(&state.nv.persistent.eh_proof[..eh_len]);
                 Some(((sh, sh_len), (eh, eh_len)))
             }
             _ => None,
@@ -161,7 +161,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let (key_len, seed_len) = {
             let engine = &mut *self.context;
             let mut rng = RefRng {
-                drbg: Some(&mut engine.state.drbg_state),
+                drbg: Some(&mut engine.state.nv.orderly.drbg_state),
                 entropy: Some(&mut *engine.platform.rng),
             };
             let key_len = match parms_and_id {

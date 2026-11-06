@@ -63,14 +63,14 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             .map_err(|_| TpmRc::SIZE.with(Position::parameter(1)))?;
 
         if auth_handle == Handle::RH_OWNER.0 {
-            self.context.state.owner_auth = new_auth;
+            self.context.state.nv.persistent.owner_auth = new_auth;
         } else if auth_handle == Handle::RH_ENDORSEMENT.0 {
-            self.context.state.endorsement_auth = new_auth;
+            self.context.state.nv.persistent.endorsement_auth = new_auth;
         } else if auth_handle == Handle::RH_PLATFORM.0 {
             self.nv_clear_orderly()?;
-            self.context.state.platform_auth = new_auth;
+            self.context.state.nv.clear.platform_auth = new_auth;
         } else if auth_handle == Handle::RH_LOCKOUT.0 {
-            self.context.state.lockout_auth = new_auth;
+            self.context.state.nv.persistent.lockout_auth = new_auth;
         }
 
         self.context.save_hierarchy_auths();

@@ -2,7 +2,7 @@
 //!
 //! Moved from the black-box `testing` crate: recomputing the HMAC requires the
 //! TPM-internal hierarchy proof and `totalResetCount`, which are only reachable
-//! through [`tpm2_engine::GlobalState`].
+//! through [`tpm2_engine::State`].
 
 mod common;
 
@@ -92,7 +92,7 @@ fn test_context_save_kdfa_bug() {
         "encContext must be size || encrypted"
     );
 
-    let proof = &tpm.state.sh_proof[..tpm.state.sh_proof_size as usize];
+    let proof = &tpm.state.nv.persistent.sh_proof[..tpm.state.nv.persistent.sh_proof_size as usize];
     // CONTEXT_INTEGRITY_HASH_ALG: the strongest implemented hash (Part 1, "Context Integrity
     // Protection"), or SHA-256 with `context-hash-sha256`.
     let mut hmac = tpm2::crypto::HmacContext::<TestCryptoProvider>::new(
@@ -100,7 +100,7 @@ fn test_context_save_kdfa_bug() {
         proof,
     )
     .unwrap();
-    hmac.update(&tpm.state.total_reset_count.to_be_bytes())
+    hmac.update(&tpm.state.nv.persistent.total_reset_count.to_be_bytes())
         .unwrap();
     hmac.update(&context.sequence.to_be_bytes()).unwrap();
     hmac.update(&context.saved_handle.0.to_be_bytes()).unwrap();

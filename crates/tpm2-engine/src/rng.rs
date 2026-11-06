@@ -8,13 +8,13 @@
 //!   `random_crypto` from the crypto backend's random number generator
 //!   ([`TpmEngine::crypto_rng`], a `C::Rng` created with [`tpm2::crypto::Random::from_entropy`]).
 //! - With the `reference-rng` feature, both draw from the TPM's own CTR-DRBG (`drbgDefault`,
-//!   [`GlobalState::drbg_state`]), the C reference TPMs' DRBG linked from their original code,
+//!   [`State::drbg_state`]), the C reference TPMs' DRBG linked from their original code,
 //!   seeded from the platform RNG as entropy source ([`crate::reference_rng`]); the call sites
 //!   are arranged so that the values are drawn in the order and with the sizes of the reference
 //!   code.
 //!
 //! [`TpmPlatform::rng`]: tpm2::platform::TpmPlatform
-//! [`GlobalState::drbg_state`]: crate::GlobalState
+//! [`State::drbg_state`]: crate::State
 
 use tpm2::crypto::{Crypto, Rng};
 use tpm2::errors::TpmRc;
@@ -68,7 +68,7 @@ impl<'a, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<'a, C, S
     #[cfg(feature = "reference-rng")]
     pub(crate) fn ref_rng(&mut self) -> RefRng<'_> {
         RefRng {
-            drbg: Some(&mut self.state.drbg_state),
+            drbg: Some(&mut self.state.nv.orderly.drbg_state),
             entropy: Some(&mut *self.platform.rng),
         }
     }
@@ -92,10 +92,10 @@ impl<'a, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<'a, C, S
     /// manufacture, `TPM2_Shutdown`, `TPM2_Clear` and Clock updates).
     #[cfg(feature = "reference-rng")]
     pub(crate) fn save_drbg_state(&mut self) {
-        let _ = self
-            .platform
-            .storage
-            .write_nv(DRBG_STATE_NV_OFFSET, &self.state.drbg_state.to_bytes());
+        let _ = self.platform.storage.write_nv(
+            DRBG_STATE_NV_OFFSET,
+            &self.state.nv.orderly.drbg_state.to_bytes(),
+        );
     }
 
     /// Reloads the DRBG state from NV (`NvRead(&go, NV_ORDERLY_DATA, ...)` at `_TPM_Init`):
@@ -110,7 +110,7 @@ impl<'a, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<'a, C, S
             .read_nv(DRBG_STATE_NV_OFFSET, &mut buf)
             .is_ok()
         {
-            self.state.drbg_state = crate::engine::DrbgState::from_bytes(&buf);
+            self.state.nv.orderly.drbg_state = crate::engine::DrbgState::from_bytes(&buf);
         }
     }
 
@@ -119,11 +119,11 @@ impl<'a, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<'a, C, S
     #[cfg(feature = "reference-rng")]
     pub(crate) fn manufacture_rng(&mut self) -> Result<(), TpmRc> {
         self.crypt_rand_init();
-        self.state.drbg_state.magic = 0;
+        self.state.nv.orderly.drbg_state.magic = 0;
         self.crypt_rand_startup()?;
         let mut nonce = [0u8; crate::engine::COMMIT_NONCE_SIZE];
         self.crypt_random_generate(&mut nonce)?;
-        self.state.commit_nonce = nonce;
+        self.state.nv.reset.commit_nonce = nonce;
         Ok(())
     }
 }

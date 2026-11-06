@@ -51,9 +51,9 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         // The mode is part of the state-clear data: changing it makes the TPM non-orderly
         // (`RETURN_IF_ORDERLY` before the change, `g_clearOrderly`), while a request for the
         // current mode changes nothing.
-        if cmd.state != self.context.state.read_only {
+        if cmd.state != self.context.state.nv.clear.read_only {
             self.nv_clear_orderly()?;
-            self.context.state.read_only = cmd.state;
+            self.context.state.nv.clear.read_only = cmd.state;
         }
 
         let response = request.into_response();

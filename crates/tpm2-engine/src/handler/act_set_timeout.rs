@@ -64,7 +64,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::VALUE.with(Position::parameter(1)));
         }
         // `if(NV_IS_ORDERLY) RETURN_IF_NV_IS_NOT_AVAILABLE;`: the orderly state is cleared below.
-        if state.orderly_state < SU_DA_USED_VALUE && !state.nv_available {
+        if state.nv.persistent.orderly_state < SU_DA_USED_VALUE && !state.nv_available {
             return Err(TpmRc::NV_UNAVAILABLE);
         }
         if !state.act.counters[index].update(cmd.start_timeout) {

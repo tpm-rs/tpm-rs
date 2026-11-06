@@ -56,7 +56,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::AUTH_FAIL.to_rc());
         }
 
-        self.context.state.disable_clear = disable;
+        self.context.state.nv.persistent.disable_clear = disable;
         // NV_SYNC_PERSISTENT(disableClear): `disableClear` is part of the persistent hierarchy
         // data and survives TPM Reset / power cycles.
         self.context.save_hierarchy_auths();

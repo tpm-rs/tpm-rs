@@ -304,7 +304,7 @@ fn session_slots_exhaust_and_recover_after_flush() {
     let mut sim = Tpm::new();
     let sym_null = None;
 
-    // 1. Start max allowed active sessions in GlobalState
+    // 1. Start max allowed active sessions in State
     let mut sessions = Vec::new();
     for _ in 0..max_loaded_sessions(&mut sim) {
         let session = start_auth_session(

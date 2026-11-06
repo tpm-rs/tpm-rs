@@ -2,7 +2,7 @@
 //! `cc-read-only-control` feature).
 //!
 //! `TPM2_ReadOnlyControl` (Part 3) enters and leaves the mode with Platform Authorization; the
-//! current mode is [`crate::GlobalState::read_only`], reported as `TPMA_STARTUP_CLEAR.readOnly`.
+//! current mode is [`crate::State::read_only`], reported as `TPMA_STARTUP_CLEAR.readOnly`.
 //! While it is SET:
 //!
 //! * the commands that are *Not Permitted* in Part 3, "Commands Permitted in Read-Only Mode"

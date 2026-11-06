@@ -42,7 +42,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             .storage
             .write_nv(
                 crate::storage::nv::NvHeader::RESET_COUNT_OFFSET,
-                &self.context.state.reset_count.to_be_bytes(),
+                &self.context.state.nv.persistent.reset_count.to_be_bytes(),
             )
             .map_err(|_| TpmRc::FAILURE)?;
         Ok(())
@@ -53,7 +53,13 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             .storage
             .write_nv(
                 crate::storage::nv::NvHeader::TOTAL_RESET_COUNT_OFFSET,
-                &self.context.state.total_reset_count.to_be_bytes(),
+                &self
+                    .context
+                    .state
+                    .nv
+                    .persistent
+                    .total_reset_count
+                    .to_be_bytes(),
             )
             .map_err(|_| TpmRc::FAILURE)?;
         Ok(())
@@ -64,7 +70,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             .storage
             .write_nv(
                 crate::storage::nv::NvHeader::ORDERLY_STATE_OFFSET,
-                &self.context.state.orderly_state.to_be_bytes(),
+                &self.context.state.nv.persistent.orderly_state.to_be_bytes(),
             )
             .map_err(|_| TpmRc::FAILURE)?;
         Ok(())
@@ -77,7 +83,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             .storage
             .write_nv(
                 crate::storage::nv::NvHeader::MAX_COUNTER_OFFSET,
-                &self.context.state.max_counter.to_be_bytes(),
+                &self.context.state.nv.persistent.max_counter.to_be_bytes(),
             )
             .map_err(|_| TpmRc::FAILURE)?;
         Ok(())
@@ -94,8 +100,8 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             .is_ok()
         {
             let nv_val = u64::from_be_bytes(buf);
-            if nv_val > self.context.state.max_counter {
-                self.context.state.max_counter = nv_val;
+            if nv_val > self.context.state.nv.persistent.max_counter {
+                self.context.state.nv.persistent.max_counter = nv_val;
             }
         }
         Ok(())
@@ -105,7 +111,9 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     /// (`NvClearOrderly()` in `NV_spt.c`). Fails with `TPM_RC_NV_UNAVAILABLE` if the TPM is currently
     /// in an orderly state (`< SU_DA_USED_VALUE`) and NV storage is unavailable.
     pub(crate) fn nv_clear_orderly(&mut self) -> Result<(), TpmRc> {
-        if self.context.state.orderly_state < SU_DA_USED_VALUE && !self.context.state.nv_available {
+        if self.context.state.nv.persistent.orderly_state < SU_DA_USED_VALUE
+            && !self.context.state.nv_available
+        {
             return Err(TpmRc::NV_UNAVAILABLE);
         }
         self.context.state.clear_orderly = true;
@@ -133,7 +141,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             .storage
             .write_nv(
                 crate::storage::nv::NvHeader::FAILED_TRIES_OFFSET,
-                &self.context.state.failed_tries.to_be_bytes(),
+                &self.context.state.nv.persistent.failed_tries.to_be_bytes(),
             )
             .map_err(|_| TpmRc::FAILURE)?;
         Ok(())
@@ -146,7 +154,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             .storage
             .write_nv(
                 crate::storage::nv::NvHeader::DRBG_OFFSET,
-                &self.context.state.drbg_state.to_bytes(),
+                &self.context.state.nv.orderly.drbg_state.to_bytes(),
             )
             .map_err(|_| TpmRc::FAILURE)?;
         Ok(())
@@ -163,7 +171,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             .read_nv(crate::storage::nv::NvHeader::DRBG_OFFSET, &mut buf)
             .is_ok()
         {
-            self.context.state.drbg_state = crate::engine::DrbgState::from_bytes(&buf);
+            self.context.state.nv.orderly.drbg_state = crate::engine::DrbgState::from_bytes(&buf);
         }
         Ok(())
     }
@@ -171,8 +179,8 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     /// Persists the dictionary attack recovery timers (`go.selfHealTimer`, `go.lockoutTimer`, 16 bytes at offset 112) to non-volatile storage.
     pub(crate) fn nv_sync_persistent_da_timers(&mut self) -> Result<(), TpmRc> {
         let mut buf = [0u8; 16];
-        buf[0..8].copy_from_slice(&self.context.state.self_heal_timer.to_be_bytes());
-        buf[8..16].copy_from_slice(&self.context.state.lockout_timer.to_be_bytes());
+        buf[0..8].copy_from_slice(&self.context.state.nv.orderly.self_heal_timer.to_be_bytes());
+        buf[8..16].copy_from_slice(&self.context.state.nv.orderly.lockout_timer.to_be_bytes());
         self.context
             .platform
             .storage
@@ -198,8 +206,8 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             let mut lo_bytes = [0u8; 8];
             sh_bytes.copy_from_slice(&buf[0..8]);
             lo_bytes.copy_from_slice(&buf[8..16]);
-            self.context.state.self_heal_timer = i64::from_be_bytes(sh_bytes);
-            self.context.state.lockout_timer = i64::from_be_bytes(lo_bytes);
+            self.context.state.nv.orderly.self_heal_timer = i64::from_be_bytes(sh_bytes);
+            self.context.state.nv.orderly.lockout_timer = i64::from_be_bytes(lo_bytes);
         }
         Ok(())
     }
@@ -240,7 +248,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         // 1. Validate startup rules & handle flags/localities
         let prev_orderly_state = self.validate_startup_state(startup_type)?;
 
-        self.context.state.orderly_state = prev_orderly_state;
+        self.context.state.nv.persistent.orderly_state = prev_orderly_state;
         self.context.state.prev_orderly_state = prev_orderly_state;
 
         // Select the startup kind (`Startup.c`): TPM Restart / Resume require a previous
@@ -270,7 +278,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         // of the state transition below, whose NV update of Clock (e.g. after a long power-on
         // before TPM2_Startup) SETs it again.
         if !is_orderly(prev_orderly_state) {
-            self.context.state.clock_safe = false;
+            self.context.state.nv.orderly.clock_safe = false;
         }
 
         // 2. Perform state updates on reset/restart counters
@@ -283,15 +291,19 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 self.nv_load_persistent_drbg_state()?;
             }
             if is_orderly(prev_orderly_state)
-                && self.context.state.drbg_state.magic == crate::engine::DRBG_MAGIC
+                && self.context.state.nv.orderly.drbg_state.magic == crate::engine::DRBG_MAGIC
             {
                 self.context
                     .state
+                    .nv
+                    .orderly
                     .drbg_state
                     .reseed(self.context.platform.rng)?;
             } else {
                 self.context
                     .state
+                    .nv
+                    .orderly
                     .drbg_state
                     .instantiate(self.context.platform.rng)?;
             }
@@ -307,18 +319,18 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             if kind == StartupKind::Reset {
                 let mut nonce = [0u8; crate::engine::COMMIT_NONCE_SIZE];
                 self.context.crypt_random_generate(&mut nonce)?;
-                self.context.state.commit_nonce = nonce;
+                self.context.state.nv.reset.commit_nonce = nonce;
                 let mut value = [0u8; 64];
                 self.context.crypt_random_generate(&mut value)?;
-                self.context.state.null_proof = value;
-                self.context.state.null_proof_size = 64;
+                self.context.state.nv.reset.null_proof = value;
+                self.context.state.nv.reset.null_proof_size = 64;
                 self.context.crypt_random_generate(&mut value)?;
-                self.context.state.null_seed = value;
-                self.context.state.null_seed_size = 64;
+                self.context.state.nv.reset.null_seed = value;
+                self.context.state.nv.reset.null_seed_size = 64;
             }
         }
 
-        self.context.state.orderly_state = SU_NONE_VALUE;
+        self.context.state.nv.persistent.orderly_state = SU_NONE_VALUE;
         self.nv_sync_persistent_orderly_state()?;
         self.context.state.pcr_reconfig = false;
 
@@ -329,19 +341,19 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         // the saved `STATE_CLEAR_DATA` values are kept.
         self.context.state.ph_enable = true;
         if kind != StartupKind::Resume {
-            self.context.state.sh_enable = true;
-            self.context.state.eh_enable = true;
-            self.context.state.ph_enable_nv = true;
+            self.context.state.nv.clear.sh_enable = true;
+            self.context.state.nv.clear.eh_enable = true;
+            self.context.state.nv.clear.ph_enable_nv = true;
             // Part 1, "Read-Only Mode of Operation": "A TPM exits Read-Only mode if the TPM
             // receives a `TPM2_Startup()` for TPM Reset or TPM Restart. However Read-Only mode
             // will remain enabled during TPM Resume."
-            self.context.state.read_only = false;
-            self.context.state.platform_auth = crate::owned::OwnedAuth::default();
-            self.context.state.platform_policy = crate::owned::OwnedDigest::default();
-            self.context.state.platform_alg = None;
+            self.context.state.nv.clear.read_only = false;
+            self.context.state.nv.clear.platform_auth = crate::owned::OwnedAuth::default();
+            self.context.state.nv.clear.platform_policy = crate::owned::OwnedDigest::default();
+            self.context.state.nv.clear.platform_alg = None;
 
             // `PCRStartup`: PCR authValues are only preserved on TPM Resume.
-            self.context.state.pcr_auth_value = crate::owned::OwnedAuth::default();
+            self.context.state.nv.clear.pcr_auth_value = crate::owned::OwnedAuth::default();
         }
         self.pcr_startup(kind);
         // `ActStartup()`: TPM Reset/Restart zero the ACTs and their policies, TPM Resume restores
@@ -357,14 +369,14 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         // `SessionStartup`: saved session contexts survive TPM Restart and Resume, but not a
         // TPM Reset. Loaded sessions never survive.
         if kind == StartupKind::Reset {
-            for sess in self.context.state.saved_sessions.iter_mut() {
+            for sess in self.context.state.nv.reset.saved_sessions.iter_mut() {
                 *sess = None;
             }
         }
         // `CommandAuditStartup`: the command audit digest survives TPM Restart and Resume (it is
         // part of the saved `STATE_RESET_DATA`) and is cleared on TPM Reset.
         if kind == StartupKind::Reset {
-            self.context.state.command_audit_digest = crate::owned::OwnedDigest::default();
+            self.context.state.nv.reset.command_audit_digest = crate::owned::OwnedDigest::default();
         }
         for obj in self.context.state.transient_objects.iter_mut() {
             *obj = None;
@@ -426,12 +438,13 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         }
         self.context.state.startup_locality_3 = locality == 3;
 
-        self.context.state.da_used = self.context.state.orderly_state == SU_DA_USED_VALUE;
+        self.context.state.da_used =
+            self.context.state.nv.persistent.orderly_state == SU_DA_USED_VALUE;
         if self.context.state.da_used {
-            self.context.state.orderly_state = SU_NONE_VALUE;
+            self.context.state.nv.persistent.orderly_state = SU_NONE_VALUE;
         }
 
-        let mut prev_orderly_state = self.context.state.orderly_state;
+        let mut prev_orderly_state = self.context.state.nv.persistent.orderly_state;
 
         if is_orderly(prev_orderly_state) {
             prev_orderly_state &= !(PRE_STARTUP_FLAG | STARTUP_LOCALITY_3);
@@ -448,12 +461,12 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             }
             // For Resume, the H-CRTM has to be the same as the previous boot.
             if self.context.state.drtm_pre_startup
-                != ((self.context.state.orderly_state & PRE_STARTUP_FLAG) != 0)
+                != ((self.context.state.nv.persistent.orderly_state & PRE_STARTUP_FLAG) != 0)
             {
                 return Err(TpmRc::VALUE.with(Position::parameter(1)));
             }
             if self.context.state.startup_locality_3
-                != ((self.context.state.orderly_state & STARTUP_LOCALITY_3) != 0)
+                != ((self.context.state.nv.persistent.orderly_state & STARTUP_LOCALITY_3) != 0)
             {
                 return Err(TpmRc::LOCALITY);
             }
@@ -475,35 +488,48 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         if self.context.state.timer_was_reset {
             self.context.state.timer_was_reset = false;
             if !is_orderly(prev_orderly_state) {
-                self.context.state.self_heal_timer = 0;
-                self.context.state.lockout_timer = 0;
+                self.context.state.nv.orderly.self_heal_timer = 0;
+                self.context.state.nv.orderly.lockout_timer = 0;
             } else {
-                let shutdown_time = self.context.state.shutdown_time_ms as i64;
-                self.context.state.self_heal_timer = self
+                let shutdown_time = self.context.state.nv.orderly.shutdown_time_ms as i64;
+                self.context.state.nv.orderly.self_heal_timer = self
                     .context
                     .state
+                    .nv
+                    .orderly
                     .self_heal_timer
                     .saturating_sub(shutdown_time);
-                self.context.state.lockout_timer = self
+                self.context.state.nv.orderly.lockout_timer = self
                     .context
                     .state
+                    .nv
+                    .orderly
                     .lockout_timer
                     .saturating_sub(shutdown_time);
             }
         }
 
-        if self.context.state.lockout_recovery == 0 && !self.context.state.lockout_auth_enabled {
-            self.context.state.lockout_auth_enabled = true;
+        if self.context.state.nv.persistent.lockout_recovery == 0
+            && !self.context.state.nv.persistent.lockout_auth_enabled
+        {
+            self.context.state.nv.persistent.lockout_auth_enabled = true;
             // NV_SYNC_PERSISTENT(lockOutAuthEnabled)
             self.context.save_hierarchy_auths();
         }
 
-        if self.context.state.recovery_time != 0
-            && self.context.state.failed_tries < self.context.state.max_tries
+        if self.context.state.nv.persistent.recovery_time != 0
+            && self.context.state.nv.persistent.failed_tries
+                < self.context.state.nv.persistent.max_tries
             && !is_orderly(prev_orderly_state)
             && self.context.state.da_used
         {
-            self.context.state.failed_tries = self.context.state.failed_tries.saturating_add(1);
+            self.context.state.nv.persistent.failed_tries = self
+                .context
+                .state
+                .nv
+                .persistent
+                .failed_tries
+                .saturating_add(1);
             self.context.state.da_used = false;
             self.nv_sync_persistent_failed_tries()?;
         }
@@ -514,11 +540,11 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
 
         match kind {
             StartupKind::Resume => {
-                self.context.state.restart_count += 1;
+                self.context.state.nv.reset.restart_count += 1;
             }
             StartupKind::Restart => {
-                self.context.state.clear_count += 1;
-                self.context.state.restart_count += 1;
+                self.context.state.nv.reset.clear_count += 1;
+                self.context.state.nv.reset.restart_count += 1;
             }
             StartupKind::Reset => {
                 // `HierarchyStartup`: nullProof and nullSeed are regenerated on every TPM Reset.
@@ -531,32 +557,34 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 {
                     let mut value = [0u8; 64];
                     self.context.random_platform(&mut value)?;
-                    self.context.state.null_seed = value;
-                    self.context.state.null_seed_size = 64;
+                    self.context.state.nv.reset.null_seed = value;
+                    self.context.state.nv.reset.null_seed_size = 64;
 
                     self.context.random_platform(&mut value)?;
-                    self.context.state.null_proof = value;
-                    self.context.state.null_proof_size = 64;
+                    self.context.state.nv.reset.null_proof = value;
+                    self.context.state.nv.reset.null_proof_size = 64;
 
                     let mut nonce = [0u8; crate::engine::COMMIT_NONCE_SIZE];
                     self.context.random_platform(&mut nonce)?;
-                    self.context.state.commit_nonce = nonce;
+                    self.context.state.nv.reset.commit_nonce = nonce;
                 }
-                self.context.state.commit_counter = 0;
-                self.context.state.commit_array = [0u8; 16];
+                self.context.state.nv.reset.commit_counter = 0;
+                self.context.state.nv.reset.commit_array = [0u8; 16];
 
-                self.context.state.clear_count = 0;
-                self.context.state.reset_count += 1;
+                self.context.state.nv.reset.clear_count = 0;
+                self.context.state.nv.persistent.reset_count += 1;
                 self.nv_sync_persistent_reset_count()?;
 
-                self.context.state.total_reset_count = self
+                self.context.state.nv.persistent.total_reset_count = self
                     .context
                     .state
+                    .nv
+                    .persistent
                     .total_reset_count
                     .checked_add(1)
                     .ok_or(TpmRc::FAILURE)?;
                 self.nv_sync_persistent_total_reset_count()?;
-                self.context.state.restart_count = 0;
+                self.context.state.nv.reset.restart_count = 0;
             }
         }
         Ok(())

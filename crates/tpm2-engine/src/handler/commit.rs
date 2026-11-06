@@ -68,7 +68,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         let mut k_buf = [0u8; 256];
         let mut l_buf = [0u8; 256];
         let mut e_buf = [0u8; 256];
-        let old_counter = self.context.state.commit_counter;
+        let old_counter = self.context.state.nv.reset.commit_counter;
         self.execute_commit_multiplications(
             curve,
             &actual_private_key,
@@ -358,10 +358,11 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     /// value is returned to the caller of `TPM2_Commit` and later passed as
     /// `inScheme.details.ecdaa.count` to consume the commitment.
     pub(crate) fn crypt_commit(&mut self) -> u16 {
-        let old_count = self.context.state.commit_counter as u16;
-        self.context.state.commit_counter = self.context.state.commit_counter.wrapping_add(1);
+        let old_count = self.context.state.nv.reset.commit_counter as u16;
+        self.context.state.nv.reset.commit_counter =
+            self.context.state.nv.reset.commit_counter.wrapping_add(1);
         let bit = usize::from(old_count & COMMIT_INDEX_MASK);
-        self.context.state.commit_array[bit / 8] |= 1 << (bit % 8);
+        self.context.state.nv.reset.commit_array[bit / 8] |= 1 << (bit % 8);
         old_count
     }
 
@@ -373,7 +374,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
     /// state is not modified by a failing command.
     pub(crate) fn end_commit(&mut self, count: u16) {
         let bit = usize::from(count & COMMIT_INDEX_MASK);
-        self.context.state.commit_array[bit / 8] &= !(1 << (bit % 8));
+        self.context.state.nv.reset.commit_array[bit / 8] &= !(1 << (bit % 8));
     }
 
     /// Recomputes the `r` value of an outstanding commitment for the signing phase of a split
@@ -394,13 +395,13 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         curve: TpmEccCurve,
     ) -> Result<([u8; MAX_ECC_ORDER_SIZE], usize), TpmRc> {
         let bit = usize::from(count & COMMIT_INDEX_MASK);
-        if self.context.state.commit_array[bit / 8] & (1 << (bit % 8)) == 0 {
+        if self.context.state.nv.reset.commit_array[bit / 8] & (1 << (bit % 8)) == 0 {
             return Err(TpmRc::VALUE.to_rc());
         }
         // Figure out what the counter value was when the commitment was made. If the low bits
         // of `count` are greater than or equal to the low bits of the current counter, the
         // counter has wrapped the window since then.
-        let mut current = self.context.state.commit_counter;
+        let mut current = self.context.state.nv.reset.commit_counter;
         if (count & COMMIT_INDEX_MASK) >= (current as u16 & COMMIT_INDEX_MASK) {
             current = current.wrapping_sub(u64::from(COMMIT_INDEX_MASK) + 1);
         }
@@ -506,7 +507,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
                 iterations += 1;
                 let mut hmac = self
                     .crypto()
-                    .hmac_stream(commit_kdf_hash(), &self.context.state.commit_nonce)
+                    .hmac_stream(commit_kdf_hash(), &self.context.state.nv.reset.commit_nonce)
                     .ok()?;
                 hmac.update(&iterations.to_be_bytes()).ok()?;
                 hmac.update(COMMIT_STRING).ok()?;

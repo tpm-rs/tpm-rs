@@ -55,18 +55,24 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             if auth_handle != Handle::RH_PLATFORM.0 && auth_handle != Handle::RH_ENDORSEMENT.0 {
                 return Err(TpmRc::AUTH_TYPE);
             }
-            if !self.context.state.eh_enable && state && auth_handle != Handle::RH_PLATFORM.0 {
+            if !self.context.state.nv.clear.eh_enable
+                && state
+                && auth_handle != Handle::RH_PLATFORM.0
+            {
                 return Err(TpmRc::AUTH_TYPE);
             }
-            self.context.state.eh_enable
+            self.context.state.nv.clear.eh_enable
         } else if enable == Handle::RH_OWNER.0 {
             if auth_handle != Handle::RH_PLATFORM.0 && auth_handle != Handle::RH_OWNER.0 {
                 return Err(TpmRc::AUTH_TYPE);
             }
-            if !self.context.state.sh_enable && state && auth_handle != Handle::RH_PLATFORM.0 {
+            if !self.context.state.nv.clear.sh_enable
+                && state
+                && auth_handle != Handle::RH_PLATFORM.0
+            {
                 return Err(TpmRc::AUTH_TYPE);
             }
-            self.context.state.sh_enable
+            self.context.state.nv.clear.sh_enable
         } else if enable == Handle::RH_PLATFORM.0 {
             // Re-enabling `phEnable` is implicitly impossible: platform authorization is
             // unavailable while `phEnable` is CLEAR.
@@ -79,7 +85,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             if auth_handle != Handle::RH_PLATFORM.0 {
                 return Err(TpmRc::AUTH_TYPE);
             }
-            self.context.state.ph_enable_nv
+            self.context.state.nv.clear.ph_enable_nv
         } else {
             return Err(TpmRc::VALUE.with(Position::parameter(1)));
         };
@@ -91,13 +97,13 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             self.nv_clear_orderly()?;
 
             if enable == Handle::RH_ENDORSEMENT.0 {
-                self.context.state.eh_enable = state;
+                self.context.state.nv.clear.eh_enable = state;
             } else if enable == Handle::RH_OWNER.0 {
-                self.context.state.sh_enable = state;
+                self.context.state.nv.clear.sh_enable = state;
             } else if enable == Handle::RH_PLATFORM.0 {
                 self.context.state.ph_enable = state;
             } else {
-                self.context.state.ph_enable_nv = state;
+                self.context.state.nv.clear.ph_enable_nv = state;
             }
 
             // If a hierarchy was just disabled, flush its loaded objects (`ObjectFlushHierarchy`),

@@ -128,8 +128,8 @@ fn test_da_self_heal_and_host_migration_monotonic_clock_discontinuity() {
     assert_eq!(rc, 0);
 
     // Simulate 3 failed tries registered at current tpm_time_ms
-    tpm.state.failed_tries = 3;
-    tpm.state.self_heal_timer = tpm.state.tpm_time_ms as i64;
+    tpm.state.nv.persistent.failed_tries = 3;
+    tpm.state.nv.orderly.self_heal_timer = tpm.state.tpm_time_ms as i64;
 
     // Simulate live migration from Host A (2,500,000,000 ms) to Host B (600,000 ms / 10 min uptime)
     tpm.platform.timer.set_time(600_000);
@@ -142,17 +142,17 @@ fn test_da_self_heal_and_host_migration_monotonic_clock_discontinuity() {
     assert_eq!(&resp[6..10], &[0, 0, 0, 0]);
 
     // Verify failed_tries did NOT underflow or instantly decay due to host clock discontinuity
-    assert_eq!(tpm.state.failed_tries, 3);
+    assert_eq!(tpm.state.nv.persistent.failed_tries, 3);
 
     // Advance Host B timer by 100 seconds (1 recovery_time interval)
     tpm.platform.timer.advance(100_000);
     tpm.execute_command_separate(&read_clock_req[..], &mut resp[..]);
-    assert_eq!(tpm.state.failed_tries, 2);
+    assert_eq!(tpm.state.nv.persistent.failed_tries, 2);
 
     // Advance Host B timer by 200 seconds (2 recovery_time intervals)
     tpm.platform.timer.advance(200_000);
     tpm.execute_command_separate(&read_clock_req[..], &mut resp[..]);
-    assert_eq!(tpm.state.failed_tries, 0);
+    assert_eq!(tpm.state.nv.persistent.failed_tries, 0);
 }
 
 #[test]
@@ -165,15 +165,15 @@ fn test_lockout_auth_recovery_timer() {
     assert_eq!(rc, 0);
 
     // Set non-empty lockout_auth
-    tpm.state.lockout_auth = tpm2::Tpm2bAuth::from_bytes(b"secret").unwrap().into();
+    tpm.state.nv.persistent.lockout_auth = tpm2::Tpm2bAuth::from_bytes(b"secret").unwrap().into();
 
     // Attempt DictionaryAttackLockReset with wrong password (empty auth) on TPM_RH_LOCKOUT
     let rc_fail = send_da_lock_reset(&mut tpm, 0x4000000A, 0x8002);
     assert_eq!(rc_fail, 0x0000098E); // TPM_RC_AUTH_FAIL (session 1)
-    assert!(!tpm.state.lockout_auth_enabled);
+    assert!(!tpm.state.nv.persistent.lockout_auth_enabled);
 
     // Clear lockout_auth to empty so password matches, but lockout_auth_enabled is still false
-    tpm.state.lockout_auth = tpm2::Tpm2bAuth::default().into();
+    tpm.state.nv.persistent.lockout_auth = tpm2::Tpm2bAuth::default().into();
     let rc_locked = send_da_lock_reset(&mut tpm, 0x4000000A, 0x8002);
     assert_eq!(rc_locked, 0x00000921); // TPM_RC_LOCKOUT
 
@@ -181,7 +181,7 @@ fn test_lockout_auth_recovery_timer() {
     tpm.platform.timer.advance(200_000);
     let rc_recovered = send_da_lock_reset(&mut tpm, 0x4000000A, 0x8002);
     assert_eq!(rc_recovered, 0);
-    assert!(tpm.state.lockout_auth_enabled);
+    assert!(tpm.state.nv.persistent.lockout_auth_enabled);
 }
 
 #[test]
@@ -193,15 +193,15 @@ fn test_da_timers_preserved_across_orderly_shutdown_and_startup() {
     let rc = send_da_parameters(&mut tpm, 0x4000000A, 5, 100, 200, 0x8002);
     assert_eq!(rc, 0);
 
-    tpm.state.failed_tries = 2;
-    tpm.state.self_heal_timer = tpm.state.tpm_time_ms as i64;
+    tpm.state.nv.persistent.failed_tries = 2;
+    tpm.state.nv.orderly.self_heal_timer = tpm.state.tpm_time_ms as i64;
 
     // Advance timer by 60 seconds (60% of recoveryTime)
     tpm.platform.timer.advance(60_000);
     let read_clock_req = hex!("8001 0000000a 00000181");
     let mut resp = [0u8; 256];
     tpm.execute_command_separate(&read_clock_req[..], &mut resp[..]);
-    assert_eq!(tpm.state.failed_tries, 2);
+    assert_eq!(tpm.state.nv.persistent.failed_tries, 2);
 
     // Orderly Shutdown(SU_STATE)
     let shutdown_req = hex!("8001 0000000c 00000145 0001");
@@ -216,13 +216,13 @@ fn test_da_timers_preserved_across_orderly_shutdown_and_startup() {
     assert_eq!(&resp[6..10], &[0, 0, 0, 0]);
 
     // Verify self_heal_timer was adjusted negatively by the 60,000 ms accumulated prior to shutdown
-    assert_eq!(tpm.state.self_heal_timer, -60_000);
+    assert_eq!(tpm.state.nv.orderly.self_heal_timer, -60_000);
     assert_eq!(tpm.state.tpm_time_ms, 0);
 
     // Advance timer by remaining 40 seconds (total 60s + 40s = 100s = 1 recoveryTime)
     tpm.platform.timer.advance(40_000);
     tpm.execute_command_separate(&read_clock_req[..], &mut resp[..]);
-    assert_eq!(tpm.state.failed_tries, 1);
+    assert_eq!(tpm.state.nv.persistent.failed_tries, 1);
 }
 
 #[test]
@@ -236,18 +236,18 @@ fn test_da_pending_on_nv_deferred_and_flushed_when_nv_becomes_available() {
     assert_eq!(u32::from_be_bytes(nv_buf), 0);
 
     // Transition to unorderly state (0xFFFF) and make NV temporarily unavailable
-    tpm.state.orderly_state = 0xFFFF;
+    tpm.state.nv.persistent.orderly_state = 0xFFFF;
     tpm.state.nv_available = false;
 
     // Set lockout auth so password verification fails
-    tpm.state.lockout_auth = tpm2::Tpm2bAuth::from_bytes(b"secret").unwrap().into();
+    tpm.state.nv.persistent.lockout_auth = tpm2::Tpm2bAuth::from_bytes(b"secret").unwrap().into();
     let rc_fail = send_da_lock_reset(&mut tpm, 0x4000000A, 0x8002);
     assert_eq!(rc_fail, 0x0000098E); // TPM_RC_AUTH_FAIL (session 1)
-    assert!(!tpm.state.lockout_auth_enabled);
+    assert!(!tpm.state.nv.persistent.lockout_auth_enabled);
     assert!(tpm.state.da_pending_on_nv);
 
     // Also simulate a non-lockout DA failure (failed_tries increment while NV unavailable)
-    tpm.state.failed_tries = 2;
+    tpm.state.nv.persistent.failed_tries = 2;
 
     // Verify NV offset 32 was NOT written while nv_available == false
     tpm.platform.storage.read_nv(32, &mut nv_buf).unwrap();
@@ -255,8 +255,8 @@ fn test_da_pending_on_nv_deferred_and_flushed_when_nv_becomes_available() {
 
     // Restore NV availability
     tpm.state.nv_available = true;
-    tpm.state.lockout_auth_enabled = true;
-    tpm.state.lockout_auth = tpm2::Tpm2bAuth::default().into();
+    tpm.state.nv.persistent.lockout_auth_enabled = true;
+    tpm.state.nv.persistent.lockout_auth = tpm2::Tpm2bAuth::default().into();
 
     // Trigger check_locked_out (via send_da_parameters with wrong password or any lockout check)
     let rc_check = send_da_parameters(&mut tpm, 0x4000000A, 5, 100, 200, 0x8002);

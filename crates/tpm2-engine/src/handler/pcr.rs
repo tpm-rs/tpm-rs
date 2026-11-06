@@ -594,7 +594,7 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
         self.nv_clear_orderly()?;
 
         let stripped = crate::util::strip_trailing_zeros(cmd.auth.get_buffer());
-        self.context.state.pcr_auth_value =
+        self.context.state.nv.clear.pcr_auth_value =
             crate::owned::OwnedAuth::from_bytes(stripped).map_err(|_| TpmRc::SIZE.to_rc())?;
 
         self.context.save_hierarchy_auths();
@@ -652,8 +652,9 @@ impl<'a, 'b, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync>
             return Err(TpmRc::VALUE.with(Position::parameter(3)));
         }
 
-        self.context.state.pcr_policy_alg = cmd.hash_alg;
-        self.context.state.pcr_policy = crate::owned::OwnedDigest::from(cmd.auth_policy);
+        self.context.state.nv.persistent.pcr_policy_alg = cmd.hash_alg;
+        self.context.state.nv.persistent.pcr_policy =
+            crate::owned::OwnedDigest::from(cmd.auth_policy);
         self.context.save_hierarchy_auths();
 
         let response = request.into_response();

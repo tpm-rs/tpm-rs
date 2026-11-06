@@ -267,7 +267,7 @@ impl<'a, C: Crypto, S: NvStorage, T: TpmTimer, R: Rng + Sync> TpmEngine<'a, C, S
             crypto: Tested::new(&self.self_test),
             #[cfg(feature = "reference-rng")]
             rng: Some(crate::reference_rng::RefRng {
-                drbg: Some(&mut self.state.drbg_state),
+                drbg: Some(&mut self.state.nv.orderly.drbg_state),
                 entropy: Some(&mut *self.platform.rng),
             }),
         }
