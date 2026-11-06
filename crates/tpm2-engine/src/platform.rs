@@ -3,11 +3,13 @@
 //! Everything the engine needs from its environment is behind the [`Platform`] trait: the
 //! cryptography backend, the monotonic timer, the platform random number generator, the type
 //! of the structure that holds the NV data ([`IndexState`], kept in the TPM state as
-//! [`Nv::index`]), the firmware identity, the secure transport layer and the immutable
-//! platform [`Info`]. The platform also decides how the NV data reaches external storage
+//! [`Nv::index`]), the firmware secrets ([`Platform::firmware_secret`],
+//! [`Platform::firmware_svn_secret`]), the secure transport layer and the platform
+//! [`PlatformInfo`] (including the firmware identity, [`Firmware`]). The platform also decides how the NV data reaches external storage
 //! ([`Platform::load_nv`], [`Platform::store_nv`]) and how the runtime state is serialized
-//! for migration ([`Platform::serialize`], [`Platform::deserialize`]). The component interfaces themselves ([`crate::storage::NvStorage`], [`TpmTimer`],
-//! [`TpmFirmware`], [`SecureChannel`]) live in [`tpm2::platform`].
+//! for migration ([`Platform::serialize`], [`Platform::deserialize`]). The component
+//! interfaces themselves ([`crate::storage::NvStorage`], [`TpmTimer`], [`SecureChannel`])
+//! live in [`tpm2::platform`].
 //!
 //! Every platform crate defines its own platform type implementing [`Platform`] (e.g.
 //! `tpm2_platform_linux::LinuxPlatform`) and builds a [`TpmEngine`](crate::TpmEngine) over it.
@@ -18,13 +20,14 @@ use crate::storage::IndexState;
 use crate::timer::TpmTimer;
 use tpm2::crypto::{Crypto, Rng};
 use tpm2::errors::TpmRc;
-use tpm2::platform::{SecureChannel, TpmFirmware};
+use tpm2::platform::{FirmwareSecretUnavailable, SecureChannel};
 use tpm2::{TpmCc, TpmaCc};
 
-/// Immutable information about the platform and the TPM vendor, reported by
-/// `TPM2_GetCapability(TPM_CAP_TPM_PROPERTIES)` and in attestation structures.
+/// Information about the platform and the TPM vendor, reported by
+/// `TPM2_GetCapability(TPM_CAP_TPM_PROPERTIES)` and in attestation structures
+/// ([`Platform::info`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Info {
+pub struct PlatformInfo {
     /// `TPM_PT_MANUFACTURER`: the vendor ID (four ASCII characters, big-endian).
     pub manufacturer: u32,
     /// `TPM_PT_VENDOR_STRING_1` .. `TPM_PT_VENDOR_STRING_4`: the vendor-specific description
@@ -32,33 +35,70 @@ pub struct Info {
     pub vendor_strings: [u32; 4],
     /// `TPM_PT_VENDOR_TPM_TYPE`: the vendor-defined TPM model.
     pub vendor_tpm_type: u32,
-    /// `TPM_PT_FIRMWARE_VERSION_1` (`gp.firmwareV1`): the most-significant 32 bits of the
-    /// vendor-specific firmware version.
-    pub firmware_version_1: u32,
-    /// `TPM_PT_FIRMWARE_VERSION_2` (`gp.firmwareV2`): the least-significant 32 bits of the
-    /// vendor-specific firmware version.
-    pub firmware_version_2: u32,
+    /// The running TPM firmware.
+    pub firmware: Firmware,
 }
 
-impl Info {
-    /// The information `tpm-rs` reports by default: manufacturer `"GOOG"`, vendor string
-    /// `"TPM-RUST"`, TPM type 1 and firmware version 1.0.
+/// The TPM firmware running on the platform ([`PlatformInfo::firmware`]).
+///
+/// The hash and the SVN change when the platform installs another firmware image (on real
+/// hardware a field upgrade, which restarts the TPM; a simulator changes them at any time);
+/// the platform updates them on its side, and the engine reads them whenever it needs them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Firmware {
+    /// `TPM_PT_FIRMWARE_VERSION_1` (`gp.firmwareV1`): the most-significant 32 bits of the
+    /// vendor-specific firmware version.
+    pub version_1: u32,
+    /// `TPM_PT_FIRMWARE_VERSION_2` (`gp.firmwareV2`): the least-significant 32 bits of the
+    /// vendor-specific firmware version.
+    pub version_2: u32,
+    /// The hash identifying the firmware image (the reference platform derives its dummy
+    /// Firmware Secret from it, [`tpm2::platform::firmware::reference_firmware_secret`]).
+    pub hash: u32,
+    /// `TPM_PT_FIRMWARE_SVN` (TPM 2.0 Part 2: "the current Security Version Number of the TPM
+    /// firmware"). SVN-limited hierarchies of a larger SVN are unavailable
+    /// (`TPM_RC_SVN_LIMITED`).
+    pub svn: u16,
+    /// `TPM_PT_FIRMWARE_MAX_SVN`: "the maximum value that `TPM_PT_FIRMWARE_SVN` may take in the
+    /// future", fixed for the platform.
+    pub max_svn: u16,
+}
+
+impl Firmware {
+    /// The firmware `tpm-rs` reports by default: version 1.0, hash 0 and SVN 0 (maximum 0).
     pub const DEFAULT: Self = Self {
-        manufacturer: 0x474F_4F47,                        // "GOOG"
-        vendor_strings: [0x5450_4D2D, 0x5255_5354, 0, 0], // "TPM-", "RUST"
-        vendor_tpm_type: 1,
-        firmware_version_1: 1,
-        firmware_version_2: 0,
+        version_1: 1,
+        version_2: 0,
+        hash: 0,
+        svn: 0,
+        max_svn: 0,
     };
 
     /// The firmware version in attestation structures (`TPMS_ATTEST.firmwareVersion`):
     /// `(TPM_PT_FIRMWARE_VERSION_1 << 32) | TPM_PT_FIRMWARE_VERSION_2` (`FillInAttestInfo()`).
-    pub const fn attest_firmware_version(&self) -> u64 {
-        ((self.firmware_version_1 as u64) << 32) | self.firmware_version_2 as u64
+    pub const fn attest_version(&self) -> u64 {
+        ((self.version_1 as u64) << 32) | self.version_2 as u64
     }
 }
 
-impl Default for Info {
+impl Default for Firmware {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
+impl PlatformInfo {
+    /// The information `tpm-rs` reports by default: manufacturer `"GOOG"`, vendor string
+    /// `"TPM-RUST"`, TPM type 1 and [`Firmware::DEFAULT`].
+    pub const DEFAULT: Self = Self {
+        manufacturer: 0x474F_4F47,                        // "GOOG"
+        vendor_strings: [0x5450_4D2D, 0x5255_5354, 0, 0], // "TPM-", "RUST"
+        vendor_tpm_type: 1,
+        firmware: Firmware::DEFAULT,
+    };
+}
+
+impl Default for PlatformInfo {
     fn default() -> Self {
         Self::DEFAULT
     }
@@ -67,7 +107,7 @@ impl Default for Info {
 /// Trait all platforms must implement to use `tpm2-engine`.
 ///
 /// A platform provides the components the engine uses (as associated types, so that the
-/// engine is monomorphized over them), the immutable platform [`Info`] and the
+/// engine is monomorphized over them), the immutable platform [`PlatformInfo`] and the
 /// customizations of how the TPM state reaches storage: loading and storing the NV data
 /// ([`Platform::load_nv`], [`Platform::store_nv`]) and serializing the runtime state
 /// ([`Platform::serialize`], [`Platform::deserialize`]).
@@ -86,10 +126,10 @@ pub trait Platform: Sized {
     /// ([`Nv::index`]); every [`crate::storage::NvStorage`] medium is one.
     type IndexState: IndexState;
 
-    /// Immutable info from the platform (firmware version, vendor ID, ...). Defaults to
-    /// [`Info::DEFAULT`].
-    fn info(&self) -> &Info {
-        &Info::DEFAULT
+    /// Information about the platform (vendor ID, the running firmware, ...), read by the engine
+    /// whenever it needs it. Defaults to [`PlatformInfo::DEFAULT`].
+    fn info(&self) -> &PlatformInfo {
+        &PlatformInfo::DEFAULT
     }
 
     /// The monotonic timer.
@@ -98,15 +138,27 @@ pub trait Platform: Sized {
     /// The platform random number generator.
     fn rng(&mut self) -> &mut Self::Rng;
 
-    /// Firmware identity ([`TpmFirmware`]: the Firmware Secret, the Firmware SVN Secrets and
-    /// the current and maximum firmware SVN). `None` (the default) is a TPM without
-    /// firmware-limited and SVN-limited hierarchies: their handles fail with
-    /// `TPM_RC_FW_LIMITED`/`TPM_RC_SVN_LIMITED`, they are not listed by `TPM2_GetCapability`,
-    /// and `TPM_PT_FIRMWARE_SVN`/`TPM_PT_FIRMWARE_MAX_SVN` are 0. The firmware is shared
-    /// (`Sync`) so that a platform can change it (e.g. a simulated firmware update) while the
-    /// TPM uses it.
-    fn firmware(&self) -> Option<&(dyn TpmFirmware + Sync)> {
-        None
+    /// Writes the Firmware Secret of the running firmware into `out` and returns its length (at
+    /// most `out.len()`); the TPM asks for as many octets as the seed or proof of the
+    /// firmware-limited hierarchy it derives from it. A platform that provides no Firmware
+    /// Secret (the default) has no firmware-limited and SVN-limited hierarchies: their handles
+    /// fail with `TPM_RC_FW_LIMITED`/`TPM_RC_SVN_LIMITED` and they are not listed by
+    /// `TPM2_GetCapability`.
+    fn firmware_secret(&self, out: &mut [u8]) -> Result<usize, FirmwareSecretUnavailable> {
+        let _ = out;
+        Err(FirmwareSecretUnavailable)
+    }
+
+    /// Writes the Firmware SVN Secret bound to `svn` into `out` and returns its length (at most
+    /// `out.len()`). It must fail for an SVN larger than the firmware's current SVN
+    /// ([`Firmware::svn`]). Unavailable by default.
+    fn firmware_svn_secret(
+        &self,
+        svn: u16,
+        out: &mut [u8],
+    ) -> Result<usize, FirmwareSecretUnavailable> {
+        let _ = (svn, out);
+        Err(FirmwareSecretUnavailable)
     }
 
     /// Secure channel information of the TPM's secure transport layer ([`SecureChannel`]: the

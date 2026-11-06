@@ -1,5 +1,5 @@
 //! Tests of the platform interface of the engine (tpm-rs#299): a custom [`Platform`] whose
-//! immutable [`Info`] the TPM reports, whose NV hooks ([`Platform::load_nv`],
+//! immutable [`PlatformInfo`] the TPM reports, whose NV hooks ([`Platform::load_nv`],
 //! [`Platform::store_nv`]) the engine calls at `_TPM_Init`, manufacture and after every
 //! command, and whose NV data structure ([`Platform::IndexState`]) lives in the TPM state; and
 //! the state hierarchy ([`State`], [`tpm2_engine::Nv`]).
@@ -11,7 +11,7 @@ use common::{FakeCrypto, FakeRng, FakeTimer};
 use tpm2::{TpmCap, TpmPt};
 use tpm2_engine::storage::IndexState;
 use tpm2_engine::storage::ram_storage_mock::RamStorageMock;
-use tpm2_engine::{Info, Nv, Platform, State, TpmEngine};
+use tpm2_engine::{Firmware, Nv, Platform, PlatformInfo, State, TpmEngine};
 
 /// The size of the NV memory of the test platforms.
 const NV_SIZE: usize = 2 * tpm2_engine::storage::nv_capacity::NV_MEMORY_SIZE as usize;
@@ -25,14 +25,14 @@ type Ram = RamStorageMock<NV_SIZE>;
 struct CountingPlatform {
     timer: FakeTimer,
     rng: FakeRng,
-    info: Info,
+    info: PlatformInfo,
     loads: usize,
     stores: usize,
     external: Option<Box<Ram>>,
 }
 
 impl CountingPlatform {
-    fn new(info: Info) -> Self {
+    fn new(info: PlatformInfo) -> Self {
         Self {
             timer: FakeTimer,
             rng: FakeRng::new(),
@@ -50,7 +50,7 @@ impl Platform for CountingPlatform {
     type Rng = FakeRng;
     type IndexState = Ram;
 
-    fn info(&self) -> &Info {
+    fn info(&self) -> &PlatformInfo {
         &self.info
     }
 
@@ -120,7 +120,7 @@ fn vendor_properties<P: Platform>(tpm: &mut TpmEngine<P>) -> Vec<(TpmPt, u32)> {
 }
 
 /// The expected vendor properties for `info`.
-fn expected_properties(info: &Info) -> Vec<(TpmPt, u32)> {
+fn expected_properties(info: &PlatformInfo) -> Vec<(TpmPt, u32)> {
     vec![
         (TpmPt::MANUFACTURER, info.manufacturer),
         (TpmPt::VENDOR_STRING_1, info.vendor_strings[0]),
@@ -128,18 +128,21 @@ fn expected_properties(info: &Info) -> Vec<(TpmPt, u32)> {
         (TpmPt::VENDOR_STRING_3, info.vendor_strings[2]),
         (TpmPt::VENDOR_STRING_4, info.vendor_strings[3]),
         (TpmPt::VENDOR_TPM_TYPE, info.vendor_tpm_type),
-        (TpmPt::FIRMWARE_VERSION_1, info.firmware_version_1),
-        (TpmPt::FIRMWARE_VERSION_2, info.firmware_version_2),
+        (TpmPt::FIRMWARE_VERSION_1, info.firmware.version_1),
+        (TpmPt::FIRMWARE_VERSION_2, info.firmware.version_2),
     ]
 }
 
-/// `FakePlatform` reports `Info::DEFAULT` ("GOOG", "TPM-RUST", firmware version 1.0) unless it
+/// `FakePlatform` reports `PlatformInfo::DEFAULT` ("GOOG", "TPM-RUST", firmware version 1.0) unless it
 /// is given other information.
 #[test]
 fn default_platform_reports_default_info() {
-    assert_eq!(Info::default(), Info::DEFAULT);
-    assert_eq!(Info::DEFAULT.manufacturer, u32::from_be_bytes(*b"GOOG"));
-    assert_eq!(Info::DEFAULT.attest_firmware_version(), 1 << 32);
+    assert_eq!(PlatformInfo::default(), PlatformInfo::DEFAULT);
+    assert_eq!(
+        PlatformInfo::DEFAULT.manufacturer,
+        u32::from_be_bytes(*b"GOOG")
+    );
+    assert_eq!(PlatformInfo::DEFAULT.firmware.attest_version(), 1 << 32);
 
     let (mut crypto, mut timer, mut rng) = (FakeCrypto, FakeTimer, FakeRng::new());
     let mut storage = Box::new(Ram::new());
@@ -149,34 +152,37 @@ fn default_platform_reports_default_info() {
     power_on_start_up(&mut *tpm);
     assert_eq!(
         vendor_properties(&mut *tpm),
-        expected_properties(&Info::DEFAULT)
+        expected_properties(&PlatformInfo::DEFAULT)
     );
 
-    let info = Info {
+    let info = PlatformInfo {
         vendor_strings: [
             u32::from_be_bytes(*b"ABCD"),
             u32::from_be_bytes(*b"EFGH"),
             0,
             0,
         ],
-        ..Info::DEFAULT
+        ..PlatformInfo::DEFAULT
     };
     tpm.platform = tpm.platform.with_info(info);
     assert_eq!(vendor_properties(&mut *tpm), expected_properties(&info));
 }
 
-/// A custom platform's `Info` is reported by `TPM2_GetCapability`, and its firmware version
+/// A custom platform's `PlatformInfo` is reported by `TPM2_GetCapability`, and its firmware version
 /// in attestation structures follows it (`(V1 << 32) | V2`).
 #[test]
 fn custom_platform_info_is_reported() {
-    let info = Info {
+    let info = PlatformInfo {
         manufacturer: u32::from_be_bytes(*b"TEST"),
         vendor_strings: [1, 2, 3, 4],
         vendor_tpm_type: 7,
-        firmware_version_1: 0x0102_0304,
-        firmware_version_2: 0x0506_0708,
+        firmware: Firmware {
+            version_1: 0x0102_0304,
+            version_2: 0x0506_0708,
+            ..Firmware::DEFAULT
+        },
     };
-    assert_eq!(info.attest_firmware_version(), 0x0102_0304_0506_0708);
+    assert_eq!(info.firmware.attest_version(), 0x0102_0304_0506_0708);
     let mut tpm = manufactured(CountingPlatform::new(info));
     power_on_start_up(&mut *tpm);
     assert_eq!(vendor_properties(&mut *tpm), expected_properties(&info));
@@ -186,7 +192,7 @@ fn custom_platform_info_is_reported() {
 /// after manufacture, `_TPM_Init` and every command (also a failing one).
 #[test]
 fn nv_hooks_are_called_at_init_and_after_every_command() {
-    let mut tpm = manufactured(CountingPlatform::new(Info::DEFAULT));
+    let mut tpm = manufactured(CountingPlatform::new(PlatformInfo::DEFAULT));
     assert_eq!((tpm.platform.loads, tpm.platform.stores), (0, 1));
 
     tpm.reset();
@@ -214,7 +220,7 @@ fn nv_hooks_are_called_at_init_and_after_every_command() {
 /// medium that loads the external copy of another TPM continues with its Primary Seeds.
 #[test]
 fn load_nv_supplies_and_store_nv_receives_the_nv_data() {
-    let mut first = CountingPlatform::new(Info::DEFAULT);
+    let mut first = CountingPlatform::new(PlatformInfo::DEFAULT);
     first.external = Some(Box::new(Ram::new()));
     let mut first = manufactured(first);
     power_on_start_up(&mut *first);
@@ -223,7 +229,7 @@ fn load_nv_supplies_and_store_nv_receives_the_nv_data() {
     let seed = first.state.nv.persistent.sp_seed;
     assert_ne!(seed, [0; 64]);
 
-    let mut second = CountingPlatform::new(Info::DEFAULT);
+    let mut second = CountingPlatform::new(PlatformInfo::DEFAULT);
     second.external = Some(external);
     let mut second = Box::new(TpmEngine::new(second, Ram::new()).unwrap());
     assert_eq!(second.state.nv.persistent.sp_seed_size, 0);
@@ -239,7 +245,7 @@ fn load_nv_supplies_and_store_nv_receives_the_nv_data() {
 /// `State::reinitialize` returns every value to that of a new TPM but keeps the NV data.
 #[test]
 fn reinitialize_keeps_only_the_nv_data() {
-    let mut tpm = manufactured(CountingPlatform::new(Info::DEFAULT));
+    let mut tpm = manufactured(CountingPlatform::new(PlatformInfo::DEFAULT));
     power_on_start_up(&mut *tpm);
     let nv = tpm.state.nv.index.as_slice().to_vec();
     assert!(tpm.state.initialized);

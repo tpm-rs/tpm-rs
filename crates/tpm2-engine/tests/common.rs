@@ -9,7 +9,7 @@ use tpm2::crypto::backend::{
     CmacState, EccCurve, HashState, HmacState, PrivateKey, RsaKey, SymmetricState, default_crypt,
 };
 use tpm2::crypto::{Block, CipherInput, CryptoError, Direction, Random, Rng};
-use tpm2::platform::{SecureChannel, TpmFirmware};
+use tpm2::platform::SecureChannel;
 use tpm2::{Handle, TpmSe};
 use tpm2::{Tpm2bNonce, TpmiAlgHash};
 use tpm2_engine::handler::SessionState;
@@ -859,14 +859,17 @@ where
     pub timer: &'a mut T,
     /// Platform random number generator ([`tpm2_engine::Platform::Rng`]).
     pub rng: &'a mut R,
-    /// Firmware identity ([`tpm2_engine::Platform::firmware`]); `None` by default ([`FakePlatform::new`]).
-    pub firmware: Option<&'a (dyn TpmFirmware + Sync)>,
+    /// Whether the platform provides the reference platform's dummy firmware secrets
+    /// ([`tpm2_engine::Platform::firmware_secret`], [`tpm2_engine::Platform::firmware_svn_secret`]),
+    /// enabling the firmware-limited and SVN-limited hierarchies; `false` by default
+    /// ([`FakePlatform::new`]).
+    pub limited_hierarchies: bool,
     /// Secure channel information of the TPM's secure transport layer
     /// ([`tpm2_engine::Platform::secure_channel`]); `None` by default ([`FakePlatform::new`]).
     pub secure_channel: Option<&'a (dyn SecureChannel + Sync)>,
-    /// Immutable platform information ([`tpm2_engine::Platform::info`]); [`tpm2_engine::Info::DEFAULT`] by default
+    /// Immutable platform information ([`tpm2_engine::Platform::info`]); [`tpm2_engine::PlatformInfo::DEFAULT`] by default
     /// ([`FakePlatform::new`]).
-    pub info: tpm2_engine::Info,
+    pub info: tpm2_engine::PlatformInfo,
     /// The type of the TPM's NV data structure ([`tpm2_engine::Platform::IndexState`]).
     index: PhantomData<fn() -> I>,
 }
@@ -885,18 +888,26 @@ where
             crypto,
             timer,
             rng,
-            firmware: None,
+            limited_hierarchies: false,
             secure_channel: None,
-            info: tpm2_engine::Info::DEFAULT,
+            info: tpm2_engine::PlatformInfo::DEFAULT,
             index: PhantomData,
         }
     }
 
-    /// Gives the TPM the firmware identity `firmware`, enabling the firmware-limited and
-    /// SVN-limited hierarchies (see [`tpm2_engine::Platform::firmware`]).
-    pub fn with_firmware(mut self, firmware: &'a (dyn TpmFirmware + Sync)) -> Self {
-        self.firmware = Some(firmware);
+    /// Gives the TPM the running firmware `firmware` with the reference platform's dummy
+    /// firmware secrets, enabling the firmware-limited and SVN-limited hierarchies (see
+    /// [`tpm2_engine::Platform::firmware_secret`]).
+    pub fn with_firmware(mut self, firmware: tpm2_engine::Firmware) -> Self {
+        self.set_firmware(firmware);
         self
+    }
+
+    /// Installs the running firmware `firmware` (with the reference platform's dummy firmware
+    /// secrets), like [`Self::with_firmware`]; a firmware update of the platform.
+    pub fn set_firmware(&mut self, firmware: tpm2_engine::Firmware) {
+        self.info.firmware = firmware;
+        self.limited_hierarchies = true;
     }
 
     /// Gives the TPM the secure transport layer `secure_channel` (see
@@ -907,7 +918,7 @@ where
     }
 
     /// Gives the TPM the platform information `info` (see [`tpm2_engine::Platform::info`]).
-    pub fn with_info(mut self, info: tpm2_engine::Info) -> Self {
+    pub fn with_info(mut self, info: tpm2_engine::PlatformInfo) -> Self {
         self.info = info;
         self
     }
@@ -925,7 +936,7 @@ where
     type Rng = R;
     type IndexState = I;
 
-    fn info(&self) -> &tpm2_engine::Info {
+    fn info(&self) -> &tpm2_engine::PlatformInfo {
         &self.info
     }
 
@@ -937,8 +948,28 @@ where
         self.rng
     }
 
-    fn firmware(&self) -> Option<&(dyn TpmFirmware + Sync)> {
-        self.firmware
+    fn firmware_secret(
+        &self,
+        out: &mut [u8],
+    ) -> Result<usize, tpm2::platform::FirmwareSecretUnavailable> {
+        if !self.limited_hierarchies {
+            return Err(tpm2::platform::FirmwareSecretUnavailable);
+        }
+        Ok(tpm2::platform::firmware::reference_firmware_secret(
+            self.info.firmware.hash,
+            out,
+        ))
+    }
+
+    fn firmware_svn_secret(
+        &self,
+        svn: u16,
+        out: &mut [u8],
+    ) -> Result<usize, tpm2::platform::FirmwareSecretUnavailable> {
+        if !self.limited_hierarchies {
+            return Err(tpm2::platform::FirmwareSecretUnavailable);
+        }
+        tpm2::platform::firmware::reference_firmware_svn_secret(self.info.firmware.svn, svn, out)
     }
 
     fn secure_channel(&self) -> Option<&(dyn SecureChannel + Sync)> {

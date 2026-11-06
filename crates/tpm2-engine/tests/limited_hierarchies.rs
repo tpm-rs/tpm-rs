@@ -12,11 +12,12 @@ use common::{
 use tpm2::commands::{CreatePrimary, GetCapability, Hash};
 use tpm2::crypto::kdfa_bits;
 use tpm2::errors::{Position, TpmRc};
-use tpm2::platform::SimulatedFirmware;
+use tpm2::platform::firmware::{REFERENCE_FIRMWARE_MAX_SVN, REFERENCE_FIRMWARE_SVN};
 use tpm2::{
     Handle, Tpm2b, Tpm2bMaxBuffer, TpmCap, TpmEccCurve, TpmPt, TpmaObject, TpmiAlgHash,
     TpmsCapabilityData, TpmsEccParms, TpmsEccPoint, TpmtPublic,
 };
+use tpm2_engine::Firmware;
 
 /// The context integrity hash of this build (SHA-512, or SHA-384 without SHA-512).
 fn context_hash() -> TpmiAlgHash {
@@ -150,7 +151,6 @@ fn firmware_svn_properties(tpm: &mut common::RealCryptoEngine<'_>) -> (u32, u32)
 /// base hierarchy keeps its own proof.
 #[test]
 fn limited_proofs_are_derived_from_the_base_proofs() {
-    let firmware = SimulatedFirmware::new(0x1122_3344, 10, 255);
     let (mut crypto, mut storage, mut timer, mut rng) = (
         TestCryptoProvider,
         FakeStorage::default(),
@@ -158,7 +158,12 @@ fn limited_proofs_are_derived_from_the_base_proofs() {
         FakeRng::new(),
     );
     let mut tpm = setup_real_crypto_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
-    tpm.platform.firmware = Some(&firmware);
+    tpm.platform.set_firmware(Firmware {
+        hash: 0x1122_3344,
+        svn: 10,
+        max_svn: 255,
+        ..Firmware::DEFAULT
+    });
 
     let sh_proof =
         tpm.state.nv.persistent.sh_proof[..tpm.state.nv.persistent.sh_proof_size as usize].to_vec();
@@ -205,7 +210,7 @@ fn limited_hierarchies_need_a_platform_firmware() {
         FakeRng::new(),
     );
     let mut tpm = setup_real_crypto_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
-    assert!(tpm.platform.firmware.is_none());
+    assert!(!tpm.platform.limited_hierarchies);
 
     assert_eq!(
         create_primary(&mut tpm, Handle::RH_FW_OWNER),
@@ -236,7 +241,6 @@ fn limited_hierarchies_need_a_platform_firmware() {
 /// that limit.
 #[test]
 fn svn_limit_follows_the_platform_firmware() {
-    let firmware = SimulatedFirmware::default();
     let (mut crypto, mut storage, mut timer, mut rng) = (
         TestCryptoProvider,
         FakeStorage::default(),
@@ -244,7 +248,11 @@ fn svn_limit_follows_the_platform_firmware() {
         FakeRng::new(),
     );
     let mut tpm = setup_real_crypto_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
-    tpm.platform.firmware = Some(&firmware);
+    tpm.platform.set_firmware(Firmware {
+        svn: REFERENCE_FIRMWARE_SVN,
+        max_svn: REFERENCE_FIRMWARE_MAX_SVN,
+        ..Firmware::DEFAULT
+    });
 
     assert_eq!(
         permanent_handles(&mut tpm, 0x4000_0140),
@@ -270,14 +278,15 @@ fn svn_limit_follows_the_platform_firmware() {
         create_primary(&mut tpm, svn(11)),
         Err(TpmRc::SVN_LIMITED.with(Position::handle(1)).get())
     );
-    firmware.set_firmware_svn(11);
+    // A firmware update: the platform changes its SVN.
+    tpm.platform.info.firmware.svn = 11;
     let handle = create_primary(&mut tpm, svn(11)).unwrap();
     let flush = tpm2::commands::FlushContext {
         flush_handle: handle,
     };
     execute_command(&mut tpm, &flush, &[]).unwrap();
     assert_eq!(firmware_svn_properties(&mut tpm), (11, 255));
-    firmware.set_firmware_svn(3);
+    tpm.platform.info.firmware.svn = 3;
     assert_eq!(
         create_primary(&mut tpm, svn(4)),
         Err(TpmRc::SVN_LIMITED.with(Position::handle(1)).get())

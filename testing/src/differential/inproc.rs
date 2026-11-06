@@ -52,7 +52,7 @@ use super::Implementation;
 use super::protocol::FirmwareSetting;
 use super::server::{self, Backend, Signal};
 use crate::seed::ReferenceSeed;
-use tpm2::platform::SimulatedFirmware;
+use tpm2::platform::firmware::{REFERENCE_FIRMWARE_HASH, REFERENCE_FIRMWARE_SVN};
 
 /// The entry points of one linked C reference (see the reference patches
 /// `harness-difftest-entry-points.patch`).
@@ -324,8 +324,8 @@ impl Backend for CReference {
         unsafe { (self.entry_points.init)() };
         // The firmware of a new reference process (the platform's statics
         // `currentHash`/`currentSvn` survive `init`).
-        self.set_firmware(FirmwareSetting::Hash(SimulatedFirmware::DEFAULT_HASH));
-        self.set_firmware(FirmwareSetting::Svn(SimulatedFirmware::DEFAULT_SVN));
+        self.set_firmware(FirmwareSetting::Hash(REFERENCE_FIRMWARE_HASH));
+        self.set_firmware(FirmwareSetting::Svn(REFERENCE_FIRMWARE_SVN));
     }
 
     fn set_firmware(&mut self, setting: FirmwareSetting) {

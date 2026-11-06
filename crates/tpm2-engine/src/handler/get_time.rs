@@ -105,7 +105,7 @@ impl<'b, P: Platform> CommandHandler<'b, P> {
         )?;
         let time_attest_info = TpmsTimeAttestInfo {
             time: self.get_time_info(),
-            firmware_version: self.context.platform.info().attest_firmware_version(),
+            firmware_version: self.context.platform.info().firmware.attest_version(),
         };
 
         let attest = TpmsAttest {

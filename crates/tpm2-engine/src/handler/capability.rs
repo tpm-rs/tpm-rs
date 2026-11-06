@@ -607,14 +607,11 @@ impl<'b, P: Platform> CommandHandler<'b, P> {
                     startup_clear_attr |= tpm2::TpmaStartupClear::READ_ONLY;
                 }
 
-                let (firmware_svn, firmware_max_svn) = match self.context.platform.firmware() {
-                    Some(firmware) => (
-                        u32::from(firmware.firmware_svn()),
-                        u32::from(firmware.firmware_max_svn()),
-                    ),
-                    None => (0, 0),
-                };
                 let info = *self.context.platform.info();
+                let (firmware_svn, firmware_max_svn) = (
+                    u32::from(info.firmware.svn),
+                    u32::from(info.firmware.max_svn),
+                );
                 let all_properties = [
                     (TpmPt::FAMILY_INDICATOR, tpm2::TPM_SPEC_FAMILY), // "2.0\0"
                     (TpmPt::LEVEL, tpm2::TPM_SPEC_LEVEL),
@@ -628,8 +625,8 @@ impl<'b, P: Platform> CommandHandler<'b, P> {
                     (TpmPt::VENDOR_STRING_3, info.vendor_strings[2]),
                     (TpmPt::VENDOR_STRING_4, info.vendor_strings[3]),
                     (TpmPt::VENDOR_TPM_TYPE, info.vendor_tpm_type),
-                    (TpmPt::FIRMWARE_VERSION_1, info.firmware_version_1),
-                    (TpmPt::FIRMWARE_VERSION_2, info.firmware_version_2),
+                    (TpmPt::FIRMWARE_VERSION_1, info.firmware.version_1),
+                    (TpmPt::FIRMWARE_VERSION_2, info.firmware.version_2),
                     (TpmPt::INPUT_BUFFER, 1024),
                     (
                         TpmPt::HR_TRANSIENT_MIN,

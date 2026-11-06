@@ -1,5 +1,4 @@
 use std::io::Cursor;
-use tpm2::platform::SimulatedFirmware;
 use tpm2_engine::storage::ram_storage_mock::RamStorageMock;
 use tpm2_platform_linux::{LinuxRng, LinuxTimer, PlatformCryptoProvider};
 use tpm2_simulator::{PlatformConnection, Simulator, SimulatorPlatformSignal};
@@ -10,8 +9,7 @@ fn test_invalid_platform_signal() {
     let mut storage = RamStorageMock::<{ tpm2_simulator::NV_STORAGE_SIZE }>::new();
     let mut timer = LinuxTimer::new();
     let mut rng = LinuxRng::new();
-    let firmware = SimulatedFirmware::default();
-    let _sim = Simulator::new(&mut crypto, &mut storage, &mut timer, &mut rng, &firmware).unwrap();
+    let _sim = Simulator::new(&mut crypto, &mut storage, &mut timer, &mut rng).unwrap();
 
     // 99 is not a platform signal code.
     assert!(SimulatorPlatformSignal::try_from(99).is_err());
@@ -23,9 +21,7 @@ fn test_oversized_tpm_command() {
     let mut storage = RamStorageMock::<{ tpm2_simulator::NV_STORAGE_SIZE }>::new();
     let mut timer = LinuxTimer::new();
     let mut rng = LinuxRng::new();
-    let firmware = SimulatedFirmware::default();
-    let mut sim =
-        Simulator::new(&mut crypto, &mut storage, &mut timer, &mut rng, &firmware).unwrap();
+    let mut sim = Simulator::new(&mut crypto, &mut storage, &mut timer, &mut rng).unwrap();
 
     // TPM_SEND_COMMAND = 8
     // Payload length = 8193 (oversized)

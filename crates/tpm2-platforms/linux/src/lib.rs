@@ -36,10 +36,14 @@ use tpm2::TpmCc;
 use tpm2::crypto::{Crypto, CryptoError, Random, Rng};
 #[cfg(feature = "ntc2-vendor-commands")]
 use tpm2::errors::TpmRc;
-use tpm2::platform::{SecureChannel, TpmFirmware};
+use tpm2::platform::SecureChannel;
+use tpm2::platform::firmware::{
+    FirmwareSecretUnavailable, REFERENCE_FIRMWARE_HASH, REFERENCE_FIRMWARE_MAX_SVN,
+    REFERENCE_FIRMWARE_SVN, reference_firmware_secret, reference_firmware_svn_secret,
+};
 use tpm2_engine::storage::IndexState;
 use tpm2_engine::timer::TpmTimer;
-use tpm2_engine::{Info, Nv, Platform, VendorCommand};
+use tpm2_engine::{Firmware, Nv, Platform, PlatformInfo, VendorCommand};
 
 #[cfg(feature = "rust")]
 pub use tpm2_crypto_rust::RustCryptoProvider as PlatformCryptoProvider;
@@ -266,9 +270,33 @@ impl Rng for LinuxRng {
     }
 }
 
+/// The firmware of a new Linux platform: that of the TCG reference platform (hash
+/// [`REFERENCE_FIRMWARE_HASH`], SVN [`REFERENCE_FIRMWARE_SVN`], maximum SVN
+/// [`REFERENCE_FIRMWARE_MAX_SVN`]) with the firmware version of [`Firmware::DEFAULT`].
+pub const DEFAULT_FIRMWARE: Firmware = Firmware {
+    hash: REFERENCE_FIRMWARE_HASH,
+    svn: REFERENCE_FIRMWARE_SVN,
+    max_svn: REFERENCE_FIRMWARE_MAX_SVN,
+    ..Firmware::DEFAULT
+};
+
+/// The platform information of a new Linux platform: [`PlatformInfo::DEFAULT`] with
+/// [`DEFAULT_FIRMWARE`].
+pub const DEFAULT_INFO: PlatformInfo = PlatformInfo {
+    firmware: DEFAULT_FIRMWARE,
+    ..PlatformInfo::DEFAULT
+};
+
 /// The Linux [`Platform`]: the TPM's crypto backend `C`, the Linux timer and platform RNG
-/// ([`LinuxTimer`], [`LinuxRng`]), the firmware identity, an optional secure transport layer
-/// and the platform [`Info`]. It borrows its components.
+/// ([`LinuxTimer`], [`LinuxRng`]), an optional secure transport layer and the platform
+/// [`PlatformInfo`], including the firmware identity ([`PlatformInfo::firmware`]). It borrows
+/// its components.
+///
+/// Its Firmware Secret and Firmware SVN Secrets are the *insecure* dummies of the TCG reference
+/// platform ([`reference_firmware_secret`], [`reference_firmware_svn_secret`]), derived from
+/// the firmware hash and SVN of [`PlatformInfo::firmware`]; installing new firmware is a
+/// change of those values ([`LinuxPlatform::set_firmware_hash`],
+/// [`LinuxPlatform::set_firmware_svn`]).
 ///
 /// `I` is the TPM's NV data structure ([`Platform::IndexState`], e.g. a mutable reference to
 /// an NV medium), which is given to [`tpm2_engine::TpmEngine::new`] together with the
@@ -281,13 +309,11 @@ pub struct LinuxPlatform<'a, C: Crypto, I: IndexState> {
     pub timer: &'a mut LinuxTimer,
     /// The platform random number generator.
     pub rng: &'a mut LinuxRng,
-    /// The firmware identity (the Firmware Secret, Firmware SVN Secrets and SVNs of the
-    /// firmware-limited and SVN-limited hierarchies).
-    pub firmware: &'a (dyn TpmFirmware + Sync),
     /// The secure transport layer ([`Platform::secure_channel`]); `None` by default.
     pub secure_channel: Option<&'a (dyn SecureChannel + Sync)>,
-    /// The platform information ([`Platform::info`]); [`Info::DEFAULT`] by default.
-    pub info: Info,
+    /// The platform information ([`Platform::info`]); [`DEFAULT_INFO`] by
+    /// default.
+    pub info: PlatformInfo,
     /// The state of the Nuvoton `NTC2_*` vendor commands (the `ntc2-vendor-commands` feature):
     /// RAM only, kept across `_TPM_Init`.
     #[cfg(feature = "ntc2-vendor-commands")]
@@ -297,23 +323,20 @@ pub struct LinuxPlatform<'a, C: Crypto, I: IndexState> {
 }
 
 impl<'a, C: Crypto, I: IndexState> LinuxPlatform<'a, C, I> {
-    /// A Linux platform with the crypto backend `crypto`, the timer `timer`, the platform RNG
-    /// `platform_rng` and the firmware identity `firmware` (a simulator uses
-    /// [`tpm2::platform::SimulatedFirmware`]), without a secure transport layer and with
-    /// [`Info::DEFAULT`].
+    /// A Linux platform with the crypto backend `crypto`, the timer `timer` and the platform
+    /// RNG `platform_rng`, without a secure transport layer and with
+    /// [`DEFAULT_INFO`].
     pub fn new(
         crypto: &'a mut C,
         timer: &'a mut LinuxTimer,
         platform_rng: &'a mut LinuxRng,
-        firmware: &'a (dyn TpmFirmware + Sync),
     ) -> Self {
         Self {
             crypto,
             timer,
             rng: platform_rng,
-            firmware,
             secure_channel: None,
-            info: Info::DEFAULT,
+            info: DEFAULT_INFO,
             #[cfg(feature = "ntc2-vendor-commands")]
             ntc2: ntc2::Ntc2State::default(),
             index: PhantomData,
@@ -329,6 +352,19 @@ impl<'a, C: Crypto, I: IndexState> LinuxPlatform<'a, C, I> {
         }
     }
 
+    /// Installs a firmware image with the hash `hash` (the reference's
+    /// `_plat__SetTpmFirmwareHash`): the Firmware Secret changes, and with it the seeds and
+    /// proofs of the firmware-limited hierarchies.
+    pub fn set_firmware_hash(&mut self, hash: u32) {
+        self.info.firmware.hash = hash;
+    }
+
+    /// Installs a firmware image with the SVN `svn`, capped at the maximum SVN (the
+    /// reference's `_plat__SetTpmFirmwareSvn`).
+    pub fn set_firmware_svn(&mut self, svn: u16) {
+        self.info.firmware.svn = svn.min(self.info.firmware.max_svn);
+    }
+
     /// Gives the TPM the secure transport layer `secure_channel` (see
     /// [`Platform::secure_channel`]).
     pub fn with_secure_channel(mut self, secure_channel: &'a (dyn SecureChannel + Sync)) -> Self {
@@ -337,7 +373,7 @@ impl<'a, C: Crypto, I: IndexState> LinuxPlatform<'a, C, I> {
     }
 
     /// Gives the TPM the platform information `info` (see [`Platform::info`]).
-    pub fn with_info(mut self, info: Info) -> Self {
+    pub fn with_info(mut self, info: PlatformInfo) -> Self {
         self.info = info;
         self
     }
@@ -349,7 +385,7 @@ impl<C: Crypto, I: IndexState> Platform for LinuxPlatform<'_, C, I> {
     type Rng = LinuxRng;
     type IndexState = I;
 
-    fn info(&self) -> &Info {
+    fn info(&self) -> &PlatformInfo {
         &self.info
     }
 
@@ -361,8 +397,16 @@ impl<C: Crypto, I: IndexState> Platform for LinuxPlatform<'_, C, I> {
         self.rng
     }
 
-    fn firmware(&self) -> Option<&(dyn TpmFirmware + Sync)> {
-        Some(self.firmware)
+    fn firmware_secret(&self, out: &mut [u8]) -> Result<usize, FirmwareSecretUnavailable> {
+        Ok(reference_firmware_secret(self.info.firmware.hash, out))
+    }
+
+    fn firmware_svn_secret(
+        &self,
+        svn: u16,
+        out: &mut [u8],
+    ) -> Result<usize, FirmwareSecretUnavailable> {
+        reference_firmware_svn_secret(self.info.firmware.svn, svn, out)
     }
 
     fn secure_channel(&self) -> Option<&(dyn SecureChannel + Sync)> {
@@ -400,13 +444,12 @@ pub fn create_linux_platform<'a, C, I>(
     crypto: &'a mut C,
     timer: &'a mut LinuxTimer,
     platform_rng: &'a mut LinuxRng,
-    firmware: &'a (dyn TpmFirmware + Sync),
 ) -> LinuxPlatform<'a, C, I>
 where
     C: Crypto,
     I: IndexState,
 {
-    LinuxPlatform::new(crypto, timer, platform_rng, firmware)
+    LinuxPlatform::new(crypto, timer, platform_rng)
 }
 
 impl Default for LinuxTimer {

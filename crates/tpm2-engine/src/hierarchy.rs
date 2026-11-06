@@ -24,7 +24,9 @@
 //! and proof are derived with Part 1, Equation "seed-proof-limited-hierarchy"
 //! ([`TpmEngine::hierarchy_primary_seed`], [`TpmEngine::hierarchy_proof`]).
 //!
-//! The firmware secrets come from the platform ([`tpm2::platform::TpmFirmware`]); a platform
+//! The firmware secrets come from the platform ([`Platform::firmware_secret`],
+//! [`Platform::firmware_svn_secret`]) and the current SVN from its
+//! [`Firmware`](crate::Firmware); a platform
 //! without them does not support limited hierarchies (`TPM_RC_FW_LIMITED`/`TPM_RC_SVN_LIMITED`).
 
 use crate::Platform;
@@ -176,14 +178,15 @@ impl<P: Platform> TpmEngine<P> {
         match modifier {
             Modifier::None => {}
             Modifier::Firmware => {
-                if self.platform.firmware().is_none() {
+                if !self.supports_limited_hierarchies() {
                     return Err(TpmRc::FW_LIMITED);
                 }
             }
-            Modifier::Svn(svn) => match self.platform.firmware() {
-                Some(firmware) if svn <= firmware.firmware_svn() => {}
-                _ => return Err(TpmRc::SVN_LIMITED),
-            },
+            Modifier::Svn(svn) => {
+                if !self.supports_limited_hierarchies() || svn > self.platform.info().firmware.svn {
+                    return Err(TpmRc::SVN_LIMITED);
+                }
+            }
         }
         match self.base_hierarchy_enabled(base) {
             Some(true) => Ok(()),
@@ -198,9 +201,12 @@ impl<P: Platform> TpmEngine<P> {
         self.validate_hierarchy(handle).is_ok()
     }
 
-    /// Whether the TPM supports limited hierarchies (its platform has a firmware identity).
+    /// Whether the TPM supports limited hierarchies: its platform provides a Firmware Secret
+    /// ([`Platform::firmware_secret`]).
     pub(crate) fn supports_limited_hierarchies(&self) -> bool {
-        self.platform.firmware().is_some()
+        self.platform
+            .firmware_secret(&mut [0u8; ADDITIONAL_SECRET_SIZE])
+            .is_ok()
     }
 
     /// The proof of hierarchy `handle` (the reference's `HierarchyGetProof`): `shProof`,
@@ -269,15 +275,18 @@ impl<P: Platform> TpmEngine<P> {
         let (additional_len, additional_label) = match modifier {
             Modifier::None => (0, &[][..]),
             Modifier::Firmware => {
-                let firmware = self.platform.firmware().ok_or(TpmRc::FW_LIMITED.to_rc())?;
-                let len = firmware
+                let len = self
+                    .platform
                     .firmware_secret(&mut additional)
                     .map_err(|_| TpmRc::FW_LIMITED.to_rc())?;
                 (len, FW_SECRET_LABEL)
             }
             Modifier::Svn(svn) => {
-                let firmware = self.platform.firmware().ok_or(TpmRc::SVN_LIMITED.to_rc())?;
-                let len = firmware
+                if !self.supports_limited_hierarchies() {
+                    return Err(TpmRc::SVN_LIMITED.to_rc());
+                }
+                let len = self
+                    .platform
                     .firmware_svn_secret(svn, &mut additional)
                     .map_err(|_| TpmRc::SVN_LIMITED.to_rc())?;
                 (len, SVN_SECRET_LABEL)

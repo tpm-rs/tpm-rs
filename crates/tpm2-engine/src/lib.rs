@@ -108,7 +108,8 @@ pub use platform_connection::SimulatorPlatformSignal;
 pub use platform_connection::{NO_STREAM, PlatformConnection};
 
 pub use platform::{
-    DeserializeError, Info, MAX_PLATFORM_VENDOR_COMMANDS, Platform, SerializeError, VendorCommand,
+    DeserializeError, Firmware, MAX_PLATFORM_VENDOR_COMMANDS, Platform, PlatformInfo,
+    SerializeError, VendorCommand,
 };
 
 /// Whether `TPM2_ECC_Parameters` reports a recommended KDF for the NIST curves

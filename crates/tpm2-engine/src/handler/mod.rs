@@ -1493,7 +1493,7 @@ impl<'b, P: Platform> CommandHandler<'b, P> {
         let mut clock_info = self.get_clock_info();
         // The plain-text firmware version (`FillInAttestInfo()`), which agrees with
         // `TPM_PT_FIRMWARE_VERSION_1`/`_2` of `TPM2_GetCapability` (the platform's `Info`).
-        let mut firmware_version = self.context.platform.info().attest_firmware_version();
+        let mut firmware_version = self.context.platform.info().firmware.attest_version();
 
         // Signers outside the Endorsement and Platform hierarchies (and TPM_RH_NULL) must not
         // reveal the plain reset/restart counts and firmware version. A signer in a

@@ -18,7 +18,7 @@ pub struct Args {
 
 use tpm2::Connection;
 use tpm2::commands::Command;
-use tpm2::platform::{SimulatedFirmware, SimulatedSecureChannel};
+use tpm2::platform::SimulatedSecureChannel;
 use tpm2_engine::{InternalError, TpmEngine};
 pub use tpm2_engine::{NO_STREAM, PlatformConnection, SimulatorPlatformSignal};
 use tpm2_platform_linux::{
@@ -112,9 +112,6 @@ pub struct Simulator<'a> {
     >,
     is_power_on: bool,
     is_nv_on: bool,
-    /// The simulated firmware the TPM's platform borrows; the `SetFirmwareHash` and
-    /// `SetFirmwareSvn` platform signals change it.
-    firmware: &'a SimulatedFirmware,
 }
 
 impl<'a> Simulator<'a> {
@@ -123,12 +120,11 @@ impl<'a> Simulator<'a> {
         storage: &'a mut RamStorageMock<NV_STORAGE_SIZE>,
         timer: &'a mut LinuxTimer,
         platform_rng: &'a mut LinuxRng,
-        firmware: &'a SimulatedFirmware,
     ) -> Result<Self, InternalError> {
         // Like the TCG reference, the simulator has a dummy secure transport layer that
         // protects every command with an SPDM session (`SimulatedSecureChannel`); the TPM uses
         // it with the `sec-channel` feature of `tpm2-engine`.
-        let platform = create_linux_platform(crypto, timer, platform_rng, firmware)
+        let platform = create_linux_platform(crypto, timer, platform_rng)
             .with_secure_channel(&SimulatedSecureChannel);
         let mut context = Box::new(TpmEngine::new(platform, storage)?);
         context.init_storage();
@@ -136,7 +132,6 @@ impl<'a> Simulator<'a> {
             context,
             is_power_on: false,
             is_nv_on: false,
-            firmware,
         })
     }
 
@@ -156,11 +151,8 @@ impl<'a> Simulator<'a> {
         *platform.rng = platform_rng;
         platform.reset_vendor_state();
         *self.context.state.nv.index = RamStorageMock::new();
-        // The firmware of a new simulator (`SimulatedFirmware::default`).
-        self.firmware
-            .set_firmware_hash(SimulatedFirmware::DEFAULT_HASH);
-        self.firmware
-            .set_firmware_svn(SimulatedFirmware::DEFAULT_SVN);
+        // The firmware of a new simulator.
+        platform.info.firmware = tpm2_platform_linux::DEFAULT_FIRMWARE;
         // What `TpmEngine::new` + `Simulator::new` do.
         self.context.state.reinitialize();
         self.context.crypto_rng = <PlatformCryptoProvider as tpm2::crypto::Random>::from_entropy()
@@ -423,7 +415,9 @@ impl<'a> Simulator<'a> {
                 // another hash (and so another Firmware Secret), whatever the power state.
                 let mut payload = [0u8; 4];
                 stream.read_exact(&mut payload)?;
-                self.firmware.set_firmware_hash(u32::from_be_bytes(payload));
+                self.context
+                    .platform
+                    .set_firmware_hash(u32::from_be_bytes(payload));
                 stream.write_all(&0u32.to_be_bytes())?;
             }
             SimulatorPlatformSignal::SetFirmwareSvn => {
@@ -431,7 +425,8 @@ impl<'a> Simulator<'a> {
                 // with another SVN (capped at the maximum SVN), whatever the power state.
                 let mut payload = [0u8; 4];
                 stream.read_exact(&mut payload)?;
-                self.firmware
+                self.context
+                    .platform
                     .set_firmware_svn(u32::from_be_bytes(payload) as u16);
                 stream.write_all(&0u32.to_be_bytes())?;
             }
@@ -558,8 +553,7 @@ fn new_started_simulator(timer: LinuxTimer, platform_rng: LinuxRng) -> Simulator
         Box::leak(Box::new(RamStorageMock::new()));
     let timer: &'static mut LinuxTimer = Box::leak(Box::new(timer));
     let platform_rng: &'static mut LinuxRng = Box::leak(Box::new(platform_rng));
-    let firmware: &'static SimulatedFirmware = Box::leak(Box::new(SimulatedFirmware::default()));
-    let mut sim = Simulator::new(crypto, storage, timer, platform_rng, firmware)
+    let mut sim = Simulator::new(crypto, storage, timer, platform_rng)
         .expect("failed to create TPM simulator");
     power_on_start_up(&mut sim);
     sim

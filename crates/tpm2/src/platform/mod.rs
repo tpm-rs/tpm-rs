@@ -14,8 +14,8 @@
 //! - [`storage`]: Low-level non-volatile memory (NV) access.
 //! - [`timer`]: Monotonic clock/timer interface.
 //! - [`pcr`]: Structure containing platform configuration register banks.
-//! - [`firmware`]: Firmware identity (Firmware Secret, Firmware SVN Secrets, SVNs) for the
-//!   firmware-limited and SVN-limited hierarchies.
+//! - [`firmware`]: Firmware secrets (Firmware Secret, Firmware SVN Secrets) of the
+//!   firmware-limited and SVN-limited hierarchies, and the reference platform's dummy ones.
 //! - [`secure_channel`]: Secure channel (SPDM) information of the TPM's secure transport layer.
 //!
 //! The `Platform` trait that combines these components for the TPM engine is defined by
@@ -27,7 +27,7 @@ pub mod secure_channel;
 pub mod storage;
 pub mod timer;
 
-pub use firmware::{FirmwareSecretUnavailable, SimulatedFirmware, TpmFirmware};
+pub use firmware::FirmwareSecretUnavailable;
 pub use pcr::PcrState;
 pub use secure_channel::{SecureChannel, SimulatedSecureChannel, SpdmSession};
 pub use storage::{NvStorage, StorageError};
