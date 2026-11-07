@@ -14,7 +14,16 @@ categories.workspace = true
 
 [dependencies]
 tpm2.workspace = true
+
 # BoringSSL's `bssl-sys` crate. The crates.io release is a placeholder: users
 # replace it with BoringSSL's own `bssl-sys` with `[patch.crates-io]`, so every
-# crate in their build shares one BoringSSL. See README.md.
+# crate in their build shares one BoringSSL. See README.md. docs.rs builds with
+# `--cfg docsrs` (see below), and uses `src/docsrs_bindings.rs` instead.
+[target.'cfg(not(docsrs))'.dependencies]
 bssl-sys = "0.1.0"
+
+[package.metadata.docs.rs]
+# Only x86_64 bindings are checked in.
+targets = ["x86_64-unknown-linux-gnu"]
+# Also passed to rustc (and Cargo, for the dependency above), not just rustdoc.
+rustc-args = ["--cfg", "docsrs"]

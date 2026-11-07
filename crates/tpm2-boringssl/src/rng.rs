@@ -9,6 +9,7 @@ use core::{
 use tpm2::crypto::{CryptoError, Random, Rng};
 
 use crate::BoringSsl;
+use crate::bssl_sys;
 
 const ENTROPY_LEN: usize = bssl_sys::CTR_DRBG_ENTROPY_LEN as usize;
 const MAX_GENERATE_LEN: usize = bssl_sys::CTR_DRBG_MAX_GENERATE_LENGTH as usize;

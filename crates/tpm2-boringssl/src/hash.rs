@@ -9,6 +9,7 @@ use tpm2::crypto::{
 };
 
 use crate::BoringSsl;
+use crate::bssl_sys;
 
 #[derive(Clone)]
 enum HashCtx {

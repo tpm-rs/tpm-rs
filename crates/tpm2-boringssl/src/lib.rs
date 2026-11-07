@@ -41,6 +41,24 @@
 #![no_std]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
+// docs.rs can't build BoringSSL (or patch `bssl-sys`), so it documents the
+// crate against checked-in bindings for just the items rustdoc needs instead
+// (see `boringssl.py docs-bindings`).
+#[cfg(not(docsrs))]
+extern crate bssl_sys;
+#[cfg(docsrs)]
+#[path = "docsrs_bindings.rs"]
+#[allow(
+    non_upper_case_globals,
+    non_camel_case_types,
+    non_snake_case,
+    dead_code,
+    unsafe_op_in_unsafe_fn,
+    clippy::all,
+    clippy::pedantic
+)]
+mod bssl_sys;
+
 mod cmac;
 mod curve25519;
 mod ecc;

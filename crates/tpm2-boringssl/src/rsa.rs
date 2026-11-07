@@ -12,6 +12,7 @@ use tpm2::{
     },
 };
 
+use crate::bssl_sys;
 use crate::{BoringSsl, BoringSslRng};
 
 pub(crate) struct BnPtr(NonNull<bssl_sys::BIGNUM>);

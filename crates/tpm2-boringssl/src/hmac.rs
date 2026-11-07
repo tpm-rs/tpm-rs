@@ -9,6 +9,7 @@ use tpm2::crypto::{
 };
 
 use crate::BoringSsl;
+use crate::bssl_sys;
 
 /// Streaming HMAC state backed by BoringSSL `HMAC_CTX`.
 pub struct BoringSslHmacState<const DIGEST_SIZE: usize> {

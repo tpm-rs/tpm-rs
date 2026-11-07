@@ -9,6 +9,8 @@ use core::{
 
 use tpm2::crypto::CryptoError;
 
+use crate::bssl_sys;
+
 /// Returns the `N` bytes `marshal` writes to a `CBB`, e.g. via
 /// `MLKEM768_marshal_public_key`.
 pub(crate) fn marshal<const N: usize>(

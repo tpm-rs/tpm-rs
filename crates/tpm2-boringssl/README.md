@@ -77,3 +77,23 @@ cargo test -p testing-crypto --no-default-features --features boringssl,rustcryp
 | `RUST_TARGET` | `boringssl.py build` | Rust target to generate bindings for (default: the host). |
 | `CMAKE_GENERATOR` | CMake | Build tool for a new build directory, e.g. `Ninja` (default: Make, on Unix). |
 | `CMAKE_BUILD_PARALLEL_LEVEL` | CMake | Number of parallel build jobs (default: the number of CPUs). |
+
+## docs.rs
+
+docs.rs can't build BoringSSL or patch `bssl-sys`. So `Cargo.toml` asks it to
+build with `--cfg docsrs`, which drops the `bssl-sys` dependency, and the crate
+is documented against `src/docsrs_bindings.rs` instead: bindings (for x86_64),
+which are never linked. rustdoc doesn't type-check function bodies, so these
+only have the BoringSSL types and constants named in signatures, fields, and
+constants (and what they depend on).
+
+`boringssl.py docs-bindings` finds that set automatically: starting from no
+bindings, it builds the docs as docs.rs does, adds the items rustdoc couldn't
+find, and repeats. Rerun it when the crate's types or the `bssl-sys` revision
+change:
+
+```sh
+crates/tpm2-boringssl/boringssl.py docs-bindings
+```
+
+CI checks that they're up to date, and builds the docs as docs.rs does.
