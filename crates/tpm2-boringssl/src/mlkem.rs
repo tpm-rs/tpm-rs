@@ -6,6 +6,7 @@ use tpm2::crypto::{
     backend::{Mlkem, MlkemKey, PrivateKey},
 };
 
+use crate::bssl_sys;
 use crate::{
     BoringSsl, BoringSslRng,
     util::{self, BsslBox},

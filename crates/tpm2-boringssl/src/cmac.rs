@@ -9,6 +9,7 @@ use tpm2::crypto::{
 };
 
 use crate::BoringSsl;
+use crate::bssl_sys;
 
 /// Streaming AES-CMAC state backed by BoringSSL `CMAC_CTX`.
 pub struct BoringSslCmacState<const KEY_SIZE: usize> {

@@ -12,6 +12,7 @@ use tpm2::crypto::{
     backend::{Ecc, EccCurve, PrivateKey},
 };
 
+use crate::bssl_sys;
 use crate::{
     BoringSsl, BoringSslRng,
     rsa::{BnCtxPtr, BnPtr},

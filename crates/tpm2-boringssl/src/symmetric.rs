@@ -9,6 +9,7 @@ use tpm2::crypto::{
 };
 
 use crate::BoringSsl;
+use crate::bssl_sys;
 
 /// Pre-expanded AES encryption and decryption key schedules.
 pub struct BoringSslAesKey<const KEY_SIZE: usize> {

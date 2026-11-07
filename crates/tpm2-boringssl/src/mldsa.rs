@@ -22,6 +22,7 @@ use tpm2::{
     },
 };
 
+use crate::bssl_sys;
 use crate::{
     BoringSsl, BoringSslRng,
     util::{self, BsslBox},

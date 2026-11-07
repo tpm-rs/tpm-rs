@@ -6,6 +6,7 @@ use tpm2::crypto::{
     backend::{EdwardsCurve, MontgomeryCurve, PrivateKey},
 };
 
+use crate::bssl_sys;
 use crate::{
     BoringSsl, BoringSslRng,
     rsa::{BnCtxPtr, BnPtr},
