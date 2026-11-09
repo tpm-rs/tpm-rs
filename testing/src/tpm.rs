@@ -259,7 +259,15 @@ impl Tpm {
     /// the C references, the differential fuzzer and its traces) always use
     /// locality 0, so these tests check `tpm-rs` alone.
     pub fn new_unmirrored() -> Self {
-        let seed = ReferenceSeed::choose();
+        Self::with_seed_unmirrored(ReferenceSeed::choose())
+    }
+
+    /// Like [`Self::with_seed`], but never mirrored to a C reference TPM and never recorded
+    /// (see [`trace`]): for tests that drive a C reference on their own (with
+    /// `differential::Reference::execute` of a differential build, launched with the same seed,
+    /// so that both TPMs have the same seeds and proofs), e.g. to hand saved contexts between
+    /// them.
+    pub fn with_seed_unmirrored(seed: ReferenceSeed) -> Self {
         eprintln!("tpm-rs: {SEED_ENV}={seed} (not mirrored)");
         Self {
             sim: create_reference_simulator!(seed.pid, seed.realtime_ms),

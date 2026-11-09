@@ -156,6 +156,7 @@ impl<'b, P: Platform> CommandHandler<'b, P> {
         let is_da_bound = bind != Handle::RH_NULL && self.context.has_da_protection(bind.0);
         let is_lockout_bound = is_da_bound && bind == Handle::RH_LOCKOUT;
 
+        let is_policy_session = cmd.session_type != TpmSe::HMAC;
         // Add to active sessions
         let session_state = SessionState {
             session_handle,
@@ -177,9 +178,19 @@ impl<'b, P: Platform> CommandHandler<'b, P> {
             policy_digest: [0u8; 64],
             policy_digest_len: auth_hash_digest_size,
             command_code: 0,
-            start_time: self.context.state.tpm_time_ms,
+            // Only a policy session starts a timing interval (C `SessionCreate()`:
+            // `SessionSetStartTime()` for policy and trial sessions); an HMAC session keeps 0.
+            start_time: if is_policy_session {
+                self.context.state.tpm_time_ms
+            } else {
+                0
+            },
             timeout: 0,
-            epoch: self.context.state.nv.persistent.time_epoch,
+            epoch: if is_policy_session {
+                self.context.state.nv.persistent.time_epoch
+            } else {
+                0
+            },
             is_auth_value_needed: false,
             is_password_needed: false,
             pcr_counter: None,

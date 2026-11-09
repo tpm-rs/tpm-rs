@@ -13,7 +13,7 @@ use tpm2::errors::TpmRc;
 use tpm2::{
     Handle, PublicParmsAndId, Tpm2bAuth, Tpm2bContextData, Tpm2bDigest, Tpm2bEccParameter,
     Tpm2bSensitiveData, TpmEccCurve, TpmSe, TpmaObject, TpmiAlgHash, TpmsEccParms, TpmsEccPoint,
-    TpmsSchemeEcdaa, TpmsSensitiveCreate, TpmtEccScheme, TpmtPublic, Unmarshal,
+    TpmsSchemeEcdaa, TpmsSensitiveCreate, TpmtEccScheme, TpmtPublic,
 };
 
 /// A context blob whose encrypted size is increased fails with TPM_RC_INTEGRITY.
@@ -178,21 +178,20 @@ fn tampered_object_blob_returns_integrity() {
     // integrity digest or the encrypted payload that the HMAC covers.
     let context = save_resp.context;
     let blob = context.context_blob.get_buffer().to_vec();
-    let mut unmarshal_blob = &blob[..];
-    let context_data = tpm2::TpmsContextData::unmarshal(&mut unmarshal_blob).unwrap();
+    let (integrity, encrypted) = crate::_common::context_blob_parts(&blob);
     assert_eq!(
-        context_data.integrity.get_buffer().len(),
+        integrity.len(),
         CONTEXT_INTEGRITY_DIGEST_SIZE,
         "ContextSave integrity must be a SHA-512 HMAC (strongest implemented hash)"
     );
-    assert!(!context_data.encrypted.get_buffer().is_empty());
+    assert!(!encrypted.is_empty());
 
     flush_context(&mut sim, object_handle).unwrap();
 
-    // Byte offsets inside the marshaled TPMS_CONTEXT_DATA blob:
-    // [integrity.size (2) | integrity (32) | encrypted.size (2) | encrypted ...].
+    // Byte offsets inside the blob: [integrity.size (2) | integrity (64) | encrypted ...]
+    // (the TCG reference's context, whose encrypted part has no size field).
     let integrity_offset = 2;
-    let size_offset = 2 + context_data.integrity.get_buffer().len();
+    let size_offset = 2 + integrity.len();
     let encrypted_offset = size_offset + 2;
     let flip = |offset: usize| {
         let mut b = blob.clone();
@@ -205,9 +204,9 @@ fn tampered_object_blob_returns_integrity() {
     truncated.pop();
     for (what, tampered) in [
         ("integrity", flip(integrity_offset)),
-        ("encrypted size (+256)", flip(size_offset)),
-        ("encrypted size (low bit)", flip(size_offset + 1)),
-        ("encrypted (first byte)", flip(encrypted_offset)),
+        ("encrypted (first byte)", flip(size_offset)),
+        ("encrypted (second byte)", flip(size_offset + 1)),
+        ("encrypted (third byte)", flip(encrypted_offset)),
         ("encrypted (last byte)", flip(blob.len() - 1)),
         ("appended byte", appended),
         ("truncated blob", truncated),

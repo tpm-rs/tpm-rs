@@ -6,6 +6,24 @@ pub(crate) fn strip_trailing_zeros(slice: &[u8]) -> &[u8] {
     &slice[..len]
 }
 
+/// The authValue of a new object as the TCG reference keeps it (`AdjustAuthSize()`, called by
+/// `TPM2_Create`, `TPM2_CreatePrimary`, `TPM2_CreateLoaded`): without its trailing zeros,
+/// zero-padded to the digest size of the object's `nameAlg` (`sizeof(TPMU_HA)` for none). The
+/// callers have checked that the value without its trailing zeros fits that size. An authValue is
+/// compared and used without its trailing zeros, so the padding changes no authorization; it is the
+/// object's authValue in its private area and in its saved context.
+pub(crate) fn adjust_auth_size(
+    auth: &[u8],
+    name_alg: Option<tpm2::TpmiAlgHash>,
+) -> crate::owned::OwnedAuth {
+    let size = name_alg.map_or(tpm2::TpmiAlgHash::MAX_DIGEST_BYTES, |alg| alg.digest_size());
+    let auth = strip_trailing_zeros(auth);
+    let mut padded = [0u8; crate::owned::OwnedAuth::CAP];
+    let len = core::cmp::max(size, auth.len()).min(padded.len());
+    padded[..auth.len().min(len)].copy_from_slice(&auth[..auth.len().min(len)]);
+    crate::owned::OwnedAuth::new(&padded[..len]).unwrap_or_default()
+}
+
 /// Compares two byte slices for equality in a way that attempts to avoid timing side-channels.
 ///
 /// ## Limitations and Security Warning

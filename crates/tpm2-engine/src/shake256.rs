@@ -4,15 +4,11 @@
 //! over a message that a signing or verification sequence receives in parts. Like the SHA state
 //! machine of [`crate::hash_state`], the state is explicit (the Keccak-f\[1600\] lanes and the
 //! number of bytes absorbed into the current block), so that a running computation can be
-//! exported as a fixed-size byte string ([`Shake256::to_bytes`]) and restored
-//! ([`Shake256::from_bytes`]), e.g. by `TPM2_ContextSave`/`TPM2_ContextLoad`.
+//! exported in the form of OpenSSL's `KECCAK1600_CTX` ([`Shake256::to_openssl`]) and restored
+//! ([`Shake256::from_openssl`]) by `TPM2_ContextSave`/`TPM2_ContextLoad`.
 
 /// The SHAKE256 rate (block size) in bytes: `(1600 - 2 * 256) / 8`.
 pub(crate) const SHAKE256_RATE: usize = 136;
-
-/// The size of an exported state ([`Shake256::to_bytes`]): the 25 lanes (little-endian) and the
-/// number of bytes absorbed into the current block (big-endian `u16`).
-pub(crate) const SHAKE256_EXPORT_SIZE: usize = 25 * 8 + 2;
 
 const ROUND_CONSTANTS: [u64; 24] = [
     0x0000_0000_0000_0001,
@@ -91,10 +87,19 @@ fn keccak_f1600(lanes: &mut [u64; 25]) {
 }
 
 /// A running SHAKE256 computation (absorbing phase).
+///
+/// Like OpenSSL's `KECCAK1600_CTX` (`A`, `buf`, `bufsz`), the lanes hold only the blocks absorbed
+/// so far and the bytes of the current, incomplete block are kept in `buf` until the block is
+/// complete, so that the state can also be exported in the form of the TCG reference's
+/// `OPENSSL_EXPORTED_SHAKE_STATE` ([`Shake256::to_openssl`]).
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub(crate) struct Shake256 {
+    /// The Keccak-f\[1600\] lanes after the last complete block (OpenSSL's `A`).
     lanes: [u64; 25],
-    /// The number of bytes absorbed into the current block (`< SHAKE256_RATE`).
+    /// The bytes of the current block (`buf[..position]`; OpenSSL's `buf`).
+    buf: [u8; SHAKE256_RATE],
+    /// The number of bytes absorbed into the current block (`< SHAKE256_RATE`; OpenSSL's
+    /// `bufsz`).
     position: usize,
 }
 
@@ -109,21 +114,32 @@ impl Shake256 {
     pub(crate) const fn new() -> Self {
         Self {
             lanes: [0; 25],
+            buf: [0; SHAKE256_RATE],
             position: 0,
         }
     }
 
-    /// XORs `byte` into the state at byte offset `index` (lanes are little-endian).
-    fn xor_byte(&mut self, index: usize, byte: u8) {
-        self.lanes[index / 8] ^= u64::from(byte) << (8 * (index % 8));
+    /// XORs `byte` into `lanes` at byte offset `index` (lanes are little-endian).
+    fn xor_byte(lanes: &mut [u64; 25], index: usize, byte: u8) {
+        lanes[index / 8] ^= u64::from(byte) << (8 * (index % 8));
+    }
+
+    /// The lanes with the bytes of the current block XORed in.
+    fn absorbed_lanes(&self) -> [u64; 25] {
+        let mut lanes = self.lanes;
+        for (index, &byte) in self.buf[..self.position].iter().enumerate() {
+            Self::xor_byte(&mut lanes, index, byte);
+        }
+        lanes
     }
 
     /// Absorbs `data`.
     pub(crate) fn update(&mut self, data: &[u8]) {
         for &byte in data {
-            self.xor_byte(self.position, byte);
+            self.buf[self.position] = byte;
             self.position += 1;
             if self.position == SHAKE256_RATE {
+                self.lanes = self.absorbed_lanes();
                 keccak_f1600(&mut self.lanes);
                 self.position = 0;
             }
@@ -131,14 +147,15 @@ impl Shake256 {
     }
 
     /// Finishes the computation and squeezes `out.len()` bytes of output into `out`.
-    pub(crate) fn finalize_into(mut self, out: &mut [u8]) {
+    pub(crate) fn finalize_into(self, out: &mut [u8]) {
+        let mut lanes = self.absorbed_lanes();
         // The SHAKE domain separation and pad10*1 (FIPS 202, Sections 5.1 and 6.2).
-        self.xor_byte(self.position, 0x1f);
-        self.xor_byte(SHAKE256_RATE - 1, 0x80);
+        Self::xor_byte(&mut lanes, self.position, 0x1f);
+        Self::xor_byte(&mut lanes, SHAKE256_RATE - 1, 0x80);
         for block in out.chunks_mut(SHAKE256_RATE) {
-            keccak_f1600(&mut self.lanes);
+            keccak_f1600(&mut lanes);
             for (index, byte) in block.iter_mut().enumerate() {
-                *byte = (self.lanes[index / 8] >> (8 * (index % 8))) as u8;
+                *byte = (lanes[index / 8] >> (8 * (index % 8))) as u8;
             }
         }
     }
@@ -150,30 +167,37 @@ impl Shake256 {
         shake.finalize_into(out);
     }
 
-    /// Exports the state (see [`SHAKE256_EXPORT_SIZE`]).
-    pub(crate) fn to_bytes(&self) -> [u8; SHAKE256_EXPORT_SIZE] {
-        let mut out = [0u8; SHAKE256_EXPORT_SIZE];
+    /// The state in OpenSSL's form (`KECCAK1600_CTX`, exported by the TCG reference's
+    /// `OsslMldsaExportShake256State()`): the 25 lanes of the complete blocks (`A`, 200 octets,
+    /// little-endian lanes), the number of bytes of the current block (`bufsz`) and those bytes
+    /// (`buf[..bufsz]`).
+    pub(crate) fn to_openssl(&self) -> ([u8; 200], usize, &[u8]) {
+        let mut a = [0u8; 200];
         for (i, lane) in self.lanes.iter().enumerate() {
-            out[i * 8..i * 8 + 8].copy_from_slice(&lane.to_le_bytes());
+            a[i * 8..i * 8 + 8].copy_from_slice(&lane.to_le_bytes());
         }
-        out[25 * 8..].copy_from_slice(&(self.position as u16).to_be_bytes());
-        out
+        (a, self.position, &self.buf[..self.position])
     }
 
-    /// Restores a state exported by [`Shake256::to_bytes`], or `None` if `bytes` is not a valid
-    /// export (a block position outside the rate).
-    pub(crate) fn from_bytes(bytes: &[u8; SHAKE256_EXPORT_SIZE]) -> Option<Self> {
-        let position = usize::from(u16::from_be_bytes([bytes[200], bytes[201]]));
-        if position >= SHAKE256_RATE {
+    /// Restores a state in OpenSSL's form ([`Shake256::to_openssl`]), or `None` if `pending` is
+    /// not shorter than a block.
+    pub(crate) fn from_openssl(a: &[u8; 200], pending: &[u8]) -> Option<Self> {
+        if pending.len() >= SHAKE256_RATE {
             return None;
         }
         let mut lanes = [0u64; 25];
         for (i, lane) in lanes.iter_mut().enumerate() {
             let mut le = [0u8; 8];
-            le.copy_from_slice(&bytes[i * 8..i * 8 + 8]);
+            le.copy_from_slice(&a[i * 8..i * 8 + 8]);
             *lane = u64::from_le_bytes(le);
         }
-        Some(Self { lanes, position })
+        let mut buf = [0u8; SHAKE256_RATE];
+        buf[..pending.len()].copy_from_slice(pending);
+        Some(Self {
+            lanes,
+            buf,
+            position: pending.len(),
+        })
     }
 }
 
@@ -207,8 +231,8 @@ mod tests {
         );
     }
 
-    /// Absorbing in parts, across block boundaries and through an export/import, and squeezing
-    /// more than one block gives the same output as one-shot absorbing.
+    /// Absorbing in parts, across block boundaries and through an export/import in OpenSSL's
+    /// form, and squeezing more than one block gives the same output as one-shot absorbing.
     #[test]
     fn streaming_and_export_match_one_shot() {
         let data: [u8; 700] = core::array::from_fn(|i| (i * 7 + 3) as u8);
@@ -219,19 +243,21 @@ mod tests {
         shake.update(&data[..1]);
         shake.update(&data[1..136]);
         shake.update(&data[136..300]);
-        let exported = shake.to_bytes();
-        let mut shake = Shake256::from_bytes(&exported).unwrap();
+        let (lanes, bufsz, pending) = shake.to_openssl();
+        // 300 = 2 * 136 + 28: two absorbed blocks and 28 pending bytes.
+        assert_eq!(bufsz, 28);
+        assert_eq!(pending, &data[272..300]);
+        let mut shake = Shake256::from_openssl(&lanes, pending).unwrap();
         shake.update(&data[300..]);
         let mut out = [0u8; 300];
         shake.finalize_into(&mut out);
         assert_eq!(out, expected);
     }
 
-    /// An export with a block position outside the rate is rejected.
+    /// A state in OpenSSL's form with a full block pending is rejected.
     #[test]
     fn invalid_export_rejected() {
-        let mut bytes = Shake256::new().to_bytes();
-        bytes[201] = SHAKE256_RATE as u8;
-        assert!(Shake256::from_bytes(&bytes).is_none());
+        let (lanes, _, _) = Shake256::new().to_openssl();
+        assert!(Shake256::from_openssl(&lanes, &[0; SHAKE256_RATE]).is_none());
     }
 }

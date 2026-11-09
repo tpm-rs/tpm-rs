@@ -80,6 +80,11 @@ pub enum Request {
     /// Install a firmware image with another hash or SVN (the MSSIM platform
     /// signals `TPM_SET_FW_HASH`/`TPM_SET_FW_SVN`, which carry a value).
     SetFirmware(FirmwareSetting),
+    /// Execute this command (at locality 0) without comparing its response,
+    /// which the reply returns ([`write_execute_reply`]): for tests that drive
+    /// the C reference on its own, e.g. to hand saved contexts between it and
+    /// `tpm-rs`.
+    Execute(Vec<u8>),
 }
 
 /// A firmware change of [`Request::SetFirmware`] (the reference platform's
@@ -171,6 +176,10 @@ pub fn write_request(w: &mut impl Write, request: &Request) -> io::Result<()> {
             w.write_all(&[8, kind])?;
             w.write_all(&value.to_be_bytes())
         }
+        Request::Execute(command) => {
+            w.write_all(&[9])?;
+            write_bytes(w, command)
+        }
     }
 }
 
@@ -205,6 +214,7 @@ pub fn read_request(r: &mut impl Read) -> io::Result<Option<Request>> {
                 }
             })
         }
+        9 => Request::Execute(read_bytes(r)?),
         t => {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -236,6 +246,40 @@ pub fn write_reply(w: &mut impl Write, result: &Result<(), Failure>) -> io::Resu
             write_bytes(w, message.as_bytes())?;
             write_bytes(w, response)
         }
+    }
+}
+
+/// Writes the reply to an [`Request::Execute`] (without flushing): status 3 and the response, or
+/// a failure like [`write_reply`].
+pub fn write_execute_reply(
+    w: &mut impl Write,
+    result: &Result<Vec<u8>, Failure>,
+) -> io::Result<()> {
+    match result {
+        Ok(response) => {
+            w.write_all(&[3])?;
+            write_bytes(w, &[])?;
+            write_bytes(w, response)
+        }
+        Err(failure) => write_reply(w, &Err(failure.clone())),
+    }
+}
+
+/// Reads the reply to an [`Request::Execute`]: the response, or a failure.
+pub fn read_execute_reply(r: &mut impl Read) -> io::Result<Result<Vec<u8>, Failure>> {
+    let [status] = read_array(r)?;
+    let message = String::from_utf8_lossy(&read_bytes(r)?).into_owned();
+    match status {
+        3 => Ok(Ok(read_bytes(r)?)),
+        1 => Ok(Err(Failure::new(message))),
+        2 => Ok(Err(Failure {
+            message,
+            reference_response: Some(read_bytes(r)?),
+        })),
+        s => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("unknown reply status {s} to an Execute request"),
+        )),
     }
 }
 
@@ -277,6 +321,7 @@ mod tests {
             Request::AdvanceClock(0),
             Request::SetFirmware(FirmwareSetting::Hash(0x0102_0304)),
             Request::SetFirmware(FirmwareSetting::Svn(0xFFFF)),
+            Request::Execute(vec![0x80, 0x01, 0, 0, 0, 10, 0, 0, 0x01, 0x7B]),
         ];
         let mut buf = Vec::new();
         for r in &requests {
@@ -287,6 +332,23 @@ mod tests {
             assert_eq!(read_request(&mut input).unwrap().as_ref(), Some(r));
         }
         assert_eq!(read_request(&mut input).unwrap(), None);
+    }
+
+    #[test]
+    fn execute_replies_round_trip() {
+        let mut buf = Vec::new();
+        write_execute_reply(&mut buf, &Ok(vec![0x80, 0x01, 0, 0, 0, 10, 0, 0, 0, 0])).unwrap();
+        write_execute_reply(&mut buf, &Err(Failure::new("no reference"))).unwrap();
+        let mut input = buf.as_slice();
+        assert_eq!(
+            read_execute_reply(&mut input).unwrap(),
+            Ok(vec![0x80, 0x01, 0, 0, 0, 10, 0, 0, 0, 0])
+        );
+        assert_eq!(
+            read_execute_reply(&mut input).unwrap(),
+            Err(Failure::new("no reference"))
+        );
+        assert!(input.is_empty());
     }
 
     #[test]

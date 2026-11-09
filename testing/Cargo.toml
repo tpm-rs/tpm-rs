@@ -139,6 +139,7 @@ differential = []
 # It has no SHA-512 (`ALG_SHA512 NO` upstream): build `testing` with
 # `--no-default-features` (without `sha512`) for it.
 target-tcgtpm = [
+    "tpm2-engine/context-format-pre-v185",
     "differential",
     "nist_p192",
     "bn_p638",
@@ -222,6 +223,7 @@ target-tcgtpm-v185 = [
 # The IBM software TPM (https://github.com/kgoldman/ibmswtpm2),
 # `testing/patches/ibmswtpm2/`.
 target-ibmswtpm2 = [
+    "tpm2-engine/context-format-pre-v185",
     "differential",
     "nist_p192",
     "bn_p638",

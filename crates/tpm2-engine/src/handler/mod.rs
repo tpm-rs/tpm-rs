@@ -34,6 +34,7 @@ mod clear;
 mod clear_control;
 mod clock_ops;
 pub(crate) mod commit;
+mod context_format;
 mod context_load;
 mod context_save;
 mod create;
@@ -412,16 +413,6 @@ impl Default for SecChannelPolicy {
             sc_key_name_hash: [0; 64],
             sc_key_name_hash_len: 0,
         }
-    }
-}
-
-impl SecChannelPolicy {
-    /// The bits of the context-save flags byte (bit 0 = *checkSecureChannel*, bit 1 =
-    /// *checkReqKey*, bit 2 = *checkTpmKey*).
-    pub(crate) fn flags(&self) -> u8 {
-        u8::from(self.check_secure_channel)
-            | (u8::from(self.check_req_key) << 1)
-            | (u8::from(self.check_tpm_key) << 2)
     }
 }
 

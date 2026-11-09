@@ -245,7 +245,10 @@ impl<'b, P: Platform> CommandHandler<'b, P> {
             handle,
             Self::object_seed_value(&in_public_struct.as_tpmt(), &obj_seed[..obj_seed_len]),
             object_name,
-            crate::owned::OwnedAuth::from(in_sensitive_struct.user_auth),
+            crate::util::adjust_auth_size(
+                in_sensitive_struct.user_auth.get_buffer(),
+                in_public_struct.name_alg,
+            ),
             in_public_struct,
             actual_private_key,
             actual_private_key_len,

@@ -20,9 +20,9 @@
 //! each, until stdin is closed.
 //!
 //! Each `Exchange` request carries a command and the response `tpm-rs` gave
-//! to it. The command is executed by the C reference (after translating the
-//! implementation-defined `contextBlob`s a test may pass back (exception 1),
-//! see [`DiffState::to_ref_command`]), and its response must be byte-identical
+//! to it. The command is executed unchanged by the C reference (`tpm-rs` saves
+//! the contexts of the C references byte for byte, so a `contextBlob` a test
+//! passes back is valid for both), and its response must be byte-identical
 //! to the `tpm-rs` response, except for the narrowly-scoped, documented
 //! rules in `compare_differential_response` (each keyed to a command code, a
 //! response code pair and a checked condition, and listed in
@@ -150,156 +150,39 @@ pub fn serve<B: Backend>(
     protocol::write_handshake(&mut output, &handshake)
         .and_then(|()| output.flush())
         .unwrap_or_else(|e| panic!("{implementation}: cannot write handshake: {e}"));
-    let mut reply = |result: &Result<(), Failure>| {
-        protocol::write_reply(&mut output, result)
+    fn reply(
+        output: &mut impl Write,
+        implementation: Implementation,
+        result: &Result<(), Failure>,
+    ) {
+        protocol::write_reply(output, result)
             .and_then(|()| output.flush())
             .unwrap_or_else(|e| panic!("{implementation}: cannot write reply: {e}"));
-    };
+    }
     let mut server = match Server::new(implementation, backend, test) {
         Ok(server) => {
-            reply(&Ok(()));
+            reply(&mut output, implementation, &Ok(()));
             server
         }
         Err(e) => {
-            reply(&Err(Failure::new(e)));
+            reply(&mut output, implementation, &Err(Failure::new(e)));
             std::process::exit(1);
         }
     };
     loop {
         match protocol::read_request(&mut input) {
+            Ok(Some(Request::Execute(command))) => {
+                let response = server.execute(&command);
+                protocol::write_execute_reply(&mut output, &Ok(response))
+                    .and_then(|()| output.flush())
+                    .unwrap_or_else(|e| panic!("{implementation}: cannot write reply: {e}"));
+            }
             Ok(Some(request)) => {
                 let result = server.handle(request);
-                reply(&result);
+                reply(&mut output, implementation, &result);
             }
             Ok(None) => return,
             Err(e) => panic!("{implementation}: cannot read request: {e}"),
-        }
-    }
-}
-
-/// The state the comparison keeps across commands: the translations of
-/// implementation-defined values and what the documented exceptions need.
-#[derive(Debug, Default)]
-pub struct DiffState {
-    /// `(tpm-rs contextBlob, C contextBlob)` of every successful
-    /// `TPM2_ContextSave` (exception 1).
-    pub context_blobs: Vec<(Vec<u8>, Vec<u8>)>,
-}
-
-impl DiffState {
-    /// The command to send to C: the command itself, except that the
-    /// `contextBlob` of a `TPM2_ContextLoad` is replaced by the C blob (see
-    /// [`DiffState::translate_context_load`]), or, for a blob that cannot be
-    /// translated, its integrity value is made invalid (see
-    /// [`DiffState::untranslated_context_load`]).
-    pub fn to_ref_command(&self, command: &[u8]) -> Vec<u8> {
-        let Some((_, code)) = header(command) else {
-            return command.to_vec();
-        };
-        if code == cc::CONTEXT_LOAD {
-            return self
-                .translate_context_load(command)
-                .unwrap_or_else(|| Self::untranslated_context_load(command));
-        }
-        command.to_vec()
-    }
-
-    /// Translates the `contextBlob` of a `TPM2_ContextLoad` command to the
-    /// C reference's blob for the same saved context; `None` to send the
-    /// command unchanged.
-    ///
-    /// The `contextBlob` layout is implementation-defined, so a blob produced
-    /// by `tpm-rs`'s `TPM2_ContextSave` can never be loaded by C. Only a blob
-    /// that is byte-for-byte identical to one `tpm-rs` returned earlier on
-    /// this TPM is translated (to the blob C returned for the same
-    /// `TPM2_ContextSave`; the `TPM2B` size and the `commandSize` are
-    /// adjusted). Every other blob (tampered, truncated, foreign) is passed
-    /// to C unchanged, so neither implementation's rejection of a modified
-    /// blob is fabricated by the harness. A command whose `commandSize` is not
-    /// its length is also passed unchanged: recomputing the size would hide
-    /// the `TPM_RC_COMMAND_SIZE` error from C (and the blob is never read).
-    pub fn translate_context_load(&self, command: &[u8]) -> Option<Vec<u8>> {
-        if be32(command, 2)? as usize != command.len() {
-            return None;
-        }
-        let (_, params) = command_parts(command, 0)?;
-        // TPMS_CONTEXT: sequence (8), savedHandle (4), hierarchy (4),
-        // contextBlob (TPM2B).
-        let size_at = command.len() - params.len() + 16;
-        let blob_len = be16(command, size_at)? as usize;
-        let blob_at = size_at + 2;
-        let blob = command.get(blob_at..blob_at + blob_len)?;
-        // Bytes after the context fail the command with `TPM_RC_SIZE` whatever the blob is
-        // (parameter unmarshaling precedes the blob's integrity check), and a larger C blob
-        // could push the command beyond `MAX_COMMAND_SIZE` (`TPM_RC_COMMAND_SIZE` in C only):
-        // such a command is sent unchanged.
-        if blob_at + blob_len != command.len() {
-            return None;
-        }
-        let (_, ref_blob) = self
-            .context_blobs
-            .iter()
-            .rev()
-            .find(|(rs_blob, _)| rs_blob.as_slice() == blob)?;
-        let ref_len = u16::try_from(ref_blob.len()).ok()?;
-        let mut out = Vec::with_capacity(command.len() - blob_len + ref_blob.len());
-        out.extend_from_slice(&command[..size_at]);
-        out.extend_from_slice(&ref_len.to_be_bytes());
-        out.extend_from_slice(ref_blob);
-        out.extend_from_slice(&command[blob_at + blob_len..]);
-        let total = u32::try_from(out.len()).ok()?;
-        out[2..6].copy_from_slice(&total.to_be_bytes());
-        Some(out)
-    }
-
-    /// A `TPM2_ContextLoad` whose blob cannot be translated (not one `tpm-rs`
-    /// saved on this TPM: tampered, truncated, or from another run), with its
-    /// integrity value zeroed (never a valid HMAC; unlike a reversible change,
-    /// it cannot turn a tampered integrity value back into the authentic one).
-    ///
-    /// All implementations share the hierarchy proofs (one seed) and the
-    /// integrity HMAC of TPM 2.0 Part 1, "Context Integrity Protection"
-    /// (`HMAC(hProof, resetValue || sequence || handle || encContext)`), so an
-    /// authentic `tpm-rs` blob from another run (e.g. a fuzzing seed) would
-    /// also pass the integrity check of a C reference, which would then
-    /// interpret `tpm-rs`'s implementation-defined contents as its own
-    /// (`ibmswtpm2` loads garbage, `tcgtpm` enters failure mode on the
-    /// fingerprint). On a real TPM no other implementation can authenticate a
-    /// blob, so C must reject it as unauthentic (`TPM_RC_INTEGRITY`, or a size
-    /// error the integrity check never reaches; exception 9). Commands without
-    /// a complete blob or a non-empty integrity value are sent unchanged.
-    pub fn untranslated_context_load(command: &[u8]) -> Vec<u8> {
-        let mut out = command.to_vec();
-        let Some((_, params)) = command_parts(command, 0) else {
-            return out;
-        };
-        let size_at = command.len() - params.len() + 16;
-        let (Some(blob_len), Some(integrity_len)) =
-            (be16(command, size_at), be16(command, size_at + 2))
-        else {
-            return out;
-        };
-        let integrity_at = size_at + 4;
-        let integrity_end = integrity_at + integrity_len as usize;
-        if 2 + integrity_len as usize <= blob_len as usize && integrity_end <= command.len() {
-            out[integrity_at..integrity_end].fill(0);
-        }
-        out
-    }
-
-    /// Records the `contextBlob` pair of a successful `TPM2_ContextSave`
-    /// (`expected` from `tpm-rs`, `actual` from C) after a command
-    /// completes.
-    pub fn post_command(&mut self, command: &[u8], expected: &[u8], actual: &[u8]) {
-        if header(command).map(|(_, code)| code) != Some(cc::CONTEXT_SAVE) {
-            return;
-        }
-        fn blob(rsp: &[u8]) -> Option<&[u8]> {
-            split_response(rsp, cc::CONTEXT_SAVE).and_then(|r| context_blob(r.params))
-        }
-        if let (Some(rs_blob), Some(ref_blob)) = (blob(expected), blob(actual)) {
-            self.context_blobs
-                .push((rs_blob.to_vec(), ref_blob.to_vec()));
         }
     }
 }
@@ -334,8 +217,6 @@ pub struct Server<B: Backend> {
     commands: usize,
     /// Number of commands re-issued under the `TPM_RC_RETRY` rule.
     retries: usize,
-    /// The comparison state.
-    state: DiffState,
     /// The virtual clock ([`virtual_ms`]) when the server was created, i.e.
     /// the seed's real time; `Reinit` resets the clock to it.
     initial_ms: u64,
@@ -360,7 +241,6 @@ impl<B: Backend> Server<B> {
             test,
             commands: 0,
             retries: 0,
-            state: DiffState::default(),
             initial_ms: virtual_ms(),
         })
     }
@@ -387,14 +267,13 @@ impl<B: Backend> Server<B> {
     /// value when the server was created (the seed's real time), then
     /// manufactures, powers on, enables NV and sends
     /// `TPM2_Startup(TPM_SU_CLEAR)` as [`Self::new`] does, and forgets the
-    /// comparison state ([`DiffState`]) and the command counters.
+    /// command counters.
     ///
     /// The C reference reseeds its random number generation from the clock
     /// and the process ID when it is manufactured, so the TPM then produces
     /// the same responses as a new process.
     pub fn reinit(&mut self) -> Result<(), Failure> {
         set_virtual_ms(self.initial_ms);
-        self.state = DiffState::default();
         self.commands = 0;
         self.retries = 0;
         Self::start_up(self.implementation, &mut self.backend, &self.test).map_err(Failure::new)
@@ -437,7 +316,18 @@ impl<B: Backend> Server<B> {
                 self.backend.set_firmware(setting);
                 Ok(())
             }
+            Request::Execute(_) => Err(Failure::new(format!(
+                "test `{}`: an Execute request is answered by Server::execute",
+                self.test
+            ))),
         }
+    }
+
+    /// Executes `command` on the C reference without comparing its response (the `Execute`
+    /// request) and returns the response.
+    pub fn execute(&mut self, command: &[u8]) -> Vec<u8> {
+        self.commands += 1;
+        self.backend.run_command(command)
     }
 
     /// Delivers a platform signal to the C reference.
@@ -479,8 +369,7 @@ impl<B: Backend> Server<B> {
     fn exchange(&mut self, index: usize, command: &[u8], expected: &[u8]) -> Result<(), Failure> {
         let test = self.test.as_str();
         let implementation = self.implementation;
-        let ref_command = self.state.to_ref_command(command);
-        let mut actual = self.backend.run_command(&ref_command);
+        let mut actual = self.backend.run_command(command);
         // TPM_RC_RETRY rule: the C reference (upstream `CheckLockedOut`)
         // answers the first DA-protected authorization after a boot with
         // the TPM_RC_RETRY warning while it records `daUsed` in NV;
@@ -498,19 +387,10 @@ impl<B: Backend> Server<B> {
                     self.retries
                 );
             }
-            actual = self.backend.run_command(&ref_command);
+            actual = self.backend.run_command(command);
         }
-        let st = &mut self.state;
-        st.post_command(command, expected, &actual);
-        let result = compare_differential_response(
-            st,
-            implementation,
-            test,
-            index,
-            command,
-            expected,
-            &actual,
-        );
+        let result =
+            compare_differential_response(implementation, test, index, command, expected, &actual);
         result.map_err(|message| Failure {
             message,
             reference_response: Some(actual),
@@ -732,15 +612,6 @@ fn split_response(rsp: &[u8], code: u32) -> Option<ResponseParts<'_>> {
     }
 }
 
-/// The `contextBlob` buffer of a `TPM2_ContextSave` parameter area (a
-/// `TPMS_CONTEXT`: sequence, savedHandle, hierarchy, contextBlob).
-fn context_blob(params: &[u8]) -> Option<&[u8]> {
-    let mut r = Reader(params);
-    r.take(16)?;
-    let blob = r.tpm2b_body()?;
-    r.0.is_empty().then_some(blob)
-}
-
 /// Splits a `TPM2_ECC_Parameters` parameter area
 /// (`TPMS_ALGORITHM_DETAIL_ECC`) into its scalar head (`curveID`,
 /// `keySize`, `kdf`, `sign`) and the buffers of `p`, `a`, `b`, `gX`, `gY`,
@@ -899,16 +770,11 @@ fn capability_difference_is_documented(
                 0x116, // TPM_PT_NV_COUNTERS_MAX
                 0x118, // TPM_PT_MEMORY
                 0x119, // TPM_PT_CLOCK_UPDATE
-                0x11C, // TPM_PT_CONTEXT_SYM_SIZE
                 0x11F, // TPM_PT_MAX_RESPONSE_SIZE
-                // TPM_PT_MAX_OBJECT_CONTEXT/TPM_PT_MAX_SESSION_CONTEXT: the bounds of each
-                // implementation's own context format (exception 1); C reports
-                // SIZE_OF_CONTEXT_OVERHEAD + sizeof(OBJECT)/sizeof(SESSION), tpm-rs the bounds
-                // of its serialization (context_save.rs).
-                0x121, // TPM_PT_MAX_OBJECT_CONTEXT
-                0x122, // TPM_PT_MAX_SESSION_CONTEXT
                 0x12D, // TPM_PT_MODES (vendor certification modes)
             ];
+            // TPM_PT_CONTEXT_SYM_SIZE, TPM_PT_MAX_OBJECT_CONTEXT and TPM_PT_MAX_SESSION_CONTEXT
+            // are compared exactly: tpm-rs saves the contexts of the C references.
             let prop = |x: &[u8]| be32(x, 0).unwrap_or(0);
             let rs_only = |x: &[u8]| {
                 implementation == Implementation::Ibmswtpm2 && matches!(prop(x), 0x12F | 0x130)
@@ -965,7 +831,6 @@ fn log_exception(
 /// `differential.md`). Every exception requires the same command code and
 /// checks every response field it does not explicitly exempt.
 fn compare_differential_response(
-    st: &DiffState,
     implementation: Implementation,
     test: &str,
     index: usize,
@@ -982,22 +847,9 @@ fn compare_differential_response(
     let same_tag = header(expected).map(|(t, _)| t) == header(actual).map(|(t, _)| t);
 
     let documented = match (code, exp_rc, act_rc) {
-        // 1. TPM2_ContextSave: the `contextBlob` (encrypted OBJECT/SESSION
-        //    image) is implementation-defined; `sequence`, `savedHandle` and
-        //    `hierarchy` must match, and the blob is checked indirectly: a
-        //    later TPM2_ContextLoad of it must behave identically.
-        (cc::CONTEXT_SAVE, Some(0), Some(0)) => {
-            same_tag
-                && match (split_response(expected, code), split_response(actual, code)) {
-                    (Some(e), Some(a)) => {
-                        context_blob(e.params).is_some()
-                            && context_blob(a.params).is_some()
-                            && e.params[..16] == a.params[..16]
-                            && e.auth == a.auth
-                    }
-                    _ => false,
-                }
-        }
+        // 1. Retired: tpm-rs saves the contexts of the C references byte for
+        //    byte (`crates/tpm2-engine/src/handler/context_format.rs`), so
+        //    TPM2_ContextSave responses are compared exactly.
         // 2. TPM2_GetCapability: see `capability_difference_is_documented`.
         (cc::GET_CAPABILITY, Some(0), Some(0)) => {
             header(expected).is_some_and(|(tag, _)| tag == 0x8001)
@@ -1037,32 +889,8 @@ fn compare_differential_response(
         //    the references run the same algorithm self tests).
         // 8. Retired: every command runs at locality 0 in the differential
         //    tests, so reserved localities (5..=31) are never compared.
-        // 9. TPM2_ContextLoad of a `contextBlob` that is not byte-identical
-        //    to one tpm-rs returned (truncated or modified by the test): the
-        //    blob layout is implementation-defined, so both must reject it
-        //    as a malformed blob, but whether the size or the integrity
-        //    check fires first depends on the layout (TPM_RC_SIZE + P1 vs
-        //    TPM_RC_INTEGRITY + P1).
-        //    tpm-rs may also answer `TPM_RC_FAILURE`: a blob from another run
-        //    can be authentic (all implementations share the proofs under one
-        //    seed) and then fail tpm-rs's decrypted fingerprint check, for which
-        //    the specification requires failure mode (TPM 2.0 Part 3,
-        //    TPM2_ContextLoad: "The TPM shall perform a check on the decrypted
-        //    context [...] and enter failure mode if the check fails."); C gets
-        //    the blob with a zeroed integrity value
-        //    (`DiffState::untranslated_context_load`) and rejects it.
-        (cc::CONTEXT_LOAD, Some(e @ (0x1D5 | 0x1DF | 0x101)), Some(a @ (0x1D5 | 0x1DF))) => {
-            e != a
-                && command_parts(command, 0).is_some_and(|(_, p)| {
-                    // TPMS_CONTEXT: sequence (8), savedHandle (4),
-                    // hierarchy (4), contextBlob (TPM2B).
-                    be16(p, 16).is_some_and(|len| {
-                        p.get(18..18 + len as usize).is_some_and(|blob| {
-                            !st.context_blobs.iter().any(|(rs, _)| rs.as_slice() == blob)
-                        })
-                    })
-                })
-        }
+        // 9. Retired: every TPM2_ContextLoad reaches the reference unchanged,
+        //    and both implementations load the same contexts.
         _ => false,
     };
     if documented {
@@ -1085,60 +913,6 @@ fn compare_differential_response(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// A `TPM2_ContextLoad` command (no sessions) loading `blob`.
-    fn context_load(blob: &[u8]) -> Vec<u8> {
-        let mut cmd = vec![0x80, 0x01, 0, 0, 0, 0, 0x00, 0x00, 0x01, 0x61];
-        cmd.extend_from_slice(&7u64.to_be_bytes()); // sequence
-        cmd.extend_from_slice(&0x8000_0001u32.to_be_bytes()); // savedHandle
-        cmd.extend_from_slice(&0x4000_0001u32.to_be_bytes()); // hierarchy
-        cmd.extend_from_slice(&(blob.len() as u16).to_be_bytes());
-        cmd.extend_from_slice(blob);
-        let len = cmd.len() as u32;
-        cmd[2..6].copy_from_slice(&len.to_be_bytes());
-        cmd
-    }
-
-    #[test]
-    fn context_load_of_a_recorded_blob_is_translated() {
-        let state = DiffState {
-            context_blobs: vec![(vec![1; 40], vec![2; 64]), (vec![3; 10], vec![4; 5])],
-        };
-        assert_eq!(
-            state.to_ref_command(&context_load(&[1; 40])),
-            context_load(&[2; 64])
-        );
-        assert_eq!(
-            state.to_ref_command(&context_load(&[3; 10])),
-            context_load(&[4; 5])
-        );
-    }
-
-    #[test]
-    fn context_load_of_another_blob_is_unchanged() {
-        let state = DiffState {
-            context_blobs: vec![(vec![1; 40], vec![2; 64])],
-        };
-        for blob in [&[1u8; 39][..], &[1; 41], &[9; 40], &[]] {
-            let cmd = context_load(blob);
-            assert_eq!(state.to_ref_command(&cmd), cmd);
-        }
-        // A truncated command is passed through as well.
-        let cmd = context_load(&[1; 40]);
-        let truncated = &cmd[..cmd.len() - 1];
-        assert_eq!(state.to_ref_command(truncated), truncated);
-    }
-
-    #[test]
-    fn the_latest_context_save_wins() {
-        let state = DiffState {
-            context_blobs: vec![(vec![1; 8], vec![2; 8]), (vec![1; 8], vec![5; 9])],
-        };
-        assert_eq!(
-            state.to_ref_command(&context_load(&[1; 8])),
-            context_load(&[5; 9])
-        );
-    }
 
     /// A backend that records what it is asked to do and answers every
     /// command with a fixed response.
@@ -1194,7 +968,6 @@ mod tests {
         assert_eq!(server.backend.inits, [5_000]);
         server.handle(Request::AdvanceClock(250)).unwrap();
         assert_eq!(virtual_ms(), 5_250);
-        server.state.context_blobs.push((vec![1], vec![2]));
         // A diverging command fails with the reference's response.
         let failure = server
             .handle(Request::Exchange {
@@ -1212,7 +985,6 @@ mod tests {
         assert_eq!(virtual_ms(), 5_000, "the clock returns to the seed time");
         assert_eq!(server.backend.inits, [5_000, 5_000]);
         assert_eq!(server.commands, 0);
-        assert!(server.state.context_blobs.is_empty());
         let codes: Vec<u32> = server
             .backend
             .commands
@@ -1274,51 +1046,5 @@ mod tests {
         let failure = server.reinit().unwrap_err();
         assert!(failure.message.contains("TPM2_Startup"), "{failure:?}");
         assert_eq!(failure.reference_response, None);
-    }
-
-    /// A `TPM2_ContextLoad` whose `commandSize` is not its length is sent
-    /// unchanged, even if its blob is a known tpm-rs blob, so C sees the
-    /// same malformed size.
-    #[test]
-    fn context_load_with_wrong_command_size_is_not_translated() {
-        let state = DiffState {
-            context_blobs: vec![(vec![0xAA], vec![0xBB, 0xCC])],
-        };
-        // TPM2_ContextLoad: sequence, savedHandle, hierarchy, blob {0xAA}.
-        let mut cmd = vec![0x80, 0x01, 0, 0, 0, 0, 0, 0, 0x01, 0x61];
-        cmd.extend_from_slice(&[0; 16]);
-        cmd.extend_from_slice(&[0, 1, 0xAA]);
-        let len = cmd.len() as u32;
-        cmd[2..6].copy_from_slice(&len.to_be_bytes());
-        let translated = state.to_ref_command(&cmd);
-        assert_eq!(translated[translated.len() - 4..], [0, 2, 0xBB, 0xCC]);
-        assert_eq!(be32(&translated, 2), Some(len + 1));
-        cmd[2..6].copy_from_slice(&u32::MAX.to_be_bytes());
-        assert_eq!(state.to_ref_command(&cmd), cmd);
-        // Bytes after the context: sent unchanged too.
-        cmd.push(0);
-        let len = cmd.len() as u32;
-        cmd[2..6].copy_from_slice(&len.to_be_bytes());
-        assert_eq!(state.to_ref_command(&cmd), cmd);
-    }
-
-    /// A `TPM2_ContextLoad` blob that is not one tpm-rs saved reaches C with
-    /// a zeroed integrity value, so C cannot authenticate tpm-rs's contents.
-    #[test]
-    fn untranslated_context_blob_is_unauthentic_for_the_reference() {
-        let state = DiffState::default();
-        // TPM2_ContextLoad: sequence, savedHandle, hierarchy, blob {integrity {0x11, 0x22}, 0x33}.
-        let mut cmd = vec![0x80, 0x01, 0, 0, 0, 0, 0, 0, 0x01, 0x61];
-        cmd.extend_from_slice(&[0; 16]);
-        cmd.extend_from_slice(&[0, 5, 0, 2, 0x11, 0x22, 0x33]);
-        let len = cmd.len() as u32;
-        cmd[2..6].copy_from_slice(&len.to_be_bytes());
-        let out = state.to_ref_command(&cmd);
-        assert_eq!(out[..cmd.len() - 3], cmd[..cmd.len() - 3]);
-        assert_eq!(out[cmd.len() - 3..], [0, 0, 0x33]);
-        // A tampered integrity value is not turned back into the authentic one.
-        let n = cmd.len();
-        cmd[n - 3] ^= 0xFF;
-        assert_eq!(state.to_ref_command(&cmd)[n - 3..], [0, 0, 0x33]);
     }
 }

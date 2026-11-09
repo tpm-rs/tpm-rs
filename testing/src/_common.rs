@@ -307,6 +307,15 @@ impl rand::RngCore for ClientRng {
 
 impl rand::CryptoRng for ClientRng {}
 
+/// The integrity value and the encrypted context of a `contextBlob` returned by
+/// `TPM2_ContextSave`. `tpm-rs` saves the contexts of the TCG reference: the integrity
+/// `TPM2B_DIGEST` followed by the encrypted context, which has no size field of its own (unlike
+/// the informative `TPMS_CONTEXT_DATA` of TPM 2.0 Part 2).
+pub fn context_blob_parts(blob: &[u8]) -> (&[u8], &[u8]) {
+    let integrity_len = usize::from(u16::from_be_bytes([blob[0], blob[1]]));
+    blob[2..].split_at(integrity_len)
+}
+
 /// Marshals `item` into `buf` and returns the encoded length; uses a temporary buffer when `buf`
 /// is shorter than `M::MAX_SIZE`.
 pub fn marshal_to_slice<M: Marshal>(item: &M, buf: &mut [u8]) -> usize

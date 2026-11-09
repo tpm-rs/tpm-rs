@@ -11,9 +11,8 @@ use tpm2::commands::{ContextLoad, ContextSave, CreateLoaded, CreatePrimary, Read
 use tpm2::{
     Handle, PublicParmsAndId, Tpm2bAuth, Tpm2bContextData, Tpm2bData, Tpm2bDigest,
     Tpm2bEccParameter, Tpm2bPublicKeyRsa, Tpm2bSensitiveData, TpmEccCurve, TpmaObject, TpmiAlgHash,
-    TpmiRsaKeyBits, TpmlPcrSelection, TpmsContext, TpmsContextData, TpmsEccParms, TpmsEccPoint,
-    TpmsRsaParms, TpmsSchemeEcdaa, TpmsSensitiveCreate, TpmtEccScheme, TpmtPublic, TpmtRsaScheme,
-    Unmarshal,
+    TpmiRsaKeyBits, TpmlPcrSelection, TpmsContext, TpmsEccParms, TpmsEccPoint, TpmsRsaParms,
+    TpmsSchemeEcdaa, TpmsSensitiveCreate, TpmtEccScheme, TpmtPublic, TpmtRsaScheme, Unmarshal,
 };
 
 /// TPM2_ContextSave of an object does not evict it
@@ -241,7 +240,7 @@ fn flush_reload_corrupt_and_flushed_save() {
 
     // Stress-test: Load with corrupted context blob
     let bad_context = save_resp.context;
-    let mut buf = [0u8; 4096];
+    let mut buf = [0u8; 8192];
     let len = marshal_to_slice(&bad_context, &mut buf);
     buf[len - 1] ^= 0xFF; // Mutate last byte
     let mut unmarsh = &buf[..len];
@@ -497,21 +496,16 @@ fn repeated_saves_use_fresh_keystream() {
     let rsp2_parsed = execute_with_password_sessions(&mut sim, &save_cmd, 0, &[])
         .unwrap_or_else(|rc| panic!("second ContextSave failed: {rc:#x}"));
 
-    let mut data1_unmarshal = rsp1_parsed.context.context_blob.get_buffer();
-    let ctx1 = TpmsContextData::unmarshal(&mut data1_unmarshal).unwrap();
-
-    let mut data2_unmarshal = rsp2_parsed.context.context_blob.get_buffer();
-    let ctx2 = TpmsContextData::unmarshal(&mut data2_unmarshal).unwrap();
+    let (_, encrypted1) =
+        crate::_common::context_blob_parts(rsp1_parsed.context.context_blob.get_buffer());
+    let (_, encrypted2) =
+        crate::_common::context_blob_parts(rsp2_parsed.context.context_blob.get_buffer());
 
     assert_ne!(
         rsp1_parsed.context.sequence, rsp2_parsed.context.sequence,
         "Sequence must increment"
     );
-    assert_ne!(
-        ctx1.encrypted.get_buffer(),
-        ctx2.encrypted.get_buffer(),
-        "Keystream reuse detected!"
-    );
+    assert_ne!(encrypted1, encrypted2, "Keystream reuse detected!");
 }
 
 /// ContextSave of an owner-hierarchy object records a non-zero hierarchy in the context.

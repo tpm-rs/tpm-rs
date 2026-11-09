@@ -106,13 +106,21 @@ context-hash-sha256 = []
 # `TPM2_Load` still accepts both. The smaller private areas fit e.g. the fixed 1024-byte
 # key blob buffer of Windows' `PCPTool`, like those of Google's production `ibmswtpm2`.
 rsa-sensitive-prime-only = []
-# `TPM2_ContextSave` returns every context with exactly the reported maximum size
-# (`TPM_PT_MAX_OBJECT_CONTEXT` for objects and sequence objects, `TPM_PT_MAX_SESSION_CONTEXT`
-# for sessions): the serialized entity is prefixed with its length and zero-padded (default:
-# contexts of the size of their content). Windows' TPM Base Services pad `TPM2_ContextLoad` to
-# `10 + TPM_PT_MAX_*_CONTEXT` octets, like the contexts of the C references, which always have
-# their maximum size; without this feature, the trailing octets are `TPM_RC_SIZE`.
+# `TPM2_ContextSave` returns every object context with exactly the reported maximum size
+# (`TPM_PT_MAX_OBJECT_CONTEXT`): the context of a sequence object is zero-padded to the size of
+# an `OBJECT`, which the TCG reference loads as well (default: the size of a `SEQUENCE_OBJECT`, as
+# the reference saves it). Object and session contexts always have their maximum size. Windows'
+# TPM Base Services pad `TPM2_ContextLoad` to `10 + TPM_PT_MAX_*_CONTEXT` octets; without this
+# feature, the trailing octets of a sequence context are `TPM_RC_SIZE`.
 fixed-size-context = []
+# The saved contexts of `TPM2_ContextSave`/`TPM2_ContextLoad` have the structures of the TCG
+# reference versions before 185 (the public TCG reference and `ibmswtpm2`) instead of those of
+# version 185 (default), so that they are the contexts of these references byte for byte
+# (`handler/context_format.rs`): a sequence object is a `HASH_OBJECT` (not a `SEQUENCE_OBJECT`),
+# `TPMT_RSA_SCHEME` has the 4-octet details of `TPMU_ASYM_SCHEME`, and the packed CRT form of an
+# RSA private key has only `RSA_prime_flag` in its size. Excludes the signature sequence commands
+# (`cc-sign-sequence-start`, `cc-verify-sequence-start`), whose state only `SEQUENCE_OBJECT` holds.
+context-format-pre-v185 = []
 # Secure channel (SPDM) support (`SEC_CHANNEL_SUPPORT` of the TCG reference):
 # `TPM2_GetCapability(TPM_CAP_PUB_KEYS)` and `TPM2_GetCapability(TPM_CAP_SPDM_SESSION_INFO)`
 # report the platform's secure transport layer (`tpm2::platform::SecureChannel`), and the

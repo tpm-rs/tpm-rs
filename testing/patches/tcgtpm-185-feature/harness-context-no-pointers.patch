@@ -1,0 +1,62 @@
+context-no-pointers: exported hash states hold no addresses of the process
+
+Classification: harness plumbing.
+
+TPM2_ContextSave() copies the whole sequence object (SEQUENCE_OBJECT) into the
+context and then exports its running hash states over it (SequenceDataExport()
+-> CryptoHash_ExportState()). The export leaves HASH_STATE.def, the pointer to the hash
+descriptor (&Sha256_Def etc.), as copied, and an SMAC state is copied whole,
+with the pointers to CryptCmacData()/CryptCmacEnd() in its smacMethods. These
+are addresses in the reference process (randomized by ASLR), so the saved
+context of a sequence object differs from process to process, and tpm-rs,
+which reproduces the reference's saved contexts byte for byte
+(crates/tpm2-engine/src/handler/context_format.rs), cannot produce them. The
+export zeroes them; the import already sets def from hashAlg and now restores
+the SMAC dispatch pointers. No other value changes, and a context saved by the
+patched reference loads into it as before.
+diff --git a/TPMCmd/tpm/cryptolibs/implementations/Ossl/OsslHash.c b/TPMCmd/tpm/cryptolibs/implementations/Ossl/OsslHash.c
+--- a/TPMCmd/tpm/cryptolibs/implementations/Ossl/OsslHash.c
++++ b/TPMCmd/tpm/cryptolibs/implementations/Ossl/OsslHash.c
+@@ -124,6 +124,12 @@
+     if(internalFmt->type == HASH_STATE_SMAC)
+     {
+         memcpy(outBuf, internalFmt, sizeof(HASH_STATE));
++        // tpm-rs differential testing -- harness (determinism): the dispatch
++        // pointers of the SMAC are not exported (they are the addresses of the
++        // reference's functions in this process); the import restores them.
++        memset(&outBuf[offsetof(HASH_STATE, state.smac.smacMethods)],
++               0,
++               sizeof(internalFmt->state.smac.smacMethods));
+         return;
+     }
+ #endif
+@@ -136,6 +142,11 @@
+     }
+     if(internalFmt->hashAlg != TPM_ALG_NULL)
+         HASH_STATE_EXPORT(externalFmt, internalFmt);
++    // tpm-rs differential testing -- harness (determinism): the pointer to the
++    // hash descriptor, which TPM2_ContextSave() copied with the rest of the
++    // sequence object, is not exported (it is an address in this process); the
++    // import sets it from hashAlg.
++    memset(&outBuf[offsetof(HASH_STATE, def)], 0, sizeof(internalFmt->def));
+ }
+ 
+ //*** CryptoHash_ImportState()
+@@ -165,6 +176,17 @@
+         if(internalFmt->type == HASH_STATE_SMAC)
+         {
+             memcpy(internalFmt, inBuf, sizeof(HASH_STATE));
++#  if ALG_CMAC
++            // tpm-rs differential testing -- harness (determinism): restore the
++            // dispatch pointers that the export does not keep (CMAC is the only
++            // SMAC, see CryptCmacStart()).
++            {
++                void   CryptCmacData(SMAC_STATES * state, UINT32 size, const BYTE* buffer);
++                UINT16 CryptCmacEnd(SMAC_STATES * state, UINT32 outSize, BYTE* outBuffer);
++                internalFmt->state.smac.smacMethods.data = CryptCmacData;
++                internalFmt->state.smac.smacMethods.end  = CryptCmacEnd;
++            }
++#  endif
+             return;
+         }
+ #endif

@@ -312,8 +312,8 @@ pub struct ActiveSequence {
     pub hash_states: [crate::hash_state::StreamingHashState; 4],
     /// The running SHAKE256 computation of the ML-DSA message representative `mu` of an ML-DSA
     /// or HashML-DSA signing/verification sequence ([`SignatureSequence`]); `None` for every
-    /// other sequence. It is saved in place of `hash_states[MU_STATE_SLOT]`, which such a
-    /// sequence does not use.
+    /// other sequence. A saved context holds it as the reference's exported SHAKE256 state
+    /// (`handler/context_format.rs`).
     pub(crate) mu_state: Option<crate::shake256::Shake256>,
 }
 
@@ -370,43 +370,6 @@ impl ActiveSequence {
             hash_states,
             mu_state: None,
         }
-    }
-
-    /// The index of `hash_states` whose place the ML-DSA `mu_state` takes when the sequence is
-    /// saved.
-    pub const MU_STATE_SLOT: usize = 3;
-
-    /// Whether a sequence of `sequence_type` keeps an ML-DSA `mu_state`.
-    pub fn has_mu_state(sequence_type: &SequenceType) -> bool {
-        matches!(
-            sequence_type,
-            SequenceType::Sign(seq) | SequenceType::Verify(seq)
-                if matches!(seq.scheme, tpm2::TpmtSigScheme::Mldsa | tpm2::TpmtSigScheme::HashMldsa)
-        )
-    }
-
-    /// Serializes the state of slot `i` for a saved sequence:
-    /// `hash_states[i]`, or for [`Self::MU_STATE_SLOT`] of an ML-DSA sequence its `mu_state`
-    /// (zero-padded), always [`crate::hash_state::StreamingHashState::SERIALIZED_SIZE`] bytes.
-    pub fn serialize_state(&self, i: usize, dst: &mut [u8]) -> usize {
-        const SIZE: usize = crate::hash_state::StreamingHashState::SERIALIZED_SIZE;
-        const _: () = assert!(crate::shake256::SHAKE256_EXPORT_SIZE <= SIZE);
-        if i == Self::MU_STATE_SLOT
-            && let Some(mu) = &self.mu_state
-        {
-            let bytes = mu.to_bytes();
-            dst[..bytes.len()].copy_from_slice(&bytes);
-            dst[bytes.len()..SIZE].fill(0);
-            return SIZE;
-        }
-        self.hash_states[i].serialize(dst)
-    }
-
-    /// Restores the `mu_state` of an ML-DSA sequence from the saved slot
-    /// [`Self::MU_STATE_SLOT`] (see [`Self::serialize_state`]).
-    pub(crate) fn mu_state_from_slot(slot: &[u8]) -> Option<crate::shake256::Shake256> {
-        let bytes = slot.get(..crate::shake256::SHAKE256_EXPORT_SIZE)?;
-        crate::shake256::Shake256::from_bytes(bytes.try_into().ok()?)
     }
 
     /// Feeds `data` into the message state of a signing or verification sequence: the running
@@ -508,59 +471,6 @@ impl SignatureSequence {
     pub const TICKET_INNER_STATE: usize = 1;
     /// The index of the outer state of the running ticket HMAC in `ActiveSequence::hash_states`.
     pub const TICKET_OUTER_STATE: usize = 2;
-
-    /// The largest serialization of [`Self::serialize`].
-    pub const SERIALIZED_MAX_SIZE: usize = tpm2::TpmtSigScheme::MAX_SIZE
-        + tpm2::Tpm2bName::MAX_SIZE
-        + tpm2::Tpm2bSensitiveData::MAX_SIZE
-        + 4
-        + 2;
-
-    /// Serializes the sequence state into `dst` (at least [`Self::SERIALIZED_MAX_SIZE`] bytes)
-    /// for a saved context or the state-save data: the scheme (`TPMT_SIG_SCHEME`), the key
-    /// Name and the HMAC key (`TPM2B`s), and the ticket hierarchy (0 for none). Returns the
-    /// number of bytes written.
-    pub fn serialize(&self, dst: &mut [u8]) -> usize {
-        let mut offset = self.scheme.marshal(
-            (&mut dst[..tpm2::TpmtSigScheme::MAX_SIZE])
-                .try_into()
-                .unwrap(),
-        );
-        offset += self.key_name.marshal(
-            (&mut dst[offset..offset + tpm2::Tpm2bName::MAX_SIZE])
-                .try_into()
-                .unwrap(),
-        );
-        offset += self.hmac_key.marshal(
-            (&mut dst[offset..offset + tpm2::Tpm2bSensitiveData::MAX_SIZE])
-                .try_into()
-                .unwrap(),
-        );
-        dst[offset..offset + 4].copy_from_slice(&self.ticket_hierarchy.unwrap_or(0).to_be_bytes());
-        let pre_hash = self.pre_hash.map_or(0, |alg| tpm2::Alg::from(alg).id());
-        dst[offset + 4..offset + 6].copy_from_slice(&pre_hash.to_be_bytes());
-        offset + 6
-    }
-
-    /// Deserializes a state written by [`Self::serialize`], advancing `src`.
-    pub fn deserialize(src: &mut &[u8]) -> Option<Self> {
-        let scheme = tpm2::TpmtSigScheme::unmarshal(src).ok()?;
-        let key_name = OwnedName::unmarshal(src).ok()?;
-        let hmac_key = OwnedSensitiveData::unmarshal(src).ok()?;
-        let ticket_hierarchy = u32::unmarshal(src).ok()?;
-        let pre_hash_id = u16::unmarshal(src).ok()?;
-        let pre_hash = match pre_hash_id {
-            0 => None,
-            id => Some(TpmiAlgHash::unmarshal(&mut &id.to_be_bytes()[..]).ok()?),
-        };
-        Some(Self {
-            scheme,
-            key_name,
-            hmac_key,
-            ticket_hierarchy: (ticket_hierarchy != 0).then_some(ticket_hierarchy),
-            pre_hash,
-        })
-    }
 
     /// The initial message state for [`Self::scheme`] (see the type documentation).
     pub fn initial_message_state(&self) -> crate::hash_state::StreamingHashState {

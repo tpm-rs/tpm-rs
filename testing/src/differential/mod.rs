@@ -284,6 +284,25 @@ impl Reference {
     ///
     /// # Panics
     /// If the process cannot be written to.
+    /// Executes `command` (at locality 0) on the C reference without comparing its response
+    /// with `tpm-rs` (the `Execute` request), and returns the response: for tests that drive
+    /// the reference on its own, e.g. to hand saved contexts between it and `tpm-rs`
+    /// (`e2e::context_handover`).
+    ///
+    /// # Panics
+    /// If the reference process fails.
+    pub fn execute(&mut self, command: &[u8]) -> Vec<u8> {
+        self.send(&Request::Execute(command.to_vec()));
+        let result = protocol::read_execute_reply(&mut self.replies).unwrap_or_else(|e| {
+            panic!(
+                "test `{}`: the {} reference TPM process failed during an uncompared command \
+                 ({e})",
+                self.test, self.implementation
+            )
+        });
+        result.unwrap_or_else(|failure| panic!("{}", failure.message))
+    }
+
     fn send(&mut self, request: &Request) {
         let requests = self
             .requests
@@ -315,6 +334,7 @@ fn describe(request: &Request) -> &'static str {
         Request::HashStart | Request::HashData(_) | Request::HashEnd => "a _TPM_Hash indication",
         Request::Reinit => "a re-initialization",
         Request::SetFirmware(_) => "a firmware change",
+        Request::Execute(_) => "an uncompared command",
     }
 }
 

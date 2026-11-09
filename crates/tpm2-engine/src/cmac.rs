@@ -150,6 +150,26 @@ impl CmacState {
             bcount,
         })
     }
+
+    /// The parts of the state as the TCG reference's `tpmCmacState_t` holds them: the key, the
+    /// chaining value `iv` and the block count `bcount`.
+    #[cfg_attr(not(feature = "cmac"), allow(dead_code))]
+    pub(crate) fn parts(&self) -> (&[u8], &[u8; BLOCK], u8) {
+        (self.key(), &self.iv, self.bcount)
+    }
+
+    /// A state from the parts of a `tpmCmacState_t` ([`Self::parts`]), or `None` if `key` does
+    /// not have the key size of `alg` or `bcount` exceeds the block size.
+    #[cfg_attr(not(feature = "cmac"), allow(dead_code))]
+    pub(crate) fn from_parts(alg: AlgSym, key: &[u8], iv: [u8; BLOCK], bcount: u8) -> Option<Self> {
+        if usize::from(bcount) > BLOCK {
+            return None;
+        }
+        let mut state = Self::new(alg, key)?;
+        state.iv = iv;
+        state.bcount = bcount;
+        Some(state)
+    }
 }
 
 /// The doubling of SP 800-38B (`ShiftLeft()` and the XOR with `0x87` of `CryptCmacEnd()`):

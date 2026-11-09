@@ -11,7 +11,7 @@ use testing::tpm::Tpm;
 #[allow(deprecated)]
 use tpm2::commands::{ContextLoad, ContextSave, CreateLoaded};
 use tpm2::errors::{Position, TpmRc};
-use tpm2::{Handle, TpmaObject, TpmsContextData, Unmarshal};
+use tpm2::{Handle, TpmaObject};
 
 /// stClear object contexts do not load after TPM Restart and no object context loads after TPM Reset (TPM_RC_INTEGRITY)
 ///
@@ -153,13 +153,10 @@ fn context_save_uses_fresh_keystream() {
 
     // The encrypted part must be different, avoiding keystream reuse
 
-    let mut u1 = ctx1.context_blob.get_buffer();
-    let tpms_ctx1 = TpmsContextData::unmarshal(&mut u1).unwrap();
-    let mut u2 = ctx2.context_blob.get_buffer();
-    let tpms_ctx2 = TpmsContextData::unmarshal(&mut u2).unwrap();
+    let (_, encrypted1) = crate::_common::context_blob_parts(ctx1.context_blob.get_buffer());
+    let (_, encrypted2) = crate::_common::context_blob_parts(ctx2.context_blob.get_buffer());
     assert_ne!(
-        tpms_ctx1.encrypted.get_buffer(),
-        tpms_ctx2.encrypted.get_buffer(),
+        encrypted1, encrypted2,
         "ContextSave encrypted payload is identical! Keystream/IV reuse detected!"
     );
 }

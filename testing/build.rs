@@ -102,6 +102,12 @@ const REFERENCES: [Reference; 2] = [
                     "-DECC_LIB=EccRef",
                     "-DMLKEM_LIB=Ossl",
                     "-DMLDSA_LIB=Ossl",
+                    // Harness (determinism): local variables start zeroed, like the object
+                    // slots, sessions and command buffers the reference zeroes itself, so
+                    // that its saved contexts, which copy local structures (e.g. the
+                    // `TPMT_SENSITIVE` of `TPM2_Load`), hold no stack contents; `tpm-rs`
+                    // reproduces them byte for byte (`handler/context_format.rs`).
+                    "-ftrivial-auto-var-init=zero",
                 ],
             },
             Version {
@@ -122,6 +128,8 @@ const REFERENCES: [Reference; 2] = [
                     "-DSYM_LIB=Ossl",
                     "-DMATH_LIB=TpmBigNum",
                     "-DBN_MATH_LIB=Ossl",
+                    // Harness (determinism), see version 185.
+                    "-ftrivial-auto-var-init=zero",
                 ],
             },
         ],
@@ -149,6 +157,8 @@ const REFERENCES: [Reference; 2] = [
                 "-DHASH_LIB=Ossl",
                 "-DMATH_LIB=TpmBigNum",
                 "-DBN_MATH_LIB=Ossl",
+                // Harness (determinism), see the TCG reference version 185.
+                "-ftrivial-auto-var-init=zero",
             ],
         }],
     },

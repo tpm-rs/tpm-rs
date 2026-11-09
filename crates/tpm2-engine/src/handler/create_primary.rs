@@ -219,7 +219,10 @@ impl<'b, P: Platform> CommandHandler<'b, P> {
             external: false,
             public_only: false,
             name,
-            auth: crate::owned::OwnedAuth::from(in_sensitive_struct.user_auth),
+            auth: crate::util::adjust_auth_size(
+                in_sensitive_struct.user_auth.get_buffer(),
+                _in_public_struct.name_alg,
+            ),
             public: _in_public_struct,
             private: actual_private_key,
             private_len: actual_private_key_len,

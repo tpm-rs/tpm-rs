@@ -1,12 +1,13 @@
 //! Regression tests for `TPM2_ContextLoad` context-blob validation.
 //!
-//! The context blob returned by `TPM2_ContextSave` is
-//! `integrity (TPM2B_DIGEST) || encrypted (TPM2B_CONTEXT_SENSITIVE)`, where
-//! the encrypted plaintext is `sequence (8 bytes) || serialized entity`.
+//! The context blob returned by `TPM2_ContextSave` is the TCG reference's
+//! `integrity (TPM2B_DIGEST) || encrypted` (no size field), where the encrypted
+//! plaintext is `sequence (8 bytes, little-endian) || entity (the reference's
+//! in-memory OBJECT/SEQUENCE_OBJECT/SESSION)`.
 //! TPM 2.0 requires that:
 //! - the integrity HMAC covers everything after the integrity value
 //!   (Part 1, "Context Integrity Protection"), so any modification — including
-//!   of the size field or appended bytes — yields `TPM_RC_INTEGRITY`
+//!   appended bytes — yields `TPM_RC_INTEGRITY`
 //!   (Part 3, TPM2_ContextLoad);
 //! - a blob too short to hold the integrity value / protected data yields
 //!   `TPM_RC_SIZE` (reference implementation: `TPM_RCS_SIZE + RC_ContextLoad_context`);
@@ -33,10 +34,10 @@ use tpm2::{
     TpmtEccScheme, TpmtPublic,
 };
 
-/// Offset of `encrypted.size` in the blob: `integrity.size (2) || integrity` (the integrity HMAC
+/// Offset of the encrypted context in the blob: `integrity.size (2) || integrity` (the integrity HMAC
 /// uses the strongest implemented hash: 64 octets with SHA-512, 48 without; 32 with
 /// `context-hash-sha256`).
-const ENC_SIZE_OFFSET: usize = 2 + if cfg!(feature = "context-hash-sha256") {
+const ENC_OFFSET: usize = 2 + if cfg!(feature = "context-hash-sha256") {
     32
 } else {
     tpm2::TpmiAlgHash::MAX_DIGEST_BYTES
@@ -154,8 +155,9 @@ fn forge_blob<P: tpm2_engine::Platform>(
     blob
 }
 
-/// AES-128-CFB keystream for the context, as derived by the TPM
-/// (white-box: uses the owner hierarchy proof).
+/// AES-256-CFB keystream for the context, as derived by the TPM (white-box: uses the owner
+/// hierarchy proof): `KDFa(hash, proof, "CONTEXT", sequence, savedHandle, 384)` with the
+/// little-endian `sequence` and `savedHandle` of the TCG reference.
 fn context_cfb<P: tpm2_engine::Platform>(
     gs: &tpm2_engine::State<P>,
     context: &TpmsContext<'_>,
@@ -163,22 +165,22 @@ fn context_cfb<P: tpm2_engine::Platform>(
     encrypt: bool,
 ) {
     let proof = &gs.nv.persistent.sh_proof[..gs.nv.persistent.sh_proof_size as usize];
-    let mut key_iv = [0u8; 32];
+    let mut key_iv = [0u8; 48];
     tpm2::crypto::kdfa_bits::<TestCryptoProvider>(
         common::context_integrity_hash_alg(),
         proof,
         b"CONTEXT",
         (
-            &context.sequence.to_be_bytes(),
-            &context.saved_handle.0.to_be_bytes(),
+            &context.sequence.to_le_bytes(),
+            &context.saved_handle.0.to_le_bytes(),
         ),
-        256,
+        384,
         &mut key_iv,
     )
     .unwrap();
     let mut iv = [0u8; 16];
-    iv.copy_from_slice(&key_iv[16..]);
-    let key = SymmetricKey::new(AlgSym::Aes128, &key_iv[..16]).unwrap();
+    iv.copy_from_slice(&key_iv[32..]);
+    let key = SymmetricKey::new(AlgSym::Aes256, &key_iv[..32]).unwrap();
     let dir = if encrypt {
         Direction::Encrypt
     } else {
@@ -188,23 +190,24 @@ fn context_cfb<P: tpm2_engine::Platform>(
     key.crypt::<TestCryptoProvider>(dir, input).unwrap();
 }
 
-/// The integrity value is genuine (white-box forged with the hierarchy proof)
-/// but `encrypted.size` is inconsistent with the data: an authentic blob that is
-/// not in this TPM's context layout is rejected like an unauthentic one
-/// (`TPM_RC_INTEGRITY + P1`, `context_load.rs` `malformed_context`); only the
-/// fingerprint check is a TPM failure (TPM 2.0 Part 3, TPM2_ContextLoad: "The
-/// TPM shall perform a check on the decrypted context as described in the
-/// \"Context Confidentiality Protection\" clause of TPM 2.0 Part 1 and enter
-/// failure mode if the check fails.").
+/// The integrity value is genuine (white-box forged with the hierarchy proof) and the
+/// fingerprint matches, but the decrypted `OBJECT` is not one this TPM can load (an unknown
+/// public area type): an authentic blob that is not a valid context is rejected like an
+/// unauthentic one (`TPM_RC_INTEGRITY + P1`); only the fingerprint check is a TPM failure (TPM 2.0
+/// Part 3, TPM2_ContextLoad: "The TPM shall perform a check on the decrypted context as described
+/// in the \"Context Confidentiality Protection\" clause of TPM 2.0 Part 1 and enter failure mode
+/// if the check fails.").
 #[test]
-fn context_load_size_mismatch_behind_valid_integrity_is_integrity_error() {
+fn context_load_malformed_object_behind_valid_integrity_is_integrity_error() {
     setup!(tpm);
     let context = save_object_context(&mut tpm);
     let blob = context.context_blob.get_buffer();
-    let mut enc_context = blob[ENC_SIZE_OFFSET..].to_vec();
-    let size = u16::from_be_bytes([enc_context[0], enc_context[1]]);
-    enc_context[..2].copy_from_slice(&(size - 1).to_be_bytes());
-    let forged = forge_blob(&tpm.state, &context, &enc_context);
+    let mut plaintext = blob[ENC_OFFSET..].to_vec();
+    context_cfb(&tpm.state, &context, &mut plaintext, false);
+    // `OBJECT.publicArea.type` (after the fingerprint and the 4-octet attributes).
+    plaintext[FINGERPRINT_SIZE + 4..FINGERPRINT_SIZE + 6].copy_from_slice(&0x4242u16.to_le_bytes());
+    context_cfb(&tpm.state, &context, &mut plaintext, true);
+    let forged = forge_blob(&tpm.state, &context, &plaintext);
     assert_eq!(
         load(&mut tpm, with_blob(context, forged)),
         Err(TpmRc::INTEGRITY
@@ -221,20 +224,17 @@ fn context_load_fingerprint_mismatch_is_failure() {
     setup!(tpm);
     let context = save_object_context(&mut tpm);
     let blob = context.context_blob.get_buffer();
-    let mut enc_context = blob[ENC_SIZE_OFFSET..].to_vec();
-
-    let mut plaintext = enc_context[2..].to_vec();
+    let mut plaintext = blob[ENC_OFFSET..].to_vec();
     context_cfb(&tpm.state, &context, &mut plaintext, false);
     assert_eq!(
         plaintext[..FINGERPRINT_SIZE],
-        context.sequence.to_be_bytes(),
-        "ContextSave must prepend the sequence fingerprint"
+        context.sequence.to_le_bytes(),
+        "ContextSave must prepend the (little-endian) sequence fingerprint"
     );
     plaintext[FINGERPRINT_SIZE - 1] ^= 0x01;
     context_cfb(&tpm.state, &context, &mut plaintext, true);
-    enc_context[2..].copy_from_slice(&plaintext);
 
-    let forged = forge_blob(&tpm.state, &context, &enc_context);
+    let forged = forge_blob(&tpm.state, &context, &plaintext);
     assert_eq!(
         load(&mut tpm, with_blob(context, forged)),
         Err(TpmRc::FAILURE.get())
@@ -248,7 +248,7 @@ fn context_load_forged_unmodified_blob_loads() {
     setup!(tpm);
     let context = save_object_context(&mut tpm);
     let blob = context.context_blob.get_buffer().to_vec();
-    let forged = forge_blob(&tpm.state, &context, &blob[ENC_SIZE_OFFSET..]);
+    let forged = forge_blob(&tpm.state, &context, &blob[ENC_OFFSET..]);
     assert_eq!(forged, blob);
     load(&mut tpm, with_blob(context, forged)).expect("ContextLoad failed");
 }

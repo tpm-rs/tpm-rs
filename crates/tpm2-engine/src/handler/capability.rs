@@ -655,7 +655,10 @@ impl<'b, P: Platform> CommandHandler<'b, P> {
                         tpm2::Alg::from(crate::handler::context_integrity_hash_alg()).id() as u32,
                     ),
                     (TpmPt::CONTEXT_SYM, tpm2::Alg::AES.id() as u32),
-                    (TpmPt::CONTEXT_SYM_SIZE, 128),
+                    (
+                        TpmPt::CONTEXT_SYM_SIZE,
+                        crate::handler::context_format::CONTEXT_ENCRYPT_KEY_BITS,
+                    ),
                     (TpmPt::ORDERLY_COUNT, 255),
                     (
                         TpmPt::MAX_COMMAND_SIZE,

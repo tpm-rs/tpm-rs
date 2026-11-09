@@ -19,9 +19,10 @@ use tpm2::{
 
 /// The integrity value of a saved context must be
 /// `HMAC_SHA512(hProof, totalResetCount || sequence || savedHandle || encContext)`,
-/// where `encContext` is the marshaled `TPM2B_CONTEXT_SENSITIVE` (size included)
-/// (TPM 2.0 Part 1, "Context Integrity Protection"), keyed with the proof of
-/// the hierarchy the object belongs to (here: the owner/storage hierarchy).
+/// where `encContext` is every octet of the blob after the integrity value (the TCG
+/// reference's context has no size field there) (TPM 2.0 Part 1, "Context Integrity
+/// Protection"), keyed with the proof of the hierarchy the object belongs to (here: the
+/// owner/storage hierarchy).
 #[test]
 fn test_context_save_kdfa_bug() {
     let mut crypto = TestCryptoProvider;
@@ -81,16 +82,9 @@ fn test_context_save_kdfa_bug() {
 
     let blob = context.context_blob.get_buffer();
     let mut unmarshal_blob = blob;
-    let context_data = tpm2::TpmsContextData::unmarshal(&mut unmarshal_blob).unwrap();
-    assert!(unmarshal_blob.is_empty());
-    // encContext: every byte after the integrity value, i.e. the marshaled
-    // TPM2B_CONTEXT_SENSITIVE including its size field.
-    let enc_context = &blob[2 + context_data.integrity.get_buffer().len()..];
-    assert_eq!(
-        &enc_context[2..],
-        context_data.encrypted.get_buffer(),
-        "encContext must be size || encrypted"
-    );
+    let integrity = tpm2::Tpm2bDigest::unmarshal(&mut unmarshal_blob).unwrap();
+    // encContext: every byte after the integrity value.
+    let enc_context = unmarshal_blob;
 
     let proof = &tpm.state.nv.persistent.sh_proof[..tpm.state.nv.persistent.sh_proof_size as usize];
     // CONTEXT_INTEGRITY_HASH_ALG: the strongest implemented hash (Part 1, "Context Integrity
@@ -110,7 +104,7 @@ fn test_context_save_kdfa_bug() {
 
     assert_eq!(
         mac.digest(),
-        context_data.integrity.get_buffer(),
+        integrity.get_buffer(),
         "ContextSave HMAC must match TCG spec (proof key + totalResetCount + sequence + savedHandle + encContext)"
     );
 }
