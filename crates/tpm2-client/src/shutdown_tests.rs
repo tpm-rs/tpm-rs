@@ -15,7 +15,7 @@ use crate::{DIGEST_SIZE, RESP_BUFFER_SIZE, nonce_unchanged, start, start_hmac_se
 /// The minimal test case for this category - save, suspend and resume, then restore -
 /// and its variant, where fully shutting down the TPM loses the necessary backing data.
 fn only_resume_maintains_internal_tracking(is_resume_test: bool) {
-    let mut simulator = start("only_resume_maintains_internal_tracking(is_resume_test: {is_resume_test})");
+    let mut simulator = start(&format!("only_resume_maintains_internal_tracking(is_resume_test: {is_resume_test})"));
     let resp_buffer: &mut [u8; RESP_BUFFER_SIZE] = &mut [0u8; RESP_BUFFER_SIZE];
     let mut last_nonce_bytes = [0u8; DIGEST_SIZE];
 
@@ -28,7 +28,6 @@ fn only_resume_maintains_internal_tracking(is_resume_test: bool) {
     };
     let context_buffer: &mut [u8; RESP_BUFFER_SIZE] = &mut [0u8; RESP_BUFFER_SIZE];
     let context_save_rsp = run_command(&context_save, simulator.connection_mut(), context_buffer).unwrap();
-    println!("{:?}", context_save_rsp);
 
     // This command doesn't take a session.
     assert!(nonce_unchanged(&mut last_nonce_bytes, &session.nonce_tpm()) == true);
@@ -109,6 +108,7 @@ fn active_sessions_are_never_saved() {
 //
 pub fn run() {
     only_resume_maintains_internal_tracking(true);
+    only_resume_maintains_internal_tracking(false);
     active_sessions_are_never_saved();
 
     println!("TODO: Continue on orderly (TPM Restart) and disorderly shutdowns.");
