@@ -4,8 +4,7 @@
 pinned revision.
 
   boringssl.py build          Build BoringSSL into $BORINGSSL_BUILD_DIR
-                              (default: target/boringssl), for $RUST_TARGET
-                              (default: the host).
+                              (default: target/boringssl), for the host.
   boringssl.py docs-bindings  Regenerate src/docsrs_bindings.rs.
 
 Needs CMake, a C/C++ compiler, and the `bindgen` CLI (or $BINDGEN). CMake uses
@@ -32,10 +31,9 @@ def boringssl_src():
 def build():
     out = os.environ.get("BORINGSSL_BUILD_DIR", ROOT / "target/boringssl")
     host = re.search(r"host: (\S+)", run("rustc", "-vV", capture_output=True).stdout)[1]
-    target = os.environ.get("RUST_TARGET", host)
     os.environ.setdefault("CMAKE_BUILD_PARALLEL_LEVEL", str(os.cpu_count()))
     run("cmake", "-S", boringssl_src(), "-B", out, "-DCMAKE_BUILD_TYPE=Release",
-        "-DBUILD_TESTING=OFF", f"-DRUST_BINDINGS={target}", f"-DBINDGEN_EXECUTABLE={BINDGEN}")
+        "-DBUILD_TESTING=OFF", f"-DRUST_BINDINGS={host}", f"-DBINDGEN_EXECUTABLE={BINDGEN}")
     run("cmake", "--build", out, "--target", "bssl_sys")
     # `bssl-sys` only reruns its build script when the bindings change.
     run("cargo", "clean", "--quiet", "-p", "bssl-sys")
@@ -49,10 +47,10 @@ def docs_bindings():
     """rustdoc doesn't type-check function bodies, so the docs only need the
     items named in signatures, fields, and constants. Starting from no
     bindings, build the docs as docs.rs does, and add the `bssl_sys` items
-    rustdoc couldn't find, until the build succeeds."""
+    rustdoc couldn't find, until the build succeeds (without warnings)."""
     src, items = boringssl_src(), set()
     env = os.environ | {"RUSTC_BOOTSTRAP": "1", "RUSTFLAGS": "--cfg docsrs",
-                        "RUSTDOCFLAGS": "--cfg docsrs", "CARGO_TARGET_DIR": str(ROOT / "target/docsrs")}
+                        "RUSTDOCFLAGS": "--cfg docsrs -D warnings", "CARGO_TARGET_DIR": str(ROOT / "target/docsrs")}
     while True:
         # BoringSSL's options (`rust/bssl-sys/CMakeLists.txt`), minus layout tests.
         allow = [arg for item in sorted(items) for arg in ("--allowlist-item", f"^{item}$")]

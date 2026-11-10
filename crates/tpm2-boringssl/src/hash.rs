@@ -42,11 +42,7 @@ macro_rules! impl_hash {
                 let HashCtx::$variant(ctx) = &mut self.ctx else {
                     return Err(CryptoError::Internal);
                 };
-                if !data.is_empty() {
-                    unsafe {
-                        bssl_sys::$update(ctx, data.as_ptr().cast(), data.len());
-                    }
-                }
+                unsafe { bssl_sys::$update(ctx, data.as_ptr().cast(), data.len()) };
                 Ok(())
             }
 

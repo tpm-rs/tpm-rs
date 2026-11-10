@@ -1,8 +1,10 @@
 //! RSA (`RSA-1024`, `RSA-2048`, `RSA-3072`, `RSA-4096`) implementations backed
-//! by BoringSSL's FIPS-module `RSA_*`, `EVP_PKEY_*` (for `RSAES-OAEP`), and
-//! `BN_*` APIs.
+//! by BoringSSL's `RSA_*`, `EVP_PKEY_*` (for `RSAES-OAEP`), and `BN_*` APIs.
 
-use core::ptr::{self, NonNull};
+use core::{
+    ffi::{c_int, c_uint},
+    ptr,
+};
 
 use tpm2::{
     TpmiAlgHash, TpmtHa,
@@ -12,152 +14,26 @@ use tpm2::{
     },
 };
 
-use crate::bssl_sys;
-use crate::{BoringSsl, BoringSslRng};
-
-pub(crate) struct BnPtr(NonNull<bssl_sys::BIGNUM>);
-
-impl BnPtr {
-    pub(crate) fn new() -> Result<Self, CryptoError> {
-        NonNull::new(unsafe { bssl_sys::BN_new() })
-            .map(Self)
-            .ok_or(CryptoError::Internal)
-    }
-
-    pub(crate) fn from_be(bytes: &[u8]) -> Result<Self, CryptoError> {
-        NonNull::new(unsafe { bssl_sys::BN_bin2bn(bytes.as_ptr(), bytes.len(), ptr::null_mut()) })
-            .map(Self)
-            .ok_or(CryptoError::Internal)
-    }
-
-    pub(crate) fn from_u32(val: u32) -> Result<Self, CryptoError> {
-        let bn = Self::new()?;
-        // `BN_ULONG` is `u32` or `u64`, depending on the target.
-        let ok = unsafe { bssl_sys::BN_set_word(bn.as_ptr(), val.into()) };
-        if ok != 1 {
-            return Err(CryptoError::Internal);
-        }
-        Ok(bn)
-    }
-
-    pub(crate) fn to_be_padded(&self, out: &mut [u8]) -> Result<(), CryptoError> {
-        let ok = unsafe { bssl_sys::BN_bn2bin_padded(out.as_mut_ptr(), out.len(), self.as_ptr()) };
-        if ok != 1 {
-            return Err(CryptoError::Internal);
-        }
-        Ok(())
-    }
-
-    #[inline]
-    pub(crate) const fn as_ptr(&self) -> *mut bssl_sys::BIGNUM {
-        self.0.as_ptr()
-    }
-}
-
-impl Drop for BnPtr {
-    fn drop(&mut self) {
-        unsafe {
-            bssl_sys::BN_clear_free(self.0.as_ptr());
-        }
-    }
-}
-
-pub(crate) struct BnCtxPtr(NonNull<bssl_sys::BN_CTX>);
-
-impl BnCtxPtr {
-    pub(crate) fn new() -> Result<Self, CryptoError> {
-        NonNull::new(unsafe { bssl_sys::BN_CTX_new() })
-            .map(Self)
-            .ok_or(CryptoError::Internal)
-    }
-
-    #[inline]
-    pub(crate) const fn as_ptr(&self) -> *mut bssl_sys::BN_CTX {
-        self.0.as_ptr()
-    }
-}
-
-impl Drop for BnCtxPtr {
-    fn drop(&mut self) {
-        unsafe {
-            bssl_sys::BN_CTX_free(self.0.as_ptr());
-        }
-    }
-}
+use crate::bssl_sys::{self, BN_CTX, EVP_MD, EVP_PKEY_CTX, RSA};
+use crate::{
+    BoringSsl, BoringSslRng,
+    util::{Bn, Owned, Secret, bn_ctx, check},
+};
 
 /// Validated RSA public key backed by BoringSSL `RSA`.
+#[derive(Clone)]
 pub struct BoringSslRsaPublicKey<const MOD_SIZE: usize> {
-    rsa: NonNull<bssl_sys::RSA>,
+    rsa: Owned<RSA>,
     exponent: u32,
     modulus: [u8; MOD_SIZE],
 }
 
-// SAFETY: `bssl_sys::RSA` is reference-counted and internally synchronized via mutexes.
-unsafe impl<const MOD_SIZE: usize> Send for BoringSslRsaPublicKey<MOD_SIZE> {}
-unsafe impl<const MOD_SIZE: usize> Sync for BoringSslRsaPublicKey<MOD_SIZE> {}
-
-impl<const MOD_SIZE: usize> Clone for BoringSslRsaPublicKey<MOD_SIZE> {
-    fn clone(&self) -> Self {
-        unsafe {
-            bssl_sys::RSA_up_ref(self.rsa.as_ptr());
-        }
-        Self {
-            rsa: self.rsa,
-            exponent: self.exponent,
-            modulus: self.modulus,
-        }
-    }
-}
-
-impl<const MOD_SIZE: usize> Drop for BoringSslRsaPublicKey<MOD_SIZE> {
-    fn drop(&mut self) {
-        unsafe {
-            bssl_sys::RSA_free(self.rsa.as_ptr());
-        }
-    }
-}
-
 /// Validated RSA private key backed by BoringSSL `RSA`.
+#[derive(Clone)]
 pub struct BoringSslRsaPrivateKey<const MOD_SIZE: usize, const PRIME_SIZE: usize> {
-    rsa: NonNull<bssl_sys::RSA>,
+    rsa: Owned<RSA>,
     public: BoringSslRsaPublicKey<MOD_SIZE>,
-    prime_p: [u8; PRIME_SIZE],
-}
-
-// SAFETY: `bssl_sys::RSA` is reference-counted and internally synchronized via mutexes.
-unsafe impl<const MOD_SIZE: usize, const PRIME_SIZE: usize> Send
-    for BoringSslRsaPrivateKey<MOD_SIZE, PRIME_SIZE>
-{
-}
-unsafe impl<const MOD_SIZE: usize, const PRIME_SIZE: usize> Sync
-    for BoringSslRsaPrivateKey<MOD_SIZE, PRIME_SIZE>
-{
-}
-
-impl<const MOD_SIZE: usize, const PRIME_SIZE: usize> Clone
-    for BoringSslRsaPrivateKey<MOD_SIZE, PRIME_SIZE>
-{
-    fn clone(&self) -> Self {
-        unsafe {
-            bssl_sys::RSA_up_ref(self.rsa.as_ptr());
-        }
-        Self {
-            rsa: self.rsa,
-            public: self.public.clone(),
-            prime_p: self.prime_p,
-        }
-    }
-}
-
-impl<const MOD_SIZE: usize, const PRIME_SIZE: usize> Drop
-    for BoringSslRsaPrivateKey<MOD_SIZE, PRIME_SIZE>
-{
-    fn drop(&mut self) {
-        unsafe {
-            bssl_sys::RSA_free(self.rsa.as_ptr());
-            bssl_sys::OPENSSL_cleanse(self.prime_p.as_mut_ptr().cast(), PRIME_SIZE);
-        }
-    }
+    prime_p: Secret<[u8; PRIME_SIZE]>,
 }
 
 impl<const MOD_SIZE: usize> BoringSslRsaPublicKey<MOD_SIZE> {
@@ -165,12 +41,12 @@ impl<const MOD_SIZE: usize> BoringSslRsaPublicKey<MOD_SIZE> {
     /// `MOD_SIZE`-byte ciphertext into `out`.
     fn encrypt(
         &self,
-        padding: core::ffi::c_int,
+        padding: c_int,
         input: &[u8],
         out: &mut [u8; MOD_SIZE],
     ) -> Result<(), CryptoError> {
         let mut out_len: usize = 0;
-        let ok = unsafe {
+        check(unsafe {
             bssl_sys::RSA_encrypt(
                 self.rsa.as_ptr(),
                 &raw mut out_len,
@@ -180,11 +56,8 @@ impl<const MOD_SIZE: usize> BoringSslRsaPublicKey<MOD_SIZE> {
                 input.len(),
                 padding,
             )
-        };
-        if ok != 1 || out_len != MOD_SIZE {
-            unsafe {
-                bssl_sys::ERR_clear_error();
-            }
+        })?;
+        if out_len != MOD_SIZE {
             return Err(CryptoError::Internal);
         }
         Ok(())
@@ -197,7 +70,7 @@ impl<const MOD_SIZE: usize, const PRIME_SIZE: usize> BoringSslRsaPrivateKey<MOD_
     /// `Ok(None)` if decryption fails (i.e. the padding is invalid).
     fn decrypt(
         &self,
-        padding: core::ffi::c_int,
+        padding: c_int,
         c: &[u8; MOD_SIZE],
         out: &mut [u8; MOD_SIZE],
     ) -> Result<Option<usize>, CryptoError> {
@@ -214,9 +87,6 @@ impl<const MOD_SIZE: usize, const PRIME_SIZE: usize> BoringSslRsaPrivateKey<MOD_
             )
         };
         if ok != 1 {
-            unsafe {
-                bssl_sys::ERR_clear_error();
-            }
             return Ok(None);
         }
         if out_len > MOD_SIZE {
@@ -226,216 +96,118 @@ impl<const MOD_SIZE: usize, const PRIME_SIZE: usize> BoringSslRsaPrivateKey<MOD_
     }
 }
 
-/// Converts the result of a BoringSSL signature verification function into
-/// whether the signature is valid, clearing the error queue if not.
-fn verify_result(ok: core::ffi::c_int) -> bool {
-    if ok != 1 {
-        unsafe {
-            bssl_sys::ERR_clear_error();
-        }
-        return false;
-    }
-    true
-}
-
-fn hash_alg_to_nid(alg: TpmiAlgHash) -> Option<core::ffi::c_int> {
-    match alg {
-        TpmiAlgHash::Sha1 => Some(bssl_sys::NID_sha1),
-        TpmiAlgHash::Sha256 => Some(bssl_sys::NID_sha256),
-        TpmiAlgHash::Sha384 => Some(bssl_sys::NID_sha384),
-        TpmiAlgHash::Sha512 => Some(bssl_sys::NID_sha512),
-        _ => None,
-    }
-}
-
-fn hash_alg_to_md(alg: TpmiAlgHash) -> Result<*const bssl_sys::EVP_MD, CryptoError> {
-    let md = unsafe {
-        match alg {
+fn hash_alg_to_md(alg: TpmiAlgHash) -> Result<*const EVP_MD, CryptoError> {
+    unsafe {
+        Ok(match alg {
             TpmiAlgHash::Sha1 => bssl_sys::EVP_sha1(),
             TpmiAlgHash::Sha256 => bssl_sys::EVP_sha256(),
             TpmiAlgHash::Sha384 => bssl_sys::EVP_sha384(),
             TpmiAlgHash::Sha512 => bssl_sys::EVP_sha512(),
             _ => return Err(CryptoError::Unsupported),
-        }
-    };
-    if md.is_null() {
-        Err(CryptoError::Internal)
-    } else {
-        Ok(md)
+        })
     }
 }
 
-/// `EVP_PKEY_CTX` configured for `RSAES-OAEP` encryption or decryption.
-struct OaepCtxPtr(NonNull<bssl_sys::EVP_PKEY_CTX>);
-
-impl OaepCtxPtr {
-    /// Creates an `RSAES-OAEP` context for `rsa`, using `md` for both the OAEP
-    /// digest and `MGF1`, and `label` as the OAEP label `L` (no label if empty).
-    fn new(
-        rsa: NonNull<bssl_sys::RSA>,
-        md: *const bssl_sys::EVP_MD,
-        label: &[u8],
-        encrypt: bool,
-    ) -> Result<Self, CryptoError> {
-        let pkey =
-            NonNull::new(unsafe { bssl_sys::EVP_PKEY_new() }).ok_or(CryptoError::Internal)?;
-        let ctx = unsafe {
-            if bssl_sys::EVP_PKEY_set1_RSA(pkey.as_ptr(), rsa.as_ptr()) == 1 {
-                bssl_sys::EVP_PKEY_CTX_new(pkey.as_ptr(), ptr::null_mut())
-            } else {
-                ptr::null_mut()
-            }
-        };
-        // `EVP_PKEY_CTX_new` holds its own reference to `pkey`.
-        unsafe {
-            bssl_sys::EVP_PKEY_free(pkey.as_ptr());
-        }
-        let Some(ctx) = NonNull::new(ctx) else {
-            unsafe {
-                bssl_sys::ERR_clear_error();
-            }
-            return Err(CryptoError::Internal);
-        };
-        let ctx = Self(ctx);
-
-        let ok = unsafe {
-            let init = if encrypt {
-                bssl_sys::EVP_PKEY_encrypt_init(ctx.as_ptr())
-            } else {
-                bssl_sys::EVP_PKEY_decrypt_init(ctx.as_ptr())
-            };
-            init == 1
-                && bssl_sys::EVP_PKEY_CTX_set_rsa_padding(
-                    ctx.as_ptr(),
-                    bssl_sys::RSA_PKCS1_OAEP_PADDING,
-                ) == 1
-                && bssl_sys::EVP_PKEY_CTX_set_rsa_oaep_md(ctx.as_ptr(), md) == 1
-                && bssl_sys::EVP_PKEY_CTX_set_rsa_mgf1_md(ctx.as_ptr(), md) == 1
-        };
-        if !ok {
-            unsafe {
-                bssl_sys::ERR_clear_error();
-            }
+/// Returns an `EVP_PKEY_CTX` for `RSAES-OAEP` encryption or decryption with
+/// `rsa`, using `md` for both the OAEP digest and `MGF1`, and `label` as the
+/// OAEP label `L` (no label if empty).
+fn oaep_ctx(
+    rsa: &Owned<RSA>,
+    md: *const EVP_MD,
+    label: &[u8],
+    encrypt: bool,
+) -> Result<Owned<EVP_PKEY_CTX>, CryptoError> {
+    let pkey = Owned::new(unsafe { bssl_sys::EVP_PKEY_new() })?;
+    check(unsafe { bssl_sys::EVP_PKEY_set1_RSA(pkey.as_ptr(), rsa.as_ptr()) })?;
+    // `EVP_PKEY_CTX_new` takes its own reference to `pkey`.
+    let ctx = Owned::new(unsafe { bssl_sys::EVP_PKEY_CTX_new(pkey.as_ptr(), ptr::null_mut()) })?;
+    let c = ctx.as_ptr();
+    unsafe {
+        check(if encrypt {
+            bssl_sys::EVP_PKEY_encrypt_init(c)
+        } else {
+            bssl_sys::EVP_PKEY_decrypt_init(c)
+        })?;
+        check(bssl_sys::EVP_PKEY_CTX_set_rsa_padding(
+            c,
+            bssl_sys::RSA_PKCS1_OAEP_PADDING,
+        ))?;
+        check(bssl_sys::EVP_PKEY_CTX_set_rsa_oaep_md(c, md))?;
+        check(bssl_sys::EVP_PKEY_CTX_set_rsa_mgf1_md(c, md))?;
+    }
+    if !label.is_empty() {
+        let copy = unsafe { bssl_sys::OPENSSL_memdup(label.as_ptr().cast(), label.len()) };
+        if copy.is_null() {
             return Err(CryptoError::Internal);
         }
-
-        if !label.is_empty() {
-            let copy = unsafe { bssl_sys::OPENSSL_memdup(label.as_ptr().cast(), label.len()) };
-            if copy.is_null() {
-                return Err(CryptoError::Internal);
-            }
-            // On success, `EVP_PKEY_CTX_set0_rsa_oaep_label` takes ownership of `copy`.
-            let ok = unsafe {
-                bssl_sys::EVP_PKEY_CTX_set0_rsa_oaep_label(ctx.as_ptr(), copy.cast(), label.len())
-            };
-            if ok != 1 {
-                unsafe {
-                    bssl_sys::OPENSSL_free(copy);
-                    bssl_sys::ERR_clear_error();
-                }
-                return Err(CryptoError::Internal);
-            }
-        }
-        Ok(ctx)
-    }
-
-    #[inline]
-    const fn as_ptr(&self) -> *mut bssl_sys::EVP_PKEY_CTX {
-        self.0.as_ptr()
-    }
-}
-
-impl Drop for OaepCtxPtr {
-    fn drop(&mut self) {
-        unsafe {
-            bssl_sys::EVP_PKEY_CTX_free(self.0.as_ptr());
+        // On success, `EVP_PKEY_CTX_set0_rsa_oaep_label` takes ownership of `copy`.
+        if unsafe { bssl_sys::EVP_PKEY_CTX_set0_rsa_oaep_label(c, copy.cast(), label.len()) } != 1 {
+            unsafe { bssl_sys::OPENSSL_free(copy) };
+            return Err(CryptoError::Internal);
         }
     }
+    Ok(ctx)
 }
 
 /// Generates a random prime `p` of `PRIME_SIZE` bytes from `rng` such that
-/// `p` has its top two bits set, `gcd(p - 1, e) == 1`, and if `other_p` is
+/// `p` has its top two bits set, `gcd(p - 1, e) == 1`, and if `other` is
 /// `Some(q)`, `|p - q| > 2^(prime_bits - 100)`.
 #[inline(never)]
-fn generate_prime_from_rng<const PRIME_SIZE: usize>(
+fn generate_prime<const PRIME_SIZE: usize>(
     rng: &mut impl Rng,
-    e: &BnPtr,
-    other_p: Option<&BnPtr>,
-    ctx: &BnCtxPtr,
-) -> Result<([u8; PRIME_SIZE], BnPtr), CryptoError> {
-    let prime_bits = (PRIME_SIZE * 8) as core::ffi::c_uint;
-    let min_diff_bits = prime_bits.saturating_sub(100);
-    let cand = BnPtr::new()?;
-    let pm1 = BnPtr::new()?;
-    let gcd = BnPtr::new()?;
-    let diff = BnPtr::new()?;
-    let mut buf = [0u8; PRIME_SIZE];
-
-    let max_tries = (PRIME_SIZE * 8) * 16;
-    for _ in 0..max_tries {
-        rng.fill_bytes(&mut buf)?;
+    e: &Bn,
+    other: Option<&Bn>,
+    ctx: *mut BN_CTX,
+) -> Result<Bn, CryptoError> {
+    let prime_bits = (PRIME_SIZE * 8) as c_uint;
+    let p = Bn::zero()?;
+    let (pm1, gcd, diff) = (Bn::zero()?, Bn::zero()?, Bn::zero()?);
+    let (pm1, gcd, diff) = (pm1.as_ptr(), gcd.as_ptr(), diff.as_ptr());
+    let mut buf = Secret([0u8; PRIME_SIZE]);
+    for _ in 0..prime_bits * 16 {
+        rng.fill_bytes(&mut buf.0)?;
         // Set top two bits (so p * q is guaranteed to have MOD_SIZE * 8 bits)
         // and bottom bit (odd), matching FIPS 186-5 Appendix A.1.3.
-        buf[0] |= 0xc0;
-        buf[PRIME_SIZE - 1] |= 0x01;
-
-        if unsafe { bssl_sys::BN_bin2bn(buf.as_ptr(), PRIME_SIZE, cand.as_ptr()) }.is_null() {
-            buf.fill(0);
-            return Err(CryptoError::Internal);
-        }
-
-        if let Some(p) = other_p {
-            let ok = unsafe {
-                if bssl_sys::BN_cmp(cand.as_ptr(), p.as_ptr()) >= 0 {
-                    bssl_sys::BN_sub(diff.as_ptr(), cand.as_ptr(), p.as_ptr())
-                } else {
-                    bssl_sys::BN_sub(diff.as_ptr(), p.as_ptr(), cand.as_ptr())
-                }
-            };
-            if ok != 1 {
-                buf.fill(0);
+        buf.0[0] |= 0xc0;
+        buf.0[PRIME_SIZE - 1] |= 0x01;
+        unsafe {
+            if bssl_sys::BN_bin2bn(buf.0.as_ptr(), PRIME_SIZE, p.as_ptr()).is_null() {
                 return Err(CryptoError::Internal);
             }
-            if unsafe { bssl_sys::BN_num_bits(diff.as_ptr()) } <= min_diff_bits {
+            if let Some(q) = other {
+                // `BN_num_bits` ignores the sign of `p - q`.
+                check(bssl_sys::BN_sub(diff, p.as_ptr(), q.as_ptr()))?;
+                if bssl_sys::BN_num_bits(diff) <= prime_bits - 100 {
+                    continue;
+                }
+            }
+            check(bssl_sys::BN_sub(pm1, p.as_ptr(), bssl_sys::BN_value_one()))?;
+            check(bssl_sys::BN_gcd(gcd, pm1, e.as_ptr(), ctx))?;
+            if bssl_sys::BN_is_one(gcd) != 1 {
                 continue;
             }
         }
-
-        let ok = unsafe {
-            !bssl_sys::BN_copy(pm1.as_ptr(), cand.as_ptr()).is_null()
-                && bssl_sys::BN_sub_word(pm1.as_ptr(), 1) == 1
-                && bssl_sys::BN_gcd(gcd.as_ptr(), pm1.as_ptr(), e.as_ptr(), ctx.as_ptr()) == 1
-        };
-        if !ok {
-            buf.fill(0);
-            return Err(CryptoError::Internal);
-        }
-        if unsafe { bssl_sys::BN_is_one(gcd.as_ptr()) } != 1 {
-            continue;
-        }
-
-        let mut is_prime: core::ffi::c_int = 0;
-        let ok = unsafe {
-            bssl_sys::BN_primality_test(
-                &raw mut is_prime,
-                cand.as_ptr(),
-                bssl_sys::BN_prime_checks_for_generation,
-                ctx.as_ptr(),
-                0,
-                ptr::null_mut(),
-            )
-        };
-        if ok != 1 {
-            buf.fill(0);
-            return Err(CryptoError::Internal);
-        }
-        if is_prime == 1 {
-            return Ok((buf, cand));
+        if is_prime(p.as_ptr(), ctx)? {
+            return Ok(p);
         }
     }
-
-    buf.fill(0);
     Err(CryptoError::Internal)
+}
+
+/// Returns whether `bn` is prime.
+fn is_prime(bn: *const bssl_sys::BIGNUM, ctx: *mut BN_CTX) -> Result<bool, CryptoError> {
+    let mut is_prime: c_int = 0;
+    check(unsafe {
+        bssl_sys::BN_primality_test(
+            &raw mut is_prime,
+            bn,
+            bssl_sys::BN_prime_checks_for_generation,
+            ctx,
+            0,
+            ptr::null_mut(),
+        )
+    })?;
+    Ok(is_prime == 1)
 }
 
 macro_rules! impl_rsa_key {
@@ -450,50 +222,27 @@ macro_rules! impl_rsa_key {
                 if exponent < 3 || exponent % 2 == 0 {
                     return Err(CryptoError::Unsupported);
                 }
-                let ctx = BnCtxPtr::new()?;
-                let e = BnPtr::from_u32(exponent)?;
-                let n = BnPtr::new()?;
-
+                let ctx = bn_ctx()?;
+                let e = Bn::from_u32(exponent)?;
+                let n = Bn::zero()?;
                 for _ in 0..8 {
-                    let (mut p_bytes, p) =
-                        generate_prime_from_rng::<$prime_size>(rng, &e, None, &ctx)?;
-                    let (mut q_bytes, q) =
-                        generate_prime_from_rng::<$prime_size>(rng, &e, Some(&p), &ctx)?;
-                    unsafe {
-                        bssl_sys::OPENSSL_cleanse(q_bytes.as_mut_ptr().cast(), $prime_size);
-                    }
-
-                    let mul_ok = unsafe {
+                    let p = generate_prime::<$prime_size>(rng, &e, None, ctx.as_ptr())?;
+                    let q = generate_prime::<$prime_size>(rng, &e, Some(&p), ctx.as_ptr())?;
+                    check(unsafe {
                         bssl_sys::BN_mul(n.as_ptr(), p.as_ptr(), q.as_ptr(), ctx.as_ptr())
-                    };
-                    if mul_ok != 1 {
-                        unsafe {
-                            bssl_sys::OPENSSL_cleanse(p_bytes.as_mut_ptr().cast(), $prime_size);
-                        }
-                        return Err(CryptoError::Internal);
-                    }
-
+                    })?;
+                    // `p` and `q` have their top two bits set, so `n` has
+                    // exactly `$mod_size` bytes.
                     let mut modulus = [0u8; $mod_size];
-                    if n.to_be_padded(&mut modulus).is_err() {
-                        unsafe {
-                            bssl_sys::OPENSSL_cleanse(p_bytes.as_mut_ptr().cast(), $prime_size);
-                        }
-                        continue;
-                    }
-
-                    if let Some(pub_key) = Self::load_public(exponent, &modulus)? {
-                        if let Some(priv_key) = Self::load(pub_key, &p_bytes)? {
-                            unsafe {
-                                bssl_sys::OPENSSL_cleanse(p_bytes.as_mut_ptr().cast(), $prime_size);
-                            }
-                            return Ok(priv_key);
-                        }
-                    }
-                    unsafe {
-                        bssl_sys::OPENSSL_cleanse(p_bytes.as_mut_ptr().cast(), $prime_size);
+                    n.to_be_padded(&mut modulus)?;
+                    let mut prime_p = Secret([0u8; $prime_size]);
+                    p.to_be_padded(&mut prime_p.0)?;
+                    if let Some(public) = Self::load_public(exponent, &modulus)?
+                        && let Some(private) = Self::load(public, &prime_p.0)?
+                    {
+                        return Ok(private);
                     }
                 }
-
                 Err(CryptoError::Internal)
             }
 
@@ -505,146 +254,76 @@ macro_rules! impl_rsa_key {
                 if (prime_p[0] & 0x80) == 0 || (prime_p[$prime_size - 1] & 0x01) == 0 {
                     return Ok(None);
                 }
+                let p = Bn::from_be(prime_p)?;
+                let (q, rem, pm1, qm1) = (Bn::zero()?, Bn::zero()?, Bn::zero()?, Bn::zero()?);
+                let (phi, d, dmp1, dmq1, iqmp) = (
+                    Bn::zero()?,
+                    Bn::zero()?,
+                    Bn::zero()?,
+                    Bn::zero()?,
+                    Bn::zero()?,
+                );
+                let (p, q, rem, pm1, qm1) = (
+                    p.as_ptr(),
+                    q.as_ptr(),
+                    rem.as_ptr(),
+                    pm1.as_ptr(),
+                    qm1.as_ptr(),
+                );
+                let (phi, d, dmp1, dmq1, iqmp) = (
+                    phi.as_ptr(),
+                    d.as_ptr(),
+                    dmp1.as_ptr(),
+                    dmq1.as_ptr(),
+                    iqmp.as_ptr(),
+                );
+                let ctx = bn_ctx()?;
+                let ctx = ctx.as_ptr();
+                unsafe {
+                    let n = bssl_sys::RSA_get0_n(public.rsa.as_ptr());
+                    let e = bssl_sys::RSA_get0_e(public.rsa.as_ptr());
+                    let one = bssl_sys::BN_value_one();
 
-                let ctx = BnCtxPtr::new()?;
-                let p = BnPtr::from_be(prime_p)?;
-                let q = BnPtr::new()?;
-                let rem = BnPtr::new()?;
-                let pm1 = BnPtr::new()?;
-                let qm1 = BnPtr::new()?;
-                let gcd = BnPtr::new()?;
-                let phi = BnPtr::new()?;
-                let lcm = BnPtr::new()?;
-                let d = BnPtr::new()?;
-                let dmp1 = BnPtr::new()?;
-                let dmq1 = BnPtr::new()?;
-                let iqmp = BnPtr::new()?;
-
-                let n_ptr = unsafe { bssl_sys::RSA_get0_n(public.rsa.as_ptr()) };
-                let e_ptr = unsafe { bssl_sys::RSA_get0_e(public.rsa.as_ptr()) };
-                if n_ptr.is_null() || e_ptr.is_null() {
-                    return Err(CryptoError::Internal);
-                }
-
-                let div_ok = unsafe {
-                    bssl_sys::BN_div(q.as_ptr(), rem.as_ptr(), n_ptr, p.as_ptr(), ctx.as_ptr())
-                };
-                if div_ok != 1 {
-                    unsafe {
-                        bssl_sys::ERR_clear_error();
+                    // `q = n / p` must be an odd `$prime_size`-byte integer.
+                    check(bssl_sys::BN_div(q, rem, n, p, ctx))?;
+                    if bssl_sys::BN_is_zero(rem) != 1
+                        || bssl_sys::BN_num_bits(q) != ($prime_size * 8) as c_uint
+                        || bssl_sys::BN_is_odd(q) != 1
+                    {
+                        return Ok(None);
                     }
-                    return Ok(None);
-                }
-
-                let valid_q = unsafe {
-                    bssl_sys::BN_is_zero(rem.as_ptr()) == 1
-                        && bssl_sys::BN_num_bits(q.as_ptr())
-                            == ($prime_size * 8) as core::ffi::c_uint
-                        && bssl_sys::BN_is_odd(q.as_ptr()) == 1
-                };
-                if !valid_q {
-                    return Ok(None);
-                }
-
-                // Verify p and q are prime so composite factors cannot slip through.
-                let mut p_prime: core::ffi::c_int = 0;
-                let mut q_prime: core::ffi::c_int = 0;
-                let primality_ok = unsafe {
-                    bssl_sys::BN_primality_test(
-                        &raw mut p_prime,
-                        p.as_ptr(),
-                        bssl_sys::BN_prime_checks_for_generation,
-                        ctx.as_ptr(),
-                        0,
-                        ptr::null_mut(),
-                    ) == 1
-                        && bssl_sys::BN_primality_test(
-                            &raw mut q_prime,
-                            q.as_ptr(),
-                            bssl_sys::BN_prime_checks_for_generation,
-                            ctx.as_ptr(),
-                            0,
-                            ptr::null_mut(),
-                        ) == 1
-                };
-                if !primality_ok {
-                    return Err(CryptoError::Internal);
-                }
-                if p_prime != 1 || q_prime != 1 {
-                    return Ok(None);
-                }
-
-                let math_ok = unsafe {
-                    !bssl_sys::BN_copy(pm1.as_ptr(), p.as_ptr()).is_null()
-                        && bssl_sys::BN_sub_word(pm1.as_ptr(), 1) == 1
-                        && !bssl_sys::BN_copy(qm1.as_ptr(), q.as_ptr()).is_null()
-                        && bssl_sys::BN_sub_word(qm1.as_ptr(), 1) == 1
-                        && bssl_sys::BN_mul(phi.as_ptr(), pm1.as_ptr(), qm1.as_ptr(), ctx.as_ptr())
-                            == 1
-                        && bssl_sys::BN_gcd(gcd.as_ptr(), pm1.as_ptr(), qm1.as_ptr(), ctx.as_ptr())
-                            == 1
-                        && bssl_sys::BN_div(
-                            lcm.as_ptr(),
-                            ptr::null_mut(),
-                            phi.as_ptr(),
-                            gcd.as_ptr(),
-                            ctx.as_ptr(),
-                        ) == 1
-                };
-                if !math_ok {
-                    return Err(CryptoError::Internal);
-                }
-
-                let inv_ok = unsafe {
-                    !bssl_sys::BN_mod_inverse(d.as_ptr(), e_ptr, lcm.as_ptr(), ctx.as_ptr())
-                        .is_null()
-                        && bssl_sys::BN_nnmod(dmp1.as_ptr(), d.as_ptr(), pm1.as_ptr(), ctx.as_ptr())
-                            == 1
-                        && bssl_sys::BN_nnmod(dmq1.as_ptr(), d.as_ptr(), qm1.as_ptr(), ctx.as_ptr())
-                            == 1
-                        && !bssl_sys::BN_mod_inverse(
-                            iqmp.as_ptr(),
-                            q.as_ptr(),
-                            p.as_ptr(),
-                            ctx.as_ptr(),
-                        )
-                        .is_null()
-                };
-                if !inv_ok {
-                    unsafe {
-                        bssl_sys::ERR_clear_error();
+                    // `RSA_new_private_key` doesn't check that `p` and `q` are prime.
+                    if !is_prime(p, ctx)? || !is_prime(q, ctx)? {
+                        return Ok(None);
                     }
-                    return Ok(None);
-                }
 
-                let rsa_ptr = unsafe {
-                    bssl_sys::RSA_new_private_key(
-                        n_ptr,
-                        e_ptr,
-                        d.as_ptr(),
-                        p.as_ptr(),
-                        q.as_ptr(),
-                        dmp1.as_ptr(),
-                        dmq1.as_ptr(),
-                        iqmp.as_ptr(),
-                    )
-                };
-                let Some(rsa) = NonNull::new(rsa_ptr) else {
-                    unsafe {
-                        bssl_sys::ERR_clear_error();
+                    // `RSA_check_key` accepts `d = e^-1 mod (p - 1)(q - 1)`, and
+                    // the CRT values are the same as for `e^-1 mod lcm(p - 1, q - 1)`.
+                    check(bssl_sys::BN_sub(pm1, p, one))?;
+                    check(bssl_sys::BN_sub(qm1, q, one))?;
+                    check(bssl_sys::BN_mul(phi, pm1, qm1, ctx))?;
+                    if bssl_sys::BN_mod_inverse(d, e, phi, ctx).is_null() {
+                        return Ok(None);
                     }
-                    return Ok(None);
-                };
+                    check(bssl_sys::BN_nnmod(dmp1, d, pm1, ctx))?;
+                    check(bssl_sys::BN_nnmod(dmq1, d, qm1, ctx))?;
+                    if bssl_sys::BN_mod_inverse(iqmp, q, p, ctx).is_null() {
+                        return Ok(None);
+                    }
 
-                Ok(Some(Self {
-                    rsa,
-                    public,
-                    prime_p: *prime_p,
-                }))
+                    let rsa = Owned::from_ptr(bssl_sys::RSA_new_private_key(
+                        n, e, d, p, q, dmp1, dmq1, iqmp,
+                    ));
+                    Ok(rsa.map(|rsa| Self {
+                        rsa,
+                        public,
+                        prime_p: Secret(*prime_p),
+                    }))
+                }
             }
 
             fn store(&self, out: &mut [u8; $prime_size]) -> Result<(), CryptoError> {
-                out.copy_from_slice(&self.prime_p);
+                *out = self.prime_p.0;
                 Ok(())
             }
 
@@ -663,16 +342,12 @@ macro_rules! impl_rsa_key {
                 if (modulus[0] & 0x80) == 0 || (modulus[$mod_size - 1] & 0x01) == 0 {
                     return Ok(None);
                 }
-                let n = BnPtr::from_be(modulus)?;
-                let e = BnPtr::from_u32(exponent)?;
-                let rsa_ptr = unsafe { bssl_sys::RSA_new_public_key(n.as_ptr(), e.as_ptr()) };
-                let Some(rsa) = NonNull::new(rsa_ptr) else {
-                    unsafe {
-                        bssl_sys::ERR_clear_error();
-                    }
-                    return Ok(None);
-                };
-                Ok(Some(BoringSslRsaPublicKey {
+                let n = Bn::from_be(modulus)?;
+                let e = Bn::from_u32(exponent)?;
+                let rsa = Owned::from_ptr(unsafe {
+                    bssl_sys::RSA_new_public_key(n.as_ptr(), e.as_ptr())
+                });
+                Ok(rsa.map(|rsa| BoringSslRsaPublicKey {
                     rsa,
                     exponent,
                     modulus: *modulus,
@@ -683,7 +358,7 @@ macro_rules! impl_rsa_key {
                 public: &Self::PublicKey,
                 out: &mut [u8; $mod_size],
             ) -> Result<(), CryptoError> {
-                out.copy_from_slice(&public.modulus);
+                *out = public.modulus;
                 Ok(())
             }
         }
@@ -741,9 +416,9 @@ macro_rules! impl_rsa_key {
                 }
                 // The OAEP seed comes from BoringSSL's system RNG.
                 rng.check_system()?;
-                let ctx = OaepCtxPtr::new(public.rsa, md, label, true)?;
+                let ctx = oaep_ctx(&public.rsa, md, label, true)?;
                 let mut out_len: usize = $mod_size;
-                let ok = unsafe {
+                check(unsafe {
                     bssl_sys::EVP_PKEY_encrypt(
                         ctx.as_ptr(),
                         out.as_mut_ptr(),
@@ -751,11 +426,8 @@ macro_rules! impl_rsa_key {
                         m.as_ptr(),
                         m.len(),
                     )
-                };
-                if ok != 1 || out_len != $mod_size {
-                    unsafe {
-                        bssl_sys::ERR_clear_error();
-                    }
+                })?;
+                if out_len != $mod_size {
                     return Err(CryptoError::Internal);
                 }
                 Ok(Some(()))
@@ -774,7 +446,7 @@ macro_rules! impl_rsa_key {
                     return Ok(None);
                 }
                 let md = hash_alg_to_md(hash)?;
-                let ctx = OaepCtxPtr::new(self.rsa, md, label, false)?;
+                let ctx = oaep_ctx(&self.rsa, md, label, false)?;
                 let mut out_len: usize = $mod_size;
                 let ok = unsafe {
                     bssl_sys::EVP_PKEY_decrypt(
@@ -785,11 +457,8 @@ macro_rules! impl_rsa_key {
                         $mod_size,
                     )
                 };
+                // `c < n`, so only invalid padding can fail.
                 if ok != 1 {
-                    unsafe {
-                        bssl_sys::ERR_clear_error();
-                    }
-                    // `c < n`, so only invalid padding can fail.
                     return Ok(None);
                 }
                 if out_len > $mod_size {
@@ -837,11 +506,9 @@ macro_rules! impl_rsa_key {
                 out: &mut [u8; $mod_size],
             ) -> Result<(), CryptoError> {
                 let bytes = digest.digest();
-                let Some(nid) = hash_alg_to_nid(digest.hash_alg()) else {
-                    return Err(CryptoError::Unsupported);
-                };
-                let mut out_len: core::ffi::c_uint = 0;
-                let ok = unsafe {
+                let nid = unsafe { bssl_sys::EVP_MD_type(hash_alg_to_md(digest.hash_alg())?) };
+                let mut out_len: c_uint = 0;
+                check(unsafe {
                     bssl_sys::RSA_sign(
                         nid,
                         bytes.as_ptr(),
@@ -850,11 +517,8 @@ macro_rules! impl_rsa_key {
                         &raw mut out_len,
                         self.rsa.as_ptr(),
                     )
-                };
-                if ok != 1 || out_len as usize != $mod_size {
-                    unsafe {
-                        bssl_sys::ERR_clear_error();
-                    }
+                })?;
+                if out_len as usize != $mod_size {
                     return Err(CryptoError::Internal);
                 }
                 Ok(())
@@ -867,9 +531,7 @@ macro_rules! impl_rsa_key {
                 sig: &[u8; $mod_size],
             ) -> Result<bool, CryptoError> {
                 let bytes = digest.digest();
-                let Some(nid) = hash_alg_to_nid(digest.hash_alg()) else {
-                    return Err(CryptoError::Unsupported);
-                };
+                let nid = unsafe { bssl_sys::EVP_MD_type(hash_alg_to_md(digest.hash_alg())?) };
                 let ok = unsafe {
                     bssl_sys::RSA_verify(
                         nid,
@@ -880,7 +542,7 @@ macro_rules! impl_rsa_key {
                         public.rsa.as_ptr(),
                     )
                 };
-                Ok(verify_result(ok))
+                Ok(ok == 1)
             }
 
             #[inline(never)]
@@ -898,7 +560,7 @@ macro_rules! impl_rsa_key {
                 // size (`emLen - hLen - 2` for small keys).
                 let salt_len = bytes.len().min($mod_size - bytes.len() - 2);
                 let mut out_len: usize = 0;
-                let ok = unsafe {
+                check(unsafe {
                     bssl_sys::RSA_sign_pss_mgf1(
                         self.rsa.as_ptr(),
                         &raw mut out_len,
@@ -908,13 +570,10 @@ macro_rules! impl_rsa_key {
                         bytes.len(),
                         md,
                         md,
-                        salt_len as core::ffi::c_int,
+                        salt_len as c_int,
                     )
-                };
-                if ok != 1 || out_len != $mod_size {
-                    unsafe {
-                        bssl_sys::ERR_clear_error();
-                    }
+                })?;
+                if out_len != $mod_size {
                     return Err(CryptoError::Internal);
                 }
                 Ok(())
@@ -941,7 +600,7 @@ macro_rules! impl_rsa_key {
                         $mod_size,
                     )
                 };
-                Ok(verify_result(ok))
+                Ok(ok == 1)
             }
         }
     };
