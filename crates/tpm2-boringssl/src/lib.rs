@@ -5,8 +5,7 @@
 //! links a prebuilt BoringSSL. The `bssl-sys` on crates.io is a placeholder, so
 //! users replace it with `[patch.crates-io]`; see `README.md`.
 //!
-//! This is not a FIPS-validated build of BoringSSL, although most algorithms
-//! below are implemented by BoringSSL's FIPS module.
+//! This is not a FIPS-validated build of BoringSSL.
 //!
 //! ## Random Number Generation
 //!
@@ -22,18 +21,18 @@
 //!
 //! ## Supported Algorithms
 //!
-//! | Family | Algorithms | Entry Points |
-//! |--------|------------|--------------|
-//! | `Hash` | `SHA-1`, `SHA-256`, `SHA-384`, `SHA-512` | `SHA*_Init`, `SHA*_Update`, `SHA*_Final` |
-//! | `Hmac` | `HMAC` with the above hashes | `HMAC_Init_ex`, `HMAC_Update`, `HMAC_Final` |
-//! | `Cmac` | `AES-128/192/256-CMAC` | `CMAC_Init`, `CMAC_Update`, `CMAC_Final` |
-//! | `Symmetric` | `AES-128/192/256` (`CTR`, `OFB`, `CBC`, `CFB`, `ECB`) | `AES_set_*_key`, `AES_encrypt`, `AES_decrypt`, `AES_*_encrypt` |
-//! | `Random` | System RNG and seeded `CTR_DRBG` | `RAND_bytes`, `CTR_DRBG_*` |
-//! | `Rsa` | `RSA-1024/2048/3072/4096` (raw, `RSAES`, `OAEP`, `RSASSA`, `RSAPSS`) | `RSA_*`, `EVP_PKEY_*` (OAEP), `BN_*` (key generation) |
-//! | `Ecc` | `NIST P-224/P-256/P-384/P-521` (`ECDH`, `ECDSA`) | `EC_*`, `ECDSA_sign_p1363`, `ECDSA_verify_p1363` |
-//! | `Ecc` | `Ed25519` (`EdDSA`, `HashEdDSA`), `X25519` | `ED25519_*`, `X25519*`, `BN_*` (point validation) |
-//! | `Mldsa` | `ML-DSA-44/65/87` (pure, external `µ`, `HashML-DSA`) | `MLDSA*_*`, `EVP_shake256` (`HashML-DSA`) |
-//! | `Mlkem` | `ML-KEM-768/1024` | `MLKEM*_*` |
+//! | Family | Algorithms |
+//! |--------|------------|
+//! | `Hash` | `SHA-1`, `SHA-256`, `SHA-384`, `SHA-512` |
+//! | `Hmac` | `HMAC` with the above hashes |
+//! | `Cmac` | `AES-128/192/256-CMAC` |
+//! | `Symmetric` | `AES-128/192/256` (`CTR`, `OFB`, `CBC`, `CFB`, `ECB`) |
+//! | `Random` | System RNG and seeded `CTR_DRBG` |
+//! | `Rsa` | `RSA-1024/2048/3072/4096` (raw, `RSAES`, `OAEP`, `RSASSA`, `RSAPSS`) |
+//! | `Ecc` | `NIST P-224/P-256/P-384/P-521` (`ECDH`, `ECDSA`) |
+//! | `Ecc` | `Ed25519` (`EdDSA`, `HashEdDSA`), `X25519` |
+//! | `Mldsa` | `ML-DSA-44/65/87` (pure, external `µ`, `HashML-DSA`) |
+//! | `Mlkem` | `ML-KEM-768/1024` |
 //!
 //! Not supported (bound to `!`): `SM3-256`, `SHA3-*`, `SM4`, `Camellia`,
 //! `NIST P-192`, `BN-P256/P638`, `SM2`, `Brainpool`, `Ed448`, `X448`, and
@@ -103,9 +102,6 @@ impl Crypto for BoringSsl {
     fn ct_eq(a: &[u8], b: &[u8]) -> bool {
         if a.len() != b.len() {
             return false;
-        }
-        if a.is_empty() {
-            return true;
         }
         unsafe { bssl_sys::CRYPTO_memcmp(a.as_ptr().cast(), b.as_ptr().cast(), a.len()) == 0 }
     }

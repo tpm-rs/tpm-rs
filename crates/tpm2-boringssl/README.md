@@ -63,20 +63,15 @@ C/C++ compiler, Python 3, and the `bindgen` CLI (`cargo install bindgen-cli`). U
 it has run, building fails with `Could not copy bindings from
 '.../target/boringssl/rust/bssl-sys/wrapper_<target>.rs'`.
 
+`boringssl.py` reads `BORINGSSL_BUILD_DIR` (default: `target/boringssl`) and
+`BINDGEN` (the `bindgen` CLI, default: `bindgen` on `PATH`). CMake's own
+variables, such as `CMAKE_GENERATOR=Ninja`, also apply.
+
 Then run the shared backend tests, and the interop tests against RustCrypto:
 
 ```sh
 cargo test -p testing-crypto --no-default-features --features boringssl,rustcrypto
 ```
-
-| Variable | Read by | Description |
-|----------|---------|-------------|
-| `BORINGSSL_BUILD_DIR` | `bssl-sys`, `boringssl.py` | Prebuilt BoringSSL directory (default: `target/boringssl`). |
-| `BORINGSSL_RUST_CPPLIB` | `bssl-sys` | C++ runtime library to link (default: `c++` on macOS, `stdc++` on other Unix targets). |
-| `BINDGEN` | `boringssl.py` | Path to the `bindgen` CLI (default: `bindgen` on `PATH`). |
-| `RUST_TARGET` | `boringssl.py build` | Rust target to generate bindings for (default: the host). |
-| `CMAKE_GENERATOR` | CMake | Build tool for a new build directory, e.g. `Ninja` (default: Make, on Unix). |
-| `CMAKE_BUILD_PARALLEL_LEVEL` | CMake | Number of parallel build jobs (default: the number of CPUs). |
 
 ## docs.rs
 
@@ -96,4 +91,5 @@ change:
 crates/tpm2-boringssl/boringssl.py docs-bindings
 ```
 
-CI checks that they're up to date, and builds the docs as docs.rs does.
+CI checks that they're up to date (which also builds the docs as docs.rs
+does).

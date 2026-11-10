@@ -9,10 +9,7 @@
 //! - `HashML-DSA` computes `µ` with `SHAKE256` (`EVP_shake256`), as BoringSSL
 //!   has no public `HashML-DSA` API.
 
-use core::{
-    mem::MaybeUninit,
-    ptr::{self, null_mut},
-};
+use core::{mem::MaybeUninit, ptr::null_mut};
 
 use tpm2::{
     TpmiAlgHash, TpmtHa,
@@ -25,7 +22,7 @@ use tpm2::{
 use crate::bssl_sys;
 use crate::{
     BoringSsl, BoringSslRng,
-    util::{self, BsslBox},
+    util::{self, BsslBox, Secret},
 };
 
 /// Returns the ASN.1 DER `OBJECT IDENTIFIER` TLV for a FIPS 204 `HashML-DSA`
@@ -115,30 +112,12 @@ macro_rules! impl_mldsa {
             encoded: [u8; $pub_size],
         }
 
-        // SAFETY: `MLDSA*_public_key` is a plain value struct with no interior
-        // mutability or thread-local state.
-        unsafe impl Send for $PubKey {}
-        unsafe impl Sync for $PubKey {}
-
         /// Validated ML-DSA signing (private) key.
         #[derive(Clone)]
         pub struct $PrivKey {
             key: BsslBox<bssl_sys::$priv_ty>,
-            seed: [u8; 32],
+            seed: Secret<[u8; 32]>,
             public: $PubKey,
-        }
-
-        // SAFETY: `MLDSA*_private_key` is a plain value struct with no interior
-        // mutability or thread-local state.
-        unsafe impl Send for $PrivKey {}
-        unsafe impl Sync for $PrivKey {}
-
-        impl Drop for $PrivKey {
-            fn drop(&mut self) {
-                unsafe {
-                    bssl_sys::OPENSSL_cleanse(self.seed.as_mut_ptr().cast(), self.seed.len());
-                }
-            }
         }
 
         impl $PrivKey {
@@ -157,7 +136,7 @@ macro_rules! impl_mldsa {
                     util::marshal(|cbb| unsafe { bssl_sys::$marshal_pub(cbb, pub_key.as_ptr()) })?;
                 Ok(Self {
                     key,
-                    seed: *seed,
+                    seed: Secret(*seed),
                     public: $PubKey {
                         key: pub_key,
                         encoded,
@@ -175,17 +154,12 @@ macro_rules! impl_mldsa {
             ) -> Result<[u8; 64], CryptoError> {
                 let mut prehash = MaybeUninit::<bssl_sys::$prehash_ty>::uninit();
                 let prehash = prehash.as_mut_ptr();
-                let ctx_ptr = if context.is_empty() {
-                    ptr::null()
-                } else {
-                    context.as_ptr()
-                };
                 let mut mu = [0u8; 64];
                 unsafe {
                     let ok = bssl_sys::$prehash_init(
                         prehash,
                         public.key.as_ptr(),
-                        ctx_ptr,
+                        context.as_ptr(),
                         context.len(),
                     );
                     if ok != 1 {
@@ -205,13 +179,9 @@ macro_rules! impl_mldsa {
 
             #[inline(never)]
             fn generate(rng: &mut BoringSslRng, _: ()) -> Result<Self, CryptoError> {
-                let mut seed = [0u8; 32];
-                rng.fill_bytes(&mut seed)?;
-                let res = Self::from_seed(&seed);
-                unsafe {
-                    bssl_sys::OPENSSL_cleanse(seed.as_mut_ptr().cast(), seed.len());
-                }
-                res
+                let mut seed = Secret([0u8; 32]);
+                rng.fill_bytes(&mut seed.0)?;
+                Self::from_seed(&seed.0)
             }
 
             #[inline(never)]
@@ -222,7 +192,7 @@ macro_rules! impl_mldsa {
             }
 
             fn store(&self, out: &mut [u8; 32]) -> Result<(), CryptoError> {
-                *out = self.seed;
+                *out = self.seed.0;
                 Ok(())
             }
 

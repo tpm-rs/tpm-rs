@@ -9,7 +9,7 @@ use tpm2::crypto::{
 use crate::bssl_sys;
 use crate::{
     BoringSsl, BoringSslRng,
-    rsa::{BnCtxPtr, BnPtr},
+    util::{Bn, Secret, bn_ctx},
 };
 
 /// Maximum total length of a multi-slice `EdDSA` message, which BoringSSL needs
@@ -46,23 +46,31 @@ fn is_valid_point(point: &[u8; 32]) -> Result<bool, CryptoError> {
     let sign = point[31] >> 7;
     let mut y_le = *point;
     y_le[31] &= 0x7f;
-    let ctx = BnCtxPtr::new()?;
     let (p, d, e) = (
-        BnPtr::from_be(&P)?,
-        BnPtr::from_be(&D)?,
-        BnPtr::from_be(&P_MINUS_1_OVER_2)?,
+        Bn::from_be(&P)?,
+        Bn::from_be(&D)?,
+        Bn::from_be(&P_MINUS_1_OVER_2)?,
     );
-    let (y, t, u) = (BnPtr::new()?, BnPtr::new()?, BnPtr::new()?);
-    let (ctx, p, y, t, u) = (ctx.as_ptr(), p.as_ptr(), y.as_ptr(), t.as_ptr(), u.as_ptr());
+    let (y, t, u) = (Bn::zero()?, Bn::zero()?, Bn::zero()?);
+    let (p, d, e, y, t, u) = (
+        p.as_ptr(),
+        d.as_ptr(),
+        e.as_ptr(),
+        y.as_ptr(),
+        t.as_ptr(),
+        u.as_ptr(),
+    );
+    let ctx = bn_ctx()?;
+    let ctx = ctx.as_ptr();
     unsafe {
         let one = bssl_sys::BN_value_one();
         let ok = !bssl_sys::BN_le2bn(y_le.as_ptr(), y_le.len(), y).is_null()
             && bssl_sys::BN_mod_sqr(t, y, p, ctx) == 1 // t = y^2
-            && bssl_sys::BN_mod_mul(u, d.as_ptr(), t, p, ctx) == 1 // u = d y^2
+            && bssl_sys::BN_mod_mul(u, d, t, p, ctx) == 1 // u = d y^2
             && bssl_sys::BN_mod_add(u, u, one, p, ctx) == 1 // u = d y^2 + 1
             && bssl_sys::BN_mod_sub(t, t, one, p, ctx) == 1 // t = y^2 - 1
             && bssl_sys::BN_mod_mul(t, t, u, p, ctx) == 1 // t = (y^2 - 1)(d y^2 + 1)
-            && bssl_sys::BN_mod_exp(u, t, e.as_ptr(), p, ctx) == 1; // u = t^((p - 1) / 2)
+            && bssl_sys::BN_mod_exp(u, t, e, p, ctx) == 1; // u = t^((p - 1) / 2)
         if !ok {
             return Err(CryptoError::Internal);
         }
@@ -107,16 +115,8 @@ pub struct BoringSslEd25519PublicKey {
 /// Validated Ed25519 private key (`seed || public_point` 64-byte keypair).
 #[derive(Clone)]
 pub struct BoringSslEd25519PrivateKey {
-    keypair: [u8; 64],
+    keypair: Secret<[u8; 64]>,
     public: BoringSslEd25519PublicKey,
-}
-
-impl Drop for BoringSslEd25519PrivateKey {
-    fn drop(&mut self) {
-        unsafe {
-            bssl_sys::OPENSSL_cleanse(self.keypair.as_mut_ptr().cast(), self.keypair.len());
-        }
-    }
 }
 
 impl BoringSslEd25519PrivateKey {
@@ -124,11 +124,11 @@ impl BoringSslEd25519PrivateKey {
     /// seed `secret`.
     fn from_secret(secret: &[u8; 32]) -> Self {
         let mut point = [0u8; 32];
-        let mut keypair = [0u8; 64];
+        let mut keypair = Secret([0u8; 64]);
         unsafe {
             bssl_sys::ED25519_keypair_from_seed(
                 point.as_mut_ptr(),
-                keypair.as_mut_ptr(),
+                keypair.0.as_mut_ptr(),
                 secret.as_ptr(),
             );
         }
@@ -158,13 +158,9 @@ impl PrivateKey<32, 32, BoringSslRng> for BoringSslEd25519PrivateKey {
 
     #[inline(never)]
     fn generate(rng: &mut BoringSslRng, _: ()) -> Result<Self, CryptoError> {
-        let mut secret = [0u8; 32];
-        rng.fill_bytes(&mut secret)?;
-        let private = Self::from_secret(&secret);
-        unsafe {
-            bssl_sys::OPENSSL_cleanse(secret.as_mut_ptr().cast(), secret.len());
-        }
-        Ok(private)
+        let mut secret = Secret([0u8; 32]);
+        rng.fill_bytes(&mut secret.0)?;
+        Ok(Self::from_secret(&secret.0))
     }
 
     #[inline(never)]
@@ -175,7 +171,7 @@ impl PrivateKey<32, 32, BoringSslRng> for BoringSslEd25519PrivateKey {
     }
 
     fn store(&self, out: &mut [u8; 32]) -> Result<(), CryptoError> {
-        out.copy_from_slice(&self.keypair[..32]);
+        out.copy_from_slice(&self.keypair.0[..32]);
         Ok(())
     }
 
@@ -204,7 +200,12 @@ impl EdwardsCurve<32, BoringSslRng> for BoringSslEd25519PrivateKey {
     ) -> Result<(), CryptoError> {
         let mut sig = [0u8; 64];
         let ok = with_contiguous(msg, |m| unsafe {
-            bssl_sys::ED25519_sign(sig.as_mut_ptr(), m.as_ptr(), m.len(), self.keypair.as_ptr())
+            bssl_sys::ED25519_sign(
+                sig.as_mut_ptr(),
+                m.as_ptr(),
+                m.len(),
+                self.keypair.0.as_ptr(),
+            )
         })?;
         if ok != 1 {
             return Err(CryptoError::Internal);
@@ -241,7 +242,7 @@ impl EdwardsCurve<32, BoringSslRng> for BoringSslEd25519PrivateKey {
                 core::ptr::null(),
                 0,
                 prehash.as_ptr(),
-                self.keypair.as_ptr(),
+                self.keypair.0.as_ptr(),
             )
         };
         if ok != 1 {
@@ -281,31 +282,20 @@ pub struct BoringSslX25519PublicKey {
 /// Validated X25519 private key (RFC 7748 32-byte scalar and public `u`-coordinate).
 #[derive(Clone)]
 pub struct BoringSslX25519PrivateKey {
-    scalar: [u8; 32],
+    scalar: Secret<[u8; 32]>,
     public: BoringSslX25519PublicKey,
-}
-
-impl Drop for BoringSslX25519PrivateKey {
-    fn drop(&mut self) {
-        unsafe {
-            bssl_sys::OPENSSL_cleanse(self.scalar.as_mut_ptr().cast(), self.scalar.len());
-        }
-    }
 }
 
 impl BoringSslX25519PrivateKey {
     /// Derives a private key (and its public key) from the RFC 7748 scalar
     /// `scalar`.
-    #[inline(never)]
-    fn from_scalar(scalar: &[u8; 32]) -> Result<Option<Self>, CryptoError> {
+    fn from_scalar(scalar: &[u8; 32]) -> Self {
         let mut u = [0u8; 32];
-        unsafe {
-            bssl_sys::X25519_public_from_private(u.as_mut_ptr(), scalar.as_ptr());
-        }
-        Ok(Some(Self {
-            scalar: *scalar,
+        unsafe { bssl_sys::X25519_public_from_private(u.as_mut_ptr(), scalar.as_ptr()) };
+        Self {
+            scalar: Secret(*scalar),
             public: BoringSslX25519PublicKey { u },
-        }))
+        }
     }
 }
 
@@ -314,29 +304,20 @@ impl PrivateKey<32, 32, BoringSslRng> for BoringSslX25519PrivateKey {
 
     #[inline(never)]
     fn generate(rng: &mut BoringSslRng, _: ()) -> Result<Self, CryptoError> {
-        let mut scalar = [0u8; 32];
-        rng.fill_bytes(&mut scalar)?;
-        let res = Self::from_scalar(&scalar)?.ok_or(CryptoError::Internal);
-        unsafe {
-            bssl_sys::OPENSSL_cleanse(scalar.as_mut_ptr().cast(), scalar.len());
-        }
-        res
+        let mut scalar = Secret([0u8; 32]);
+        rng.fill_bytes(&mut scalar.0)?;
+        Ok(Self::from_scalar(&scalar.0))
     }
 
     #[inline(never)]
     fn load(public: Self::PublicKey, scalar: &[u8; 32]) -> Result<Option<Self>, CryptoError> {
-        let Some(private) = Self::from_scalar(scalar)? else {
-            return Ok(None);
-        };
+        let private = Self::from_scalar(scalar);
         // The scalar must derive `public`.
-        if !BoringSsl::ct_eq(&private.public.u, &public.u) {
-            return Ok(None);
-        }
-        Ok(Some(private))
+        Ok(BoringSsl::ct_eq(&private.public.u, &public.u).then_some(private))
     }
 
     fn store(&self, out: &mut [u8; 32]) -> Result<(), CryptoError> {
-        *out = self.scalar;
+        *out = self.scalar.0;
         Ok(())
     }
 
@@ -364,7 +345,7 @@ impl MontgomeryCurve<32, BoringSslRng> for BoringSslX25519PrivateKey {
         let ok = unsafe {
             bssl_sys::X25519(
                 out_u.as_mut_ptr(),
-                self.scalar.as_ptr(),
+                self.scalar.0.as_ptr(),
                 peer_public.u.as_ptr(),
             )
         };

@@ -9,7 +9,7 @@ use tpm2::crypto::{
 use crate::bssl_sys;
 use crate::{
     BoringSsl, BoringSslRng,
-    util::{self, BsslBox},
+    util::{self, BsslBox, Secret},
 };
 
 macro_rules! impl_mlkem {
@@ -34,30 +34,12 @@ macro_rules! impl_mlkem {
             encoded: [u8; $pub_size],
         }
 
-        // SAFETY: `MLKEM*_public_key` is a plain value struct with no interior
-        // mutability or thread-local state.
-        unsafe impl Send for $PubKey {}
-        unsafe impl Sync for $PubKey {}
-
         /// Validated ML-KEM decapsulation (private) key.
         #[derive(Clone)]
         pub struct $PrivKey {
             key: BsslBox<bssl_sys::$priv_ty>,
-            seed: [u8; 64],
+            seed: Secret<[u8; 64]>,
             public: $PubKey,
-        }
-
-        // SAFETY: `MLKEM*_private_key` is a plain value struct with no interior
-        // mutability or thread-local state.
-        unsafe impl Send for $PrivKey {}
-        unsafe impl Sync for $PrivKey {}
-
-        impl Drop for $PrivKey {
-            fn drop(&mut self) {
-                unsafe {
-                    bssl_sys::OPENSSL_cleanse(self.seed.as_mut_ptr().cast(), self.seed.len());
-                }
-            }
         }
 
         impl $PrivKey {
@@ -77,7 +59,7 @@ macro_rules! impl_mlkem {
                     util::marshal(|cbb| unsafe { bssl_sys::$marshal_pub(cbb, pub_key.as_ptr()) })?;
                 Ok(Self {
                     key,
-                    seed: *seed,
+                    seed: Secret(*seed),
                     public: $PubKey {
                         key: pub_key,
                         encoded,
@@ -91,13 +73,9 @@ macro_rules! impl_mlkem {
 
             #[inline(never)]
             fn generate(rng: &mut BoringSslRng, _: ()) -> Result<Self, CryptoError> {
-                let mut seed = [0u8; 64];
-                rng.fill_bytes(&mut seed)?;
-                let res = Self::from_seed(&seed);
-                unsafe {
-                    bssl_sys::OPENSSL_cleanse(seed.as_mut_ptr().cast(), seed.len());
-                }
-                res
+                let mut seed = Secret([0u8; 64]);
+                rng.fill_bytes(&mut seed.0)?;
+                Self::from_seed(&seed.0)
             }
 
             #[inline(never)]
@@ -108,7 +86,7 @@ macro_rules! impl_mlkem {
             }
 
             fn store(&self, out: &mut [u8; 64]) -> Result<(), CryptoError> {
-                *out = self.seed;
+                *out = self.seed.0;
                 Ok(())
             }
 

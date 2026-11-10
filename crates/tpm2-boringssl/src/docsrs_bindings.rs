@@ -189,16 +189,16 @@ pub struct env_md_st {
 pub type EVP_MD = env_md_st;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
-pub struct evp_cipher_st {
-    _unused: [u8; 0],
-}
-pub type EVP_CIPHER = evp_cipher_st;
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
 pub struct evp_pkey_ctx_st {
     _unused: [u8; 0],
 }
 pub type EVP_PKEY_CTX = evp_pkey_ctx_st;
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct evp_pkey_st {
+    _unused: [u8; 0],
+}
+pub type EVP_PKEY = evp_pkey_st;
 pub type HMAC_CTX = hmac_ctx_st;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]

@@ -1,171 +1,129 @@
 //! AES (`AES-128`, `AES-192`, `AES-256`) block cipher implementations in CTR,
 //! OFB, CBC, CFB, and ECB modes, via BoringSSL's `AES_*` functions.
 
-use core::mem::{MaybeUninit, size_of};
+use core::{
+    ffi::{c_int, c_uint},
+    mem,
+};
 
 use tpm2::crypto::{
     Block, CryptoError, Direction,
     backend::{Symmetric, SymmetricState},
 };
 
-use crate::BoringSsl;
-use crate::bssl_sys;
+use crate::bssl_sys::{self, AES_KEY};
+use crate::{BoringSsl, util::Secret};
 
 /// Pre-expanded AES encryption and decryption key schedules.
 pub struct BoringSslAesKey<const KEY_SIZE: usize> {
-    enc_key: bssl_sys::AES_KEY,
-    dec_key: bssl_sys::AES_KEY,
+    enc_key: Secret<AES_KEY>,
+    dec_key: Secret<AES_KEY>,
 }
 
-impl<const KEY_SIZE: usize> Drop for BoringSslAesKey<KEY_SIZE> {
-    fn drop(&mut self) {
-        unsafe {
-            bssl_sys::OPENSSL_cleanse(
-                (&raw mut self.enc_key).cast(),
-                size_of::<bssl_sys::AES_KEY>(),
-            );
-            bssl_sys::OPENSSL_cleanse(
-                (&raw mut self.dec_key).cast(),
-                size_of::<bssl_sys::AES_KEY>(),
-            );
+impl<const KEY_SIZE: usize> BoringSslAesKey<KEY_SIZE> {
+    const fn key(&self, dir: Direction) -> (*const AES_KEY, c_int) {
+        match dir {
+            Direction::Encrypt => (&self.enc_key.0, bssl_sys::AES_ENCRYPT),
+            Direction::Decrypt => (&self.dec_key.0, bssl_sys::AES_DECRYPT),
         }
     }
 }
 
-macro_rules! impl_aes_key {
-    ($key_size:literal) => {
-        impl SymmetricState<$key_size> for BoringSslAesKey<$key_size> {
-            #[inline(never)]
-            fn init(key: &[u8; $key_size]) -> Result<Self, CryptoError> {
-                let mut enc_key = MaybeUninit::<bssl_sys::AES_KEY>::uninit();
-                let mut dec_key = MaybeUninit::<bssl_sys::AES_KEY>::uninit();
-                let bits = ($key_size * 8) as core::ffi::c_uint;
-                unsafe {
-                    // `AES_set_*_key` return 0 on success.
-                    if bssl_sys::AES_set_encrypt_key(key.as_ptr(), bits, enc_key.as_mut_ptr()) != 0
-                        || bssl_sys::AES_set_decrypt_key(key.as_ptr(), bits, dec_key.as_mut_ptr())
-                            != 0
-                    {
-                        return Err(CryptoError::Internal);
-                    }
-                    Ok(Self {
-                        enc_key: enc_key.assume_init(),
-                        dec_key: dec_key.assume_init(),
-                    })
-                }
-            }
-
-            fn ctr(&self, iv: &mut Block, data: &mut [u8]) -> Result<(), CryptoError> {
-                if data.is_empty() {
-                    return Ok(());
-                }
-                let mut ecount_buf = [0u8; 16];
-                let mut num: core::ffi::c_uint = 0;
-                unsafe {
-                    bssl_sys::AES_ctr128_encrypt(
-                        data.as_ptr(),
-                        data.as_mut_ptr(),
-                        data.len(),
-                        &raw const self.enc_key,
-                        iv.as_mut_ptr(),
-                        ecount_buf.as_mut_ptr(),
-                        &raw mut num,
-                    );
-                }
-                Ok(())
-            }
-
-            fn ofb(&self, iv: &mut Block, data: &mut [u8]) -> Result<(), CryptoError> {
-                if data.is_empty() {
-                    return Ok(());
-                }
-                let mut num: core::ffi::c_int = 0;
-                unsafe {
-                    bssl_sys::AES_ofb128_encrypt(
-                        data.as_ptr(),
-                        data.as_mut_ptr(),
-                        data.len(),
-                        &raw const self.enc_key,
-                        iv.as_mut_ptr(),
-                        &raw mut num,
-                    );
-                }
-                Ok(())
-            }
-
-            fn cbc(
-                &self,
-                dir: Direction,
-                iv: &mut Block,
-                data: &mut [Block],
-            ) -> Result<(), CryptoError> {
-                let flat = data.as_flattened_mut();
-                if flat.is_empty() {
-                    return Ok(());
-                }
-                let (key_ptr, enc) = match dir {
-                    Direction::Encrypt => (&raw const self.enc_key, bssl_sys::AES_ENCRYPT),
-                    Direction::Decrypt => (&raw const self.dec_key, bssl_sys::AES_DECRYPT),
-                };
-                unsafe {
-                    bssl_sys::AES_cbc_encrypt(
-                        flat.as_ptr(),
-                        flat.as_mut_ptr(),
-                        flat.len(),
-                        key_ptr,
-                        iv.as_mut_ptr(),
-                        enc,
-                    );
-                }
-                Ok(())
-            }
-
-            fn cfb(
-                &self,
-                dir: Direction,
-                iv: &mut Block,
-                data: &mut [u8],
-            ) -> Result<(), CryptoError> {
-                if data.is_empty() {
-                    return Ok(());
-                }
-                let enc = match dir {
-                    Direction::Encrypt => bssl_sys::AES_ENCRYPT,
-                    Direction::Decrypt => bssl_sys::AES_DECRYPT,
-                };
-                let mut num: core::ffi::c_int = 0;
-                unsafe {
-                    bssl_sys::AES_cfb128_encrypt(
-                        data.as_ptr(),
-                        data.as_mut_ptr(),
-                        data.len(),
-                        &raw const self.enc_key,
-                        iv.as_mut_ptr(),
-                        &raw mut num,
-                        enc,
-                    );
-                }
-                Ok(())
-            }
-
-            fn ecb(&self, dir: Direction, data: &mut [Block]) -> Result<(), CryptoError> {
-                type Crypt = unsafe extern "C" fn(*const u8, *mut u8, *const bssl_sys::AES_KEY);
-                let (key, crypt): (_, Crypt) = match dir {
-                    Direction::Encrypt => (&raw const self.enc_key, bssl_sys::AES_encrypt),
-                    Direction::Decrypt => (&raw const self.dec_key, bssl_sys::AES_decrypt),
-                };
-                for block in data.iter_mut() {
-                    unsafe { crypt(block.as_ptr(), block.as_mut_ptr(), key) };
-                }
-                Ok(())
-            }
+impl<const KEY_SIZE: usize> SymmetricState<KEY_SIZE> for BoringSslAesKey<KEY_SIZE> {
+    #[inline(never)]
+    fn init(key: &[u8; KEY_SIZE]) -> Result<Self, CryptoError> {
+        // SAFETY: `AES_KEY` is plain data.
+        let mut this: Self = unsafe { mem::zeroed() };
+        let bits = (KEY_SIZE * 8) as c_uint;
+        // `AES_set_*_key` return 0 on success, and fail for other key sizes.
+        let ok = unsafe {
+            bssl_sys::AES_set_encrypt_key(key.as_ptr(), bits, &mut this.enc_key.0) == 0
+                && bssl_sys::AES_set_decrypt_key(key.as_ptr(), bits, &mut this.dec_key.0) == 0
+        };
+        if !ok {
+            return Err(CryptoError::Unsupported);
         }
-    };
-}
+        Ok(this)
+    }
 
-impl_aes_key!(16);
-impl_aes_key!(24);
-impl_aes_key!(32);
+    fn ctr(&self, iv: &mut Block, data: &mut [u8]) -> Result<(), CryptoError> {
+        let mut ecount_buf = [0u8; 16];
+        let mut num: c_uint = 0;
+        unsafe {
+            bssl_sys::AES_ctr128_encrypt(
+                data.as_ptr(),
+                data.as_mut_ptr(),
+                data.len(),
+                &self.enc_key.0,
+                iv.as_mut_ptr(),
+                ecount_buf.as_mut_ptr(),
+                &raw mut num,
+            );
+        }
+        Ok(())
+    }
+
+    fn ofb(&self, iv: &mut Block, data: &mut [u8]) -> Result<(), CryptoError> {
+        let mut num: c_int = 0;
+        unsafe {
+            bssl_sys::AES_ofb128_encrypt(
+                data.as_ptr(),
+                data.as_mut_ptr(),
+                data.len(),
+                &self.enc_key.0,
+                iv.as_mut_ptr(),
+                &raw mut num,
+            );
+        }
+        Ok(())
+    }
+
+    fn cbc(&self, dir: Direction, iv: &mut Block, data: &mut [Block]) -> Result<(), CryptoError> {
+        let flat = data.as_flattened_mut();
+        let (key, enc) = self.key(dir);
+        unsafe {
+            bssl_sys::AES_cbc_encrypt(
+                flat.as_ptr(),
+                flat.as_mut_ptr(),
+                flat.len(),
+                key,
+                iv.as_mut_ptr(),
+                enc,
+            );
+        }
+        Ok(())
+    }
+
+    fn cfb(&self, dir: Direction, iv: &mut Block, data: &mut [u8]) -> Result<(), CryptoError> {
+        // CFB uses the encryption key schedule in both directions.
+        let (_, enc) = self.key(dir);
+        let mut num: c_int = 0;
+        unsafe {
+            bssl_sys::AES_cfb128_encrypt(
+                data.as_ptr(),
+                data.as_mut_ptr(),
+                data.len(),
+                &self.enc_key.0,
+                iv.as_mut_ptr(),
+                &raw mut num,
+                enc,
+            );
+        }
+        Ok(())
+    }
+
+    fn ecb(&self, dir: Direction, data: &mut [Block]) -> Result<(), CryptoError> {
+        let (key, _) = self.key(dir);
+        let crypt = match dir {
+            Direction::Encrypt => bssl_sys::AES_encrypt,
+            Direction::Decrypt => bssl_sys::AES_decrypt,
+        };
+        for block in data.iter_mut() {
+            unsafe { crypt(block.as_ptr(), block.as_mut_ptr(), key) };
+        }
+        Ok(())
+    }
+}
 
 impl Symmetric for BoringSsl {
     type Aes128 = BoringSslAesKey<16>;

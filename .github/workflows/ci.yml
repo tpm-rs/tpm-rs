@@ -95,13 +95,9 @@ jobs:
       # A fixed version, so `src/docsrs_bindings.rs` is reproducible.
       - run: cargo install --locked bindgen-cli@0.72.1
       - run: crates/tpm2-boringssl/boringssl.py build
+      # Also builds the docs as docs.rs does (without BoringSSL).
       - name: Check src/docsrs_bindings.rs is up to date
         run: crates/tpm2-boringssl/boringssl.py docs-bindings && git diff --exit-code
-      - name: Build the docs as docs.rs does (without BoringSSL)
-        run: cargo +nightly doc --no-deps -p tpm2-boringssl --target x86_64-unknown-linux-gnu
-        env:
-          RUSTFLAGS: "--cfg docsrs"
-          RUSTDOCFLAGS: "--cfg docsrs -D warnings"
       - run: cargo clippy -p tpm2-boringssl -p testing-crypto --all-targets --no-default-features --features testing-crypto/boringssl,testing-crypto/rustcrypto -- -D warnings
       - run: cargo test -p testing-crypto --no-default-features --features boringssl,rustcrypto
 
