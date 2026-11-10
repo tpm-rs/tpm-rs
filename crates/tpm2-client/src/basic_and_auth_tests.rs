@@ -8,7 +8,7 @@ use tpm2::errors::TpmRc;
 use tpm2::*;
 use tpm2_client::run_command;
 
-use crate::{DIGEST_SIZE, NV_INDEX, RESP_BUFFER_SIZE, define_nv_index, nonce_unchanged, nv_public, read_nv_index, start, start_hmac_session, stop, write_nv_index};
+use crate::{DIGEST_SIZE, NV_INDEX, RESP_BUFFER_SIZE, define_nv_index, get_lockout_counter, nonce_unchanged, nv_public, read_nv_index, start, start_hmac_session, stop, write_nv_index};
 
 //
 // Tests.
@@ -29,8 +29,7 @@ fn minimum_viable_test_case(is_loaded_session_test: bool) {
         let context_save = ContextSave {
             save_handle: session.handle(),
         };
-        let context_save_rsp = run_command(&context_save, simulator.connection_mut(), resp_buffer).unwrap();
-        println!("{:?}", context_save_rsp);
+        assert!(run_command(&context_save, simulator.connection_mut(), resp_buffer).is_ok());
 
         // This command doesn't take a session.
         assert!(nonce_unchanged(&mut last_nonce_bytes, &session.nonce_tpm()) == true);
@@ -115,10 +114,12 @@ fn valid_and_invalid_authorisation() {
     assert!(nv_write_rsp.is_ok());
     assert!(nonce_unchanged(&mut last_nonce_bytes, &session.nonce_tpm()) == false);
 
-    // TODO: Test that only failedTries is altered after the below.
     session.set_auth_value(incorrect_auth_value);
 
+    let failed_tries = get_lockout_counter(&mut simulator);
     assert!(read_nv_index(&mut simulator, &nv_public, NV_INDEX, &mut session).is_err());
+    // An authorisation failure increments failedTries.
+    assert_eq!(get_lockout_counter(&mut simulator), failed_tries + 1);
     // Failure doesn't update the nonce.
     assert!(nonce_unchanged(&mut last_nonce_bytes, &session.nonce_tpm()) == true);
 
@@ -233,5 +234,5 @@ pub fn run() {
     nonce_length_changes();
     load_stale_context();
 
-    println!("TODO: Test permission failure.");
+    println!("TODO: Test permission failure and authValue unavailable.");
 }

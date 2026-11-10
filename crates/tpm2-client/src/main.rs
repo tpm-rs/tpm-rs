@@ -31,7 +31,8 @@ use std::net::Ipv4Addr;
 
 use tempfile::tempdir;
 use tpm2::commands::{
-    FlushContext, NVDefineSpace, NVRead, NVUndefineSpace, NVWrite, StartAuthSession, Startup,
+    FlushContext, GetCapability, NVDefineSpace, NVRead, NVUndefineSpace, NVWrite,
+    StartAuthSession, Startup,
 };
 use tpm2::errors::TpmRc;
 use tpm2::*;
@@ -134,7 +135,6 @@ pub fn start_hmac_session(simulator: &mut TcpSimulator) -> HmacSession {
         auth_hash: ALG,
     };
     let start_auth_session_rsp = run_command(&start_auth_session, simulator.connection_mut(), resp_buffer).unwrap();
-    println!("{:?}", start_auth_session_rsp);
 
     HmacSession::new(start_auth_session_rsp.session_handle, start_auth_session.auth_hash, start_auth_session.nonce_caller, start_auth_session_rsp.nonce_tpm)
 }
@@ -161,6 +161,29 @@ pub fn tpm_result<T>(rsp: Result<T, ClientError<io::Error>>) -> Result<(), TpmRc
         Err(Tpm(rc)) => Err(rc),
         Err(e) => panic!("unexpected error: {e:?}"),
     }
+}
+
+//
+// Dictionary attack protection.
+//
+
+/// Reads `TPM_PT_LOCKOUT_COUNTER` (failedTries).
+pub fn get_lockout_counter(simulator: &mut TcpSimulator) -> u32 {
+    let resp_buffer: &mut [u8; RESP_BUFFER_SIZE] = &mut [0u8; RESP_BUFFER_SIZE];
+
+    let get_capability = GetCapability {
+        capability: TpmCap::TPMProperties,
+        property: TpmPt::LockoutCounter.into(),
+        property_count: 1,
+    };
+    let get_capability_rsp = run_command(&get_capability, simulator.connection_mut(), resp_buffer).unwrap();
+
+    let TpmsCapabilityData::TpmProperties(properties) = get_capability_rsp.capability_data else {
+        panic!("Unexpected capability data: {:?}", get_capability_rsp.capability_data);
+    };
+    let property = properties.as_slice()[0];
+    assert_eq!(property.property, TpmPt::LockoutCounter);
+    property.value
 }
 
 //
