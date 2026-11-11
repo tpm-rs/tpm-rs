@@ -1,0 +1,16 @@
+[package]
+name = "xtask"
+description = "Repository automation tasks for tpm-rs"
+publish = false
+
+# Inherit from Workspace Settings
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+readme = "README.md"
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+
+[dependencies]
+rustc-demangle = "0.1"
