@@ -1,0 +1,116 @@
+[package]
+name = "tpm2-size-harness"
+description = "Freestanding no_std binary-size measurement harness for tpm-rs"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.100"
+readme = "README.md"
+license = "Apache-2.0"
+publish = false
+
+[features]
+default = ["v185"]
+
+# Classical TPM 2.0 Rev 1.84 algorithm set (pre-Rev 1.85).
+v184 = [
+    # Hash Algorithms
+    "tpm2/sha1",
+    "tpm2/sha256",
+    "tpm2/sha384",
+    "tpm2/sha512",
+    "tpm2/sm3_256",
+    "tpm2/sha3_256",
+    "tpm2/sha3_384",
+    "tpm2/sha3_512",
+    # Symmetric Encryption Algorithms
+    "tpm2/aes128",
+    "tpm2/aes192",
+    "tpm2/aes256",
+    "tpm2/sm4_128",
+    "tpm2/camellia128",
+    "tpm2/camellia192",
+    "tpm2/camellia256",
+    # Symmetric Encryption Modes
+    "tpm2/ctr",
+    "tpm2/ofb",
+    "tpm2/cbc",
+    "tpm2/ecb",
+    # CMAC
+    "tpm2/cmac",
+    # RSA Family, Key Sizes, and Schemes
+    "tpm2/rsa",
+    "tpm2/rsa1024",
+    "tpm2/rsa2048",
+    "tpm2/rsa3072",
+    "tpm2/rsa4096",
+    "tpm2/rsassa",
+    "tpm2/rsapss",
+    "tpm2/rsaes",
+    # Pre-Rev 1.85 ECC Curves and Schemes
+    "tpm2/ecc",
+    "tpm2/nist_p192",
+    "tpm2/nist_p224",
+    "tpm2/nist_p256",
+    "tpm2/nist_p384",
+    "tpm2/nist_p521",
+    "tpm2/bn_p256",
+    "tpm2/bn_p638",
+    "tpm2/sm2_p256",
+    "tpm2/bp_p256_r1",
+    "tpm2/bp_p384_r1",
+    "tpm2/bp_p512_r1",
+    "tpm2/ecdsa",
+    "tpm2/ecdaa",
+    "tpm2/ecschnorr",
+    "tpm2/sm2",
+    "tpm2/ecmqv",
+]
+
+# Full TPM 2.0 Rev 1.85 algorithm set (adds Curve25519/448, EdDSA, ML-DSA, ML-KEM).
+v185 = [
+    "v184",
+    "tpm2/curve25519",
+    "tpm2/curve448",
+    "tpm2/eddsa",
+    "tpm2/hash_eddsa",
+    "tpm2/mldsa",
+    "tpm2/mldsa_44",
+    "tpm2/mldsa_65",
+    "tpm2/mldsa_87",
+    "tpm2/hash_mldsa",
+    "tpm2/mlkem",
+    "tpm2/mlkem_512",
+    "tpm2/mlkem_768",
+    "tpm2/mlkem_1024",
+]
+
+# Optional crate selectors so building `size-tpm2` with `v184` never unifies
+# `tpm2/default` from `tpm2-client` or `tpm2-impl`.
+client = ["dep:tpm2-client", "v185"]
+server = ["dep:tpm2-impl", "v185"]
+
+[dependencies]
+tpm2 = { path = "../../crates/tpm2", default-features = false }
+tpm2-client = { path = "../../crates/tpm2-client", default-features = false, optional = true }
+tpm2-impl = { path = "../../crates/tpm2-impl", default-features = false, optional = true }
+
+[[bin]]
+name = "size-tpm2"
+path = "src/bin/size_tpm2.rs"
+
+[[bin]]
+name = "size-client"
+path = "src/bin/size_client.rs"
+required-features = ["client"]
+
+[[bin]]
+name = "size-server"
+path = "src/bin/size_server.rs"
+required-features = ["server"]
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = "debuginfo"
