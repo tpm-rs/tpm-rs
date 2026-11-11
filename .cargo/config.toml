@@ -1,3 +1,6 @@
+[alias]
+xtask = "run --package xtask --"
+
 [patch.crates-io]
 # BoringSSL's own `bssl-sys`, replacing the crates.io placeholder that
 # tpm2-boringssl depends on. `crates/tpm2-boringssl/boringssl.py build` builds
