@@ -1,0 +1,33 @@
+zero-object-slots: a new object slot is cleared whole
+
+Classification: harness plumbing.
+
+FindEmptyObjectSlot() clears only the OBJECT_ATTRIBUTES of the slot it hands
+out. TPM2_ContextSave() copies the whole slot (OBJECT or HASH_OBJECT) into the
+context, so the parts the new occupant does not write still hold the octets of
+an earlier occupant of the slot: e.g. a SHA-1 sequence object started in a
+slot that held a SHA-384 sequence saves the tail of the old SHA512_CTX behind
+its SHA_CTX. The saved context then depends on the slot's history, which
+tpm-rs, which reproduces the reference's saved contexts byte for byte
+(crates/tpm2-engine/src/handler/context_format.rs), does not track. The slot
+is now cleared whole, as ibmswtpm2 (libtpms) and the version 185 reference
+(whose FindEmptyObjectSlot() calls ObjectFlush(), which clears the slot)
+already do. Nothing reads the stale octets, so no other value changes, and a
+context saved by the patched reference loads into it as before.
+diff --git a/TPMCmd/tpm/src/subsystem/Object.c b/TPMCmd/tpm/src/subsystem/Object.c
+--- a/TPMCmd/tpm/src/subsystem/Object.c
++++ b/TPMCmd/tpm/src/subsystem/Object.c
+@@ -195,7 +195,12 @@
+             if(handle)
+                 *handle = i + TRANSIENT_FIRST;
+             // Initialize the object attributes
+-            MemorySet(&object->attributes, 0, sizeof(OBJECT_ATTRIBUTES));
++            // tpm-rs differential testing -- harness (determinism): the whole
++            // slot is cleared (as ibmswtpm2/libtpms and v185 do), not only its
++            // attributes, so that TPM2_ContextSave() does not copy octets a
++            // former occupant of the slot left behind (e.g. the tail of a
++            // larger hash state behind the SHA-1 state of a sequence object).
++            MemorySet(object, 0, sizeof(*object));
+             object->hierarchy = TPM_RH_NULL;
+             return object;
+         }

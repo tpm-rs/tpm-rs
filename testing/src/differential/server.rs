@@ -150,36 +150,26 @@ pub fn serve<B: Backend>(
     protocol::write_handshake(&mut output, &handshake)
         .and_then(|()| output.flush())
         .unwrap_or_else(|e| panic!("{implementation}: cannot write handshake: {e}"));
-    fn reply(
-        output: &mut impl Write,
-        implementation: Implementation,
-        result: &Result<(), Failure>,
-    ) {
-        protocol::write_reply(output, result)
+    let mut reply = |result: &Result<(), Failure>| {
+        protocol::write_reply(&mut output, result)
             .and_then(|()| output.flush())
             .unwrap_or_else(|e| panic!("{implementation}: cannot write reply: {e}"));
-    }
+    };
     let mut server = match Server::new(implementation, backend, test) {
         Ok(server) => {
-            reply(&mut output, implementation, &Ok(()));
+            reply(&Ok(()));
             server
         }
         Err(e) => {
-            reply(&mut output, implementation, &Err(Failure::new(e)));
+            reply(&Err(Failure::new(e)));
             std::process::exit(1);
         }
     };
     loop {
         match protocol::read_request(&mut input) {
-            Ok(Some(Request::Execute(command))) => {
-                let response = server.execute(&command);
-                protocol::write_execute_reply(&mut output, &Ok(response))
-                    .and_then(|()| output.flush())
-                    .unwrap_or_else(|e| panic!("{implementation}: cannot write reply: {e}"));
-            }
             Ok(Some(request)) => {
                 let result = server.handle(request);
-                reply(&mut output, implementation, &result);
+                reply(&result);
             }
             Ok(None) => return,
             Err(e) => panic!("{implementation}: cannot read request: {e}"),
@@ -316,18 +306,7 @@ impl<B: Backend> Server<B> {
                 self.backend.set_firmware(setting);
                 Ok(())
             }
-            Request::Execute(_) => Err(Failure::new(format!(
-                "test `{}`: an Execute request is answered by Server::execute",
-                self.test
-            ))),
         }
-    }
-
-    /// Executes `command` on the C reference without comparing its response (the `Execute`
-    /// request) and returns the response.
-    pub fn execute(&mut self, command: &[u8]) -> Vec<u8> {
-        self.commands += 1;
-        self.backend.run_command(command)
     }
 
     /// Delivers a platform signal to the C reference.
