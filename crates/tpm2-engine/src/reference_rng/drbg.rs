@@ -36,6 +36,13 @@ pub fn instantiate(rng: &mut RefRng<'_>) -> Result<(), TpmRc> {
     ffi::instantiate(rng)
 }
 
+/// `DRBG_SelfTest()`: runs the DRBG's known-answer test (part of `CryptRandInit()` at
+/// `_TPM_Init`), recording `TESTED` in the flags of `rng` ([`RefRng::self_test`]). Returns
+/// whether the test passed.
+pub fn self_test(rng: &mut RefRng<'_>) -> Result<bool, TpmRc> {
+    ffi::self_test(rng)
+}
+
 /// `CryptRandStartup()` with `_DRBG_STATE_SAVE`: reseeds the TPM's DRBG with fresh platform
 /// entropy if it is instantiated (restored from NV), and instantiates it otherwise.
 pub fn startup(rng: &mut RefRng<'_>) -> Result<(), TpmRc> {
@@ -166,6 +173,7 @@ pub(crate) mod tests {
         RefRng {
             drbg: Some(state),
             entropy: Some(entropy),
+            self_test: None,
         }
     }
 
@@ -269,6 +277,7 @@ pub(crate) mod tests {
         let mut no_entropy = RefRng {
             drbg: Some(&mut state),
             entropy: None,
+            self_test: None,
         };
         assert_eq!(instantiate(&mut no_entropy), Err(TpmRc::FAILURE));
         // A working source after a failure works again (failure mode lasts one call).

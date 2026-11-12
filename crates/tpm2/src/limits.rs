@@ -84,6 +84,9 @@ const _: () = assert!(TpmsCapabilityData::MAX_SIZE >= MAX_CAP_BUFFER);
 /// Specifies the maximum capacity (`CAP`) in bytes for a [`Tpm2bSized`] buffer.
 pub trait Tag {
     const CAP: usize;
+    /// The largest size accepted when unmarshaling (at most [`Self::CAP`]; a larger size is
+    /// `TPM_RC_SIZE`). Only a TPM profile with a smaller wire bound than its storage lowers it.
+    const UNMARSHAL_CAP: usize = Self::CAP;
 }
 
 /// Spec-mandated 8-byte maximum size for ticket timeout buffers.
@@ -144,6 +147,8 @@ impl Tag for Data {
 pub struct Name;
 impl Tag for Name {
     const CAP: usize = TpmtHa::MAX_SIZE;
+    /// Names on the wire are at most a `TPMT_HA` (Part 2, `TPM2B_NAME`), whatever the storage.
+    const UNMARSHAL_CAP: usize = TpmtHa::MAX_SIZE;
 }
 /// Sized to the symmetric block size ([`AlgSym::BLOCK_SIZE`]).
 pub struct Iv;

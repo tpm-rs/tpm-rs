@@ -95,6 +95,7 @@ mod rng;
 mod rsa;
 #[cfg(feature = "sec-channel")]
 mod sec_channel;
+mod secret_sizes;
 pub use engine::{
     ActiveSequence, DRBG_MAGIC, DrbgState, ImplementedCommands, MAX_ACTIVE_SEQUENCES,
     MAX_COMMAND_SIZE, MAX_LOADED_OBJECTS, MAX_LOADED_SESSIONS, MAX_RESPONSE_SIZE,

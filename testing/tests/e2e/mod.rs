@@ -127,6 +127,7 @@ mod nv_extend_set_bits;
 mod nv_increment;
 mod nv_index_accessibility;
 mod nv_lock;
+mod nv_orderly_ram;
 mod nv_read_public;
 mod nv_read_public2;
 mod nv_read_write;

@@ -70,6 +70,7 @@ impl<P: Platform> TpmEngine<P> {
         RefRng {
             drbg: Some(&mut self.state.nv.orderly.drbg_state),
             entropy: Some(self.platform.rng()),
+            self_test: Some(&self.self_test),
         }
     }
 
@@ -79,6 +80,17 @@ impl<P: Platform> TpmEngine<P> {
     pub(crate) fn crypt_rand_init(&mut self) {
         // The reference ignores the result; a failing source fails later draws instead.
         let _ = self.platform.rng().init();
+    }
+
+    /// The DRBG self test of `CryptRandInit()`/`CryptoRand_LibInit()` (`CryptInit()`, after
+    /// `CryptInitializeToTest()` cleared the DRBG self-test flags): `DRBG_SelfTest()`, which
+    /// sets `TESTED`. A failed test puts the TPM into Failure mode (`g_inFailureMode =
+    /// (CryptInit() == FALSE)`, without a failure location).
+    #[cfg(feature = "reference-rng")]
+    pub(crate) fn crypt_rand_self_test(&mut self) {
+        if !drbg::self_test(&mut self.ref_rng()).unwrap_or(false) {
+            self.self_test.set_failed(true);
+        }
     }
 
     /// `CryptRandStartup()` with `_DRBG_STATE_SAVE`: reseeds the DRBG restored from NV with
@@ -120,6 +132,7 @@ impl<P: Platform> TpmEngine<P> {
     #[cfg(feature = "reference-rng")]
     pub(crate) fn manufacture_rng(&mut self) -> Result<(), TpmRc> {
         self.crypt_rand_init();
+        self.crypt_rand_self_test();
         self.state.nv.orderly.drbg_state.magic = 0;
         self.crypt_rand_startup()?;
         let mut nonce = [0u8; crate::engine::COMMIT_NONCE_SIZE];

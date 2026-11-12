@@ -235,7 +235,7 @@ fn load_nv_supplies_and_store_nv_receives_the_nv_data() {
     assert_eq!(second.state.nv.persistent.sp_seed_size, 0);
     power_on_start_up(&mut *second);
     assert_eq!(second.state.nv.persistent.sp_seed, seed);
-    assert_eq!(second.state.nv.persistent.sp_seed_size, 64);
+    assert_eq!(second.state.nv.persistent.sp_seed_size, PRIMARY_SEED_SIZE);
     assert_eq!(
         second.state.nv.index.as_slice(),
         second.platform.external.as_ref().unwrap().as_slice()
@@ -249,7 +249,7 @@ fn reinitialize_keeps_only_the_nv_data() {
     power_on_start_up(&mut *tpm);
     let nv = tpm.state.nv.index.as_slice().to_vec();
     assert!(tpm.state.initialized);
-    assert_eq!(tpm.state.nv.persistent.sp_seed_size, 64);
+    assert_eq!(tpm.state.nv.persistent.sp_seed_size, PRIMARY_SEED_SIZE);
     tpm.state.locality = 3;
     tpm.state.nv.reset.restart_count = 9;
     tpm.state.nv.clear.sh_enable = false;
@@ -267,7 +267,7 @@ fn reinitialize_keeps_only_the_nv_data() {
 
     // The NV data still holds the manufactured TPM: `_TPM_Init` reloads its seeds.
     power_on_start_up(&mut *tpm);
-    assert_eq!(tpm.state.nv.persistent.sp_seed_size, 64);
+    assert_eq!(tpm.state.nv.persistent.sp_seed_size, PRIMARY_SEED_SIZE);
 }
 
 /// A state over an owned NV medium has a `Default` (a new TPM with an empty medium), and every
@@ -295,3 +295,6 @@ fn state_default_and_index_state_of_a_medium() {
     assert!(state.nv.index.write_reserved(127, &[0, 0]).is_err());
     assert!(state.nv.index.read_reserved(120, &mut [0; 9]).is_err());
 }
+
+/// `PRIMARY_SEED_SIZE` of the TPM profile (the size of the Primary Seeds).
+const PRIMARY_SEED_SIZE: u16 = 64;

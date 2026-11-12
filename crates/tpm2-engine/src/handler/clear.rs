@@ -1,5 +1,6 @@
 use crate::Platform;
 use crate::handle_checks::{Tpmi, check};
+use crate::secret_sizes::{PRIMARY_SEED_SIZE, PROOF_SIZE};
 use crate::storage::IndexState;
 use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
 use tpm2::Handle;
@@ -59,9 +60,12 @@ impl<'b, P: Platform> CommandHandler<'b, P> {
         let mut new_sp_seed = [0u8; 64];
 
         // The reference order (`Clear.c`): the new SPS, then shProof, then ehProof.
-        self.context.random_platform(&mut new_sp_seed)?;
-        self.context.random_platform(&mut new_sh_proof)?;
-        self.context.random_platform(&mut new_eh_proof)?;
+        self.context
+            .random_platform(&mut new_sp_seed[..PRIMARY_SEED_SIZE])?;
+        self.context
+            .random_platform(&mut new_sh_proof[..PROOF_SIZE])?;
+        self.context
+            .random_platform(&mut new_eh_proof[..PROOF_SIZE])?;
 
         // All random generated successfully, now mutate state
         self.context.state.nv.clear.sh_enable = true;
@@ -82,7 +86,7 @@ impl<'b, P: Platform> CommandHandler<'b, P> {
             .persistent
             .sh_proof
             .copy_from_slice(&new_sh_proof);
-        self.context.state.nv.persistent.sh_proof_size = 64;
+        self.context.state.nv.persistent.sh_proof_size = PROOF_SIZE as u16;
 
         self.context
             .state
@@ -90,7 +94,7 @@ impl<'b, P: Platform> CommandHandler<'b, P> {
             .persistent
             .eh_proof
             .copy_from_slice(&new_eh_proof);
-        self.context.state.nv.persistent.eh_proof_size = 64;
+        self.context.state.nv.persistent.eh_proof_size = PROOF_SIZE as u16;
 
         self.context
             .state
@@ -98,7 +102,7 @@ impl<'b, P: Platform> CommandHandler<'b, P> {
             .persistent
             .sp_seed
             .copy_from_slice(&new_sp_seed);
-        self.context.state.nv.persistent.sp_seed_size = 64;
+        self.context.state.nv.persistent.sp_seed_size = PRIMARY_SEED_SIZE as u16;
 
         // Flush loaded objects in the storage and endorsement hierarchies.
         for slot in self.context.state.transient_objects.iter_mut() {
@@ -206,7 +210,14 @@ impl<'b, P: Platform> CommandHandler<'b, P> {
                 self.fold_nv_counter_into_max_counter(handle);
             }
             let storage = &mut self.context.state.nv.index;
+            let orderly = storage
+                .get_metadata(handle)
+                .is_ok_and(|meta| (meta.attributes & tpm2::TpmaNv::ORDERLY.0) != 0);
             storage.undefine_space(handle).map_err(|_| TpmRc::FAILURE)?;
+            // `NvDeleteRAM()` of an orderly Index (`SET_NV_UPDATE(UT_ORDERLY)`).
+            if (handle >> 24) == tpm2::TpmHt::NVIndex as u32 && orderly {
+                self.context.state.update_nv |= crate::engine::UT_ORDERLY;
+            }
         }
     }
 

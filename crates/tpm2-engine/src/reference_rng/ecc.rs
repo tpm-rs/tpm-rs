@@ -142,6 +142,7 @@ mod tests {
         drbg::instantiate(&mut RefRng {
             drbg: Some(&mut state),
             entropy: Some(&mut entropy),
+            self_test: None,
         })
         .unwrap();
         state
@@ -152,6 +153,7 @@ mod tests {
         RefRng {
             drbg: Some(state),
             entropy: None,
+            self_test: None,
         }
     }
 

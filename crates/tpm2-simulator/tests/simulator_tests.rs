@@ -247,3 +247,20 @@ mod reference_simulator {
         assert_eq!(super::act_get_signaled(&mut sim, 0x4000_0110), 1);
     }
 }
+
+/// `Simulator::is_power_on` follows the MSSIM `PowerOn`/`PowerOff` signals.
+#[test]
+fn is_power_on_follows_the_power_signals() {
+    let mut crypto = PlatformCryptoProvider;
+    let mut storage = RamStorageMock::<{ tpm2_simulator::NV_STORAGE_SIZE }>::new();
+    let mut timer = LinuxTimer::new();
+    let mut rng = LinuxRng::new();
+    let mut sim = Simulator::new(&mut crypto, &mut storage, &mut timer, &mut rng).unwrap();
+    assert!(!sim.is_power_on());
+    sim.signal_platform(SimulatorPlatformSignal::PowerOn, tpm2_simulator::NO_STREAM)
+        .unwrap();
+    assert!(sim.is_power_on());
+    sim.signal_platform(SimulatorPlatformSignal::PowerOff, tpm2_simulator::NO_STREAM)
+        .unwrap();
+    assert!(!sim.is_power_on());
+}

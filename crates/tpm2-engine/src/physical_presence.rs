@@ -160,7 +160,7 @@ impl<P: Platform> TpmEngine<P> {
     /// after manufacture) they keep their manufacture defaults.
     pub(crate) fn restore_platform_settings(&mut self) {
         if let Some(record) =
-            crate::storage::nv::NvPlatformSettingsRecord::read(&mut self.state.nv.index)
+            crate::storage::nv::NvPlatformSettingsRecord::read(&self.state.nv.index)
         {
             self.state.nv.persistent.pp_list = PpList::from_bits(record.pp_list);
             self.state.nv.persistent.algorithm_set = record.algorithm_set;

@@ -160,6 +160,7 @@ impl<'b, P: Platform> CommandHandler<'b, P> {
             let mut rng = RefRng {
                 drbg: Some(&mut engine.state.nv.orderly.drbg_state),
                 entropy: Some(engine.platform.rng()),
+                self_test: Some(&engine.self_test),
             };
             let key_len = match parms_and_id {
                 OwnedPublicParmsAndId::Rsa(parms, unique) => {

@@ -2,6 +2,7 @@ use crate::Platform;
 use crate::handle_checks::{Tpmi, check};
 use crate::handler::CommandHandler;
 use crate::req_resp::RequestThenResponse;
+use crate::secret_sizes::{PRIMARY_SEED_SIZE, PROOF_SIZE};
 use tpm2::Handle;
 #[allow(unused_imports)]
 use tpm2::TpmCc;
@@ -46,8 +47,10 @@ impl<'b, P: Platform> CommandHandler<'b, P> {
         let mut new_ep_seed = [0u8; 64];
         let mut new_eh_proof = [0u8; 64];
 
-        self.context.random_platform(&mut new_ep_seed)?;
-        self.context.random_platform(&mut new_eh_proof)?;
+        self.context
+            .random_platform(&mut new_ep_seed[..PRIMARY_SEED_SIZE])?;
+        self.context
+            .random_platform(&mut new_eh_proof[..PROOF_SIZE])?;
 
         self.nv_clear_orderly()?;
 
@@ -58,7 +61,7 @@ impl<'b, P: Platform> CommandHandler<'b, P> {
             .persistent
             .ep_seed
             .copy_from_slice(&new_ep_seed);
-        self.context.state.nv.persistent.ep_seed_size = 64;
+        self.context.state.nv.persistent.ep_seed_size = PRIMARY_SEED_SIZE as u16;
 
         self.context
             .state
@@ -66,7 +69,7 @@ impl<'b, P: Platform> CommandHandler<'b, P> {
             .persistent
             .eh_proof
             .copy_from_slice(&new_eh_proof);
-        self.context.state.nv.persistent.eh_proof_size = 64;
+        self.context.state.nv.persistent.eh_proof_size = PROOF_SIZE as u16;
 
         self.context.state.nv.clear.eh_enable = true;
         self.context.state.nv.persistent.endorsement_auth = crate::owned::OwnedAuth::default();

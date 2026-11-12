@@ -15,6 +15,7 @@
 //! | [`STATE_SAVE_HANDLE`] `0x00FF_FFFE` | [`NvStateSaveRecord`] | the `TPM2_Shutdown(TPM_SU_STATE)` data (`NV_STATE_RESET_DATA`/`NV_STATE_CLEAR_DATA`), between the shutdown and the next `TPM2_Startup` |
 //! | [`PCR_ALLOCATION_HANDLE`] `0x00FF_FFFD` | [`NvPcrAllocationRecord`] | the PCR allocation of the last `TPM2_PCR_Allocate`, applied at the next `_TPM_Init` |
 //! | [`PLATFORM_SETTINGS_HANDLE`] `0x00FF_FFFC` | [`NvPlatformSettingsRecord`] | `gp.ppList` and `gp.algorithmSet` |
+//! | [`ORDERLY_RAM_HANDLE`] `0x00FF_FFFB` | [`super::orderly_ram`] | the NV copy of the orderly-Index RAM (`NV_INDEX_RAM_DATA`) |
 //!
 //! Every layout is defined only here: the engine reads and writes NV through these records.
 
@@ -39,6 +40,8 @@ pub const STATE_SAVE_HANDLE: u32 = 0x00FF_FFFE;
 pub const PCR_ALLOCATION_HANDLE: u32 = 0x00FF_FFFD;
 /// Handle of the platform settings record ([`NvPlatformSettingsRecord`]).
 pub const PLATFORM_SETTINGS_HANDLE: u32 = 0x00FF_FFFC;
+/// Handle of the NV copy of the orderly-Index RAM ([`super::orderly_ram`]).
+pub const ORDERLY_RAM_HANDLE: u32 = 0x00FF_FFFB;
 
 /// Whether `handle` is one of the engine's internal records (not a user NV Index or object).
 pub const fn is_internal_record(handle: u32) -> bool {
@@ -48,6 +51,7 @@ pub const fn is_internal_record(handle: u32) -> bool {
             | STATE_SAVE_HANDLE
             | PCR_ALLOCATION_HANDLE
             | PLATFORM_SETTINGS_HANDLE
+            | ORDERLY_RAM_HANDLE
     )
 }
 
@@ -166,7 +170,7 @@ impl NvHeader {
 /// Reads the whole payload of item `handle` into `buf`, returning its length, or `None` if the
 /// item is not defined, does not fit `buf`, or cannot be read.
 fn read_item<'b>(
-    storage: &mut (impl IndexState + ?Sized),
+    storage: &(impl IndexState + ?Sized),
     handle: u32,
     buf: &'b mut [u8],
 ) -> Option<&'b [u8]> {
@@ -519,7 +523,7 @@ impl NvHierarchyRecord {
     }
 
     /// Reads the record from `storage` (`None` if it is missing or malformed).
-    pub fn read(storage: &mut (impl IndexState + ?Sized)) -> Option<Self> {
+    pub fn read(storage: &(impl IndexState + ?Sized)) -> Option<Self> {
         let mut buf = [0u8; HIERARCHY_RECORD_SIZE];
         let storage_mgr = storage;
         let meta = storage_mgr.get_metadata(HIERARCHY_RECORD_HANDLE).ok()?;
@@ -724,7 +728,7 @@ impl NvStateSaveRecord {
     }
 
     /// Reads the record from `storage` (`None` if it is missing or malformed).
-    pub fn read(storage: &mut (impl IndexState + ?Sized)) -> Option<Self> {
+    pub fn read(storage: &(impl IndexState + ?Sized)) -> Option<Self> {
         let mut buf = [0u8; STATE_SAVE_MAX_LEN];
         Self::decode(read_item(storage, STATE_SAVE_HANDLE, &mut buf)?)
     }
@@ -750,7 +754,7 @@ pub struct NvPcrAllocationRecord {
 
 impl NvPcrAllocationRecord {
     /// Reads the record from `storage` (`None` if it is missing or malformed).
-    pub fn read(storage: &mut (impl IndexState + ?Sized)) -> Option<Self> {
+    pub fn read(storage: &(impl IndexState + ?Sized)) -> Option<Self> {
         let mut buf = [0u8; TpmlPcrSelection::MAX_SIZE];
         let mut slice = read_item(storage, PCR_ALLOCATION_HANDLE, &mut buf)?;
         let allocation = TpmlPcrSelection::unmarshal(&mut slice).ok()?;
@@ -795,7 +799,7 @@ impl NvPlatformSettingsRecord {
     }
 
     /// Reads the record from `storage` (`None` if it is missing).
-    pub fn read(storage: &mut (impl IndexState + ?Sized)) -> Option<Self> {
+    pub fn read(storage: &(impl IndexState + ?Sized)) -> Option<Self> {
         let mut b = [0u8; PLATFORM_SETTINGS_LEN];
         storage.get_metadata(PLATFORM_SETTINGS_HANDLE).ok()?;
         storage
@@ -1022,7 +1026,7 @@ impl NvPersistentObjectRecord {
 
     /// Reads the persistent object `handle` from `storage`: `TPM_RC_HANDLE` if it is not
     /// defined, `TPM_RC_FAILURE` if it cannot be read or decoded.
-    pub fn read(storage: &mut (impl IndexState + ?Sized), handle: u32) -> Result<Self, TpmRc> {
+    pub fn read(storage: &(impl IndexState + ?Sized), handle: u32) -> Result<Self, TpmRc> {
         let storage_mgr = storage;
         let metadata = storage_mgr
             .get_metadata(handle)
@@ -1219,10 +1223,10 @@ mod tests {
     #[test]
     fn hierarchy_record_write_and_read() {
         let mut storage = RamStorageMock::<16384>::new();
-        assert!(NvHierarchyRecord::read(&mut storage).is_none());
+        assert!(NvHierarchyRecord::read(&storage).is_none());
         let record = full_hierarchy_record();
         record.write(&mut storage);
-        let read = NvHierarchyRecord::read(&mut storage).unwrap();
+        let read = NvHierarchyRecord::read(&storage).unwrap();
         assert_eq!(read.owner_auth, record.owner_auth);
         assert_eq!(read.audit, record.audit);
         assert_eq!(read.seeds.unwrap().clear_count, 7);
@@ -1237,9 +1241,9 @@ mod tests {
         };
         assert_eq!(NvPlatformSettingsRecord::decode(&record.encode()), record);
         let mut storage = RamStorageMock::<16384>::new();
-        assert!(NvPlatformSettingsRecord::read(&mut storage).is_none());
+        assert!(NvPlatformSettingsRecord::read(&storage).is_none());
         record.write(&mut storage);
-        assert_eq!(NvPlatformSettingsRecord::read(&mut storage), Some(record));
+        assert_eq!(NvPlatformSettingsRecord::read(&storage), Some(record));
     }
 
     /// The state-save record survives `encode` -> `decode` and `write` -> `read`.
@@ -1280,6 +1284,6 @@ mod tests {
         assert_eq!(NvStateSaveRecord::decode(&buf[..len]), Some(record));
         let mut storage = RamStorageMock::<16384>::new();
         record.write(&mut storage).unwrap();
-        assert_eq!(NvStateSaveRecord::read(&mut storage), Some(record));
+        assert_eq!(NvStateSaveRecord::read(&storage), Some(record));
     }
 }

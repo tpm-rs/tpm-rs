@@ -440,3 +440,25 @@ fn time_continues_across_reset_without_power_loss() {
     assert_eq!(startup_with_type(&mut sim, SU_CLEAR as u8), 0);
     assert!(read_clock(&mut sim).time < before);
 }
+
+/// Every NV update of `Clock` (every `2^NV_CLOCK_UPDATE_INTERVAL` ms) writes the whole
+/// `ORDERLY_DATA` to NV, including the DRBG state (`TimeClockUpdate()`), which `_TPM_Init`
+/// reloads: after a power loss without `TPM2_Shutdown`, the DRBG continues from its state at the
+/// last Clock update (or the last `TPM2_Shutdown`), so the random numbers drawn after the next
+/// `TPM2_Startup` depend on it.
+#[test]
+fn drbg_resumes_from_last_clock_update_after_power_loss() {
+    let mut sim = Tpm::new();
+    for _ in 0..3 {
+        sleep(std::time::Duration::from_secs(5));
+        sim.execute(tpm2::commands::GetRandom {
+            bytes_requested: 16,
+        })
+        .unwrap();
+    }
+    assert_eq!(power_cycle_with(&mut sim, None, SU_CLEAR), 0);
+    sim.execute(tpm2::commands::GetRandom {
+        bytes_requested: 16,
+    })
+    .unwrap();
+}

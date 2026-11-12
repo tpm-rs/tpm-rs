@@ -53,6 +53,7 @@ use crate::owned::{
     OwnedAuth, OwnedAuthCommand, OwnedDigest, OwnedName, OwnedNonce, OwnedSensitiveData,
 };
 use crate::req_resp::RequestResponseCursor;
+use crate::secret_sizes::{PRIMARY_SEED_SIZE, PROOF_SIZE};
 use crate::self_test::kdfa_bits;
 use crate::state::State;
 use crate::storage::IndexState;
@@ -1224,7 +1225,7 @@ impl<P: Platform> TpmEngine<P> {
     /// (`NvGetEvictObject`, [`NvPersistentObjectRecord`]). Returns `TPM_RC_HANDLE` if it is not
     /// defined.
     pub(crate) fn read_persistent_object(&mut self, handle: u32) -> Result<TransientObject, TpmRc> {
-        Ok(NvPersistentObjectRecord::read(&mut self.state.nv.index, handle)?.into_object(handle))
+        Ok(NvPersistentObjectRecord::read(&self.state.nv.index, handle)?.into_object(handle))
     }
 
     /// Manufactures the TPM (`TPM_Manufacture` / `HierarchyPreInstall_Init`): draws the three
@@ -1235,7 +1236,6 @@ impl<P: Platform> TpmEngine<P> {
     /// secret, statistically unique random value. The draw order and sizes follow the reference
     /// (EPS, SPS, PPS, then phProof, shProof, ehProof; 64 bytes each).
     pub fn init_storage(&mut self) {
-        const SEED_AND_PROOF_SIZE: u16 = 64;
         // `CryptInit()` and `CryptStartup(SU_RESET)` of `TPM_Manufacture()` come first: the
         // DRBG the hierarchy secrets are drawn from is instantiated here.
         #[cfg(feature = "reference-rng")]
@@ -1245,10 +1245,10 @@ impl<P: Platform> TpmEngine<P> {
         // A value the platform RNG cannot produce stays unprovisioned (zeroed, size 0): every
         // command that needs it as key material then fails with `TPM_RC_FAILURE`
         // (`handler::provisioned_secret`) instead of using a predictable value.
-        let draw = |engine: &mut Self| -> ([u8; 64], u16) {
+        let draw = |engine: &mut Self, size: usize| -> ([u8; 64], u16) {
             let mut buf = [0u8; 64];
-            if rng_ok && engine.random_platform(&mut buf).is_ok() {
-                (buf, SEED_AND_PROOF_SIZE)
+            if rng_ok && engine.random_platform(&mut buf[..size]).is_ok() {
+                (buf, size as u16)
             } else {
                 ([0u8; 64], 0)
             }
@@ -1256,33 +1256,35 @@ impl<P: Platform> TpmEngine<P> {
         (
             self.state.nv.persistent.ep_seed,
             self.state.nv.persistent.ep_seed_size,
-        ) = draw(self);
+        ) = draw(self, PRIMARY_SEED_SIZE);
         (
             self.state.nv.persistent.sp_seed,
             self.state.nv.persistent.sp_seed_size,
-        ) = draw(self);
+        ) = draw(self, PRIMARY_SEED_SIZE);
         (
             self.state.nv.persistent.pp_seed,
             self.state.nv.persistent.pp_seed_size,
-        ) = draw(self);
+        ) = draw(self, PRIMARY_SEED_SIZE);
         (
             self.state.nv.persistent.ph_proof,
             self.state.nv.persistent.ph_proof_size,
-        ) = draw(self);
+        ) = draw(self, PROOF_SIZE);
         (
             self.state.nv.persistent.sh_proof,
             self.state.nv.persistent.sh_proof_size,
-        ) = draw(self);
+        ) = draw(self, PROOF_SIZE);
         (
             self.state.nv.persistent.eh_proof,
             self.state.nv.persistent.eh_proof_size,
-        ) = draw(self);
+        ) = draw(self, PROOF_SIZE);
         let storage = &mut self.state.nv.index;
         let _ = storage.undefine_space(HIERARCHY_RECORD_HANDLE);
         let _ = storage.undefine_space(PCR_ALLOCATION_HANDLE);
         // `PhysicalPresencePreInstall_Init()` and `gp.algorithmSet = 0`.
         self.clear_platform_settings();
         self.save_hierarchy_auths();
+        // `NvManufacture()`: the orderly-Index RAM is cleared and saved to its NV copy.
+        let _ = crate::storage::orderly_ram::save(&mut self.state.nv.index);
         // `NvWrite(NV_ORDERLY_DATA, ...)`: the DRBG state after manufacture is persisted.
         #[cfg(feature = "reference-rng")]
         self.save_drbg_state();
@@ -1334,8 +1336,10 @@ impl<P: Platform> TpmEngine<P> {
         self.act_catch_up();
         self.state.reset_in_place();
         // `CryptInitializeToTest()` (`CryptInit()`): every algorithm needs its test again, and
-        // Failure mode ends.
+        // Failure mode ends; then `CryptRandInit()` runs the DRBG self test.
         self.self_test.initialize();
+        #[cfg(feature = "reference-rng")]
+        self.crypt_rand_self_test();
         // The platform reads the NV data from external storage before the NV-synced state is
         // reloaded from it.
         self.platform.load_nv(&mut self.state.nv);
@@ -1353,7 +1357,7 @@ impl<P: Platform> TpmEngine<P> {
     /// ([`NvPcrAllocationRecord`]), if one exists. Called at `_TPM_Init`, mirroring the C
     /// reference where `gp.pcrAllocated` is (re)loaded from NV on initialization.
     fn restore_pcr_allocation(&mut self) {
-        if let Some(record) = NvPcrAllocationRecord::read(&mut self.state.nv.index) {
+        if let Some(record) = NvPcrAllocationRecord::read(&self.state.nv.index) {
             self.state.pcrs.pcr_allocation = record.allocation;
         }
     }
@@ -1414,7 +1418,7 @@ impl<P: Platform> TpmEngine<P> {
     /// they are `gc` state, which `TPM2_Startup` sets (TPM Reset/Restart; TPM 2.0 Part 1,
     /// "Hierarchy Control") or restores from the state-save record (TPM Resume).
     pub fn restore_hierarchy_auths(&mut self) {
-        let Some(r) = NvHierarchyRecord::read(&mut self.state.nv.index) else {
+        let Some(r) = NvHierarchyRecord::read(&self.state.nv.index) else {
             return;
         };
         let st = &mut self.state;
@@ -1552,7 +1556,7 @@ impl<P: Platform> TpmEngine<P> {
     /// Restores the data written by [`Self::save_state_data`]. Returns `false` if it is missing
     /// or malformed.
     fn restore_state_data(&mut self) -> bool {
-        let Some(r) = NvStateSaveRecord::read(&mut self.state.nv.index) else {
+        let Some(r) = NvStateSaveRecord::read(&self.state.nv.index) else {
             return false;
         };
         let st = &mut self.state;
@@ -1988,8 +1992,10 @@ impl<P: Platform> TpmEngine<P> {
     }
 
     /// A command in Failure mode (`TpmFailureMode()`): `TPM2_GetTestResult` returns the failure
-    /// information (`outData`: the 64-bit failure location, which is 0 here, and the failure
-    /// code `FATAL_ERROR_SELF_TEST`; `testResult`: `TPM_RC_FAILURE`), and `TPM2_GetCapability` of
+    /// information (`outData`: the 64-bit failure location and the failure code of
+    /// [`crate::self_test::SelfTestState::failure`], location 0 and `FATAL_ERROR_SELF_TEST` for a
+    /// failed self test; `testResult`: `TPM_RC_FAILURE`, or `TPM_RC_NV_UNINITIALIZED` for
+    /// `FATAL_ERROR_NV_UNRECOVERABLE`), and `TPM2_GetCapability` of
     /// `TPM_CAP_TPM_PROPERTIES` executes normally (the specification requires only a few
     /// properties; "An implementation is allowed to return other property values"). Both must
     /// be sent without sessions (Part 3, TPM2_GetTestResult: "If the TPM is in Failure mode, then
@@ -2014,11 +2020,19 @@ impl<P: Platform> TpmEngine<P> {
         }
         let code = be32(6);
         if code == TpmCc::GetTestResult.code() && cmd_buf.len() == GET_TEST_RESULT_SIZE {
+            let (location, failure_code) = self.self_test.failure();
             let mut body = [0u8; 2 + 12 + 4];
             body[..2].copy_from_slice(&12u16.to_be_bytes());
-            // The failure location (8 octets, 0) and the failure code.
-            body[10..14].copy_from_slice(&crate::self_test::FATAL_ERROR_SELF_TEST.to_be_bytes());
-            body[14..].copy_from_slice(&TpmRc::FAILURE.get().to_be_bytes());
+            // The failure location (8 octets, high half first) and the failure code; the final
+            // code is `TPM_RC_NV_UNINITIALIZED` for an unrecoverable NV failure.
+            body[2..10].copy_from_slice(&location.to_be_bytes());
+            body[10..14].copy_from_slice(&failure_code.to_be_bytes());
+            let test_result = if failure_code == crate::self_test::FATAL_ERROR_NV_UNRECOVERABLE {
+                TpmRc::NV_UNINITIALIZED
+            } else {
+                TpmRc::FAILURE
+            };
+            body[14..].copy_from_slice(&test_result.get().to_be_bytes());
             let size = ResponseHeader::MAX_SIZE + body.len();
             let out = resp_buf.get_mut(..size).ok_or(TpmRc::FAILURE)?;
             let header = ResponseHeader {
@@ -2207,8 +2221,13 @@ impl<P: Platform> TpmEngine<P> {
             self.state.update_nv |= UT_NV;
         }
 
-        // 2. Commit NV updates and reset update_nv flag (`g_updateNV = UT_NONE`).
+        // 2. Commit NV updates and reset update_nv flag (`g_updateNV = UT_NONE`). `UT_ORDERLY`
+        //    first saves the orderly-Index RAM to its NV copy (`NvUpdateIndexOrderlyData()`),
+        //    unless the command put the TPM into Failure mode.
         if self.state.update_nv != UT_NONE {
+            if self.state.update_nv & UT_ORDERLY == UT_ORDERLY && !self.self_test.failed() {
+                let _ = crate::storage::orderly_ram::save(&mut self.state.nv.index);
+            }
             self.state.update_nv = UT_NONE;
         }
 
@@ -3103,11 +3122,14 @@ impl<P: Platform> TpmEngine<P> {
         pin[4..].copy_from_slice(&limit.to_be_bytes());
         let storage_mgr = &mut self.state.nv.index;
         if storage_mgr.write_item(handle, data_offset, &pin).is_ok() {
-            self.state.update_nv |= if attrs.contains(tpm2::TpmaNv::ORDERLY) {
-                UT_ORDERLY
+            // `NvWriteUINT64Data()` -> `NvWriteIndexData()` of a written Index: the data of an
+            // orderly Index changes in the orderly-Index RAM (its NV copy is not saved, the TPM is
+            // no longer orderly: `g_clearOrderly = TRUE`), that of any other Index in NV.
+            if attrs.contains(tpm2::TpmaNv::ORDERLY) {
+                self.state.clear_orderly = true;
             } else {
-                UT_NV
-            };
+                self.state.update_nv |= UT_NV;
+            }
         }
     }
 

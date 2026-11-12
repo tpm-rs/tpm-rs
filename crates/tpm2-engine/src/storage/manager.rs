@@ -7,7 +7,7 @@ use super::{IndexState, NvStorage, StorageError};
 /// [`super::nv_capacity`]) does. The smallest entry that accounting admits is an orderly Index,
 /// whose data is in RAM: `sizeof(UINT32) + sizeof(NV_INDEX)` octets of the reference's dynamic
 /// area (`NV_USER_DYNAMIC..NV_USER_DYNAMIC_END`). So the table holds as many of them as fit
-/// (rounded up), plus the four internal records ([`super::nv`]).
+/// (rounded up), plus the five internal records ([`super::nv`]).
 pub const MAX_ITEMS: usize = {
     use super::nv_capacity::{
         NV_USER_DYNAMIC, NV_USER_DYNAMIC_END, SIZEOF_NV_INDEX, SIZEOF_UINT32,
@@ -17,7 +17,7 @@ pub const MAX_ITEMS: usize = {
     dynamic.div_ceil(smallest) + INTERNAL_RECORDS
 };
 /// The number of internal records of the engine ([`super::nv::is_internal_record`]).
-const INTERNAL_RECORDS: usize = 4;
+const INTERNAL_RECORDS: usize = 5;
 /// Serialized byte size of the Table of Contents (TOC) index tracking NV storage items.
 /// Calculated as MAX_ITEMS * ItemMetadata::SIZE. Custom storage design property.
 pub const TOC_SIZE: usize = MAX_ITEMS * ItemMetadata::SIZE;

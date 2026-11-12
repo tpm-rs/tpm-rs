@@ -202,6 +202,13 @@ impl<'a, Tag: limits::Tag> Tpm2bSized<'a, Tag> {
     /// Helper constant to access the capacity of a `Tpm2b` type. For example,
     /// [`Tpm2bDigest::CAP`] is equal to [`TpmiAlgHash::MAX_DIGEST_BYTES`].
     pub const CAP: usize = Tag::CAP;
+    /// The largest size accepted when unmarshaling ([`limits::Tag::UNMARSHAL_CAP`], at most
+    /// [`Self::CAP`]).
+    pub const UNMARSHAL_CAP: usize = if Tag::UNMARSHAL_CAP < Tag::CAP {
+        Tag::UNMARSHAL_CAP
+    } else {
+        Tag::CAP
+    };
     pub const MAX_BUFFER_SIZE: usize = Tag::CAP;
 
     pub const fn new(buf: &'a [u8]) -> Option<Self> {
@@ -258,7 +265,7 @@ impl<'a, Tag: limits::Tag> Tpm2bSized<'a, Tag> {
 impl<'a, Tag: limits::Tag> Unmarshal<'a> for Tpm2bSized<'a, Tag> {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         let len: usize = u16::unmarshal(src)?.into();
-        if len > Self::CAP {
+        if len > Self::UNMARSHAL_CAP {
             return Err(UnmarshalError::SIZE);
         }
         let Some((buf, rest)) = src.split_at_checked(len) else {

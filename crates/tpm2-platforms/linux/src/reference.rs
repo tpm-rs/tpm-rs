@@ -224,6 +224,7 @@ mod tests {
         let mut ref_rng = RefRng {
             drbg: Some(&mut state),
             entropy: Some(&mut rng),
+            self_test: None,
         };
         drbg::instantiate(&mut ref_rng).unwrap();
         let mut out = [0u8; 40];

@@ -107,7 +107,7 @@ impl tpm2_engine::storage::NvStorage for CountingStorage {
 fn test_no_nv_writes_stress() {
     let mut crypto = FakeCrypto;
     let mut storage = CountingStorage {
-        data: alloc::vec![0; 4096],
+        data: alloc::vec![0; 8192],
         writes: 0,
     };
     let mut timer = FakeTimer;
@@ -155,6 +155,11 @@ fn test_no_nv_writes_stress() {
     let _ = tpm.execute_command_separate(&req_buf[..offset], &mut response[..]);
     let rc = u32::from_be_bytes(response[6..10].try_into().unwrap());
     assert_eq!(rc, 0);
-    // One write of the table of contents (one write per entry) and two item writes.
-    assert_eq!(storage.writes, tpm2_engine::storage::manager::MAX_ITEMS + 2);
+    // Since the storage was created (manufacture included): two writes of the table of contents
+    // (one write per entry; the hierarchy record and the NV copy of the orderly-Index RAM are
+    // defined) and three item writes.
+    assert_eq!(
+        storage.writes,
+        2 * tpm2_engine::storage::manager::MAX_ITEMS + 3
+    );
 }

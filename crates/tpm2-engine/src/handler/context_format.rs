@@ -36,14 +36,18 @@
 //! are a `TPMU_ASYM_SCHEME` with the 4-octet ECDAA member) and the packed RSA private key without
 //! `RSA_CRT_flag`.
 //!
-//! This module converts between those structures and the state of `tpm-rs`. Every octet the
-//! reference does not write is zero: object slots and sessions are zeroed when they are allocated
-//! (`ObjectFlush()`, `SessionCreate()`), the command buffers before every command
-//! (`MemoryGetInBuffer()`), the differential build compiles the references with
-//! `-ftrivial-auto-var-init=zero` (their local structures are copied into objects, e.g. the
-//! `TPMT_SENSITIVE` of `TPM2_Load`), and the pointers to the reference's code and data in an
-//! exported hash state (`HASH_STATE.def`, `SMAC_STATE.smacMethods`) are zeroed by the
-//! `harness-context-no-pointers.patch` of each reference.
+//! This module converts between those structures and the state of `tpm-rs` with free functions
+//! ([`object_image`], [`object_from_image`], [`sequence_image`], [`sequence_from_image`],
+//! [`session_image`], [`session_from_image`]) that need no `CommandHandler`. An image is the
+//! entity as the reference keeps it in memory (its object slot or session), which
+//! `TPM2_ContextSave()` copies unchanged, except that the exported hash states of a sequence have
+//! a zero `HASH_STATE.def` (see below). Every octet the reference does not write is zero: object
+//! slots and sessions are zeroed when they are allocated (`ObjectFlush()`, `SessionCreate()`),
+//! the command buffers before every command (`MemoryGetInBuffer()`), the differential build
+//! compiles the references with `-ftrivial-auto-var-init=zero` (their local structures are copied
+//! into objects, e.g. the `TPMT_SENSITIVE` of `TPM2_Load`), and the pointers to the reference's
+//! code and data in an exported hash state (`HASH_STATE.def`, `SMAC_STATE.smacMethods`) are
+//! zeroed by the `harness-context-no-pointers.patch` of each reference.
 
 use crate::Platform;
 use crate::handler::{CommandHandler, SecChannelPolicy, SessionState, TransientObject};
@@ -52,7 +56,7 @@ use crate::owned::{OwnedAuth, OwnedName, OwnedNonce, OwnedPublic, OwnedSensitive
 use crate::req_resp::RequestThenResponse;
 use crate::self_test::kdfa_bits;
 use crate::{ActiveSequence, SequenceType, SignatureSequence};
-use tpm2::crypto::Direction;
+use tpm2::crypto::{Crypto, Direction};
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
     Alg, AlgSym, Handle, Marshal, TpmHt, TpmSe, TpmiAlgCipherMode, TpmiAlgHash, TpmiAlgSymMode,
@@ -89,14 +93,18 @@ const fn max(a: usize, b: usize) -> usize {
 
 /// The capacity of a `TPM2B_DIGEST` buffer (`sizeof(TPMU_HA)`).
 const DIGEST_CAP: usize = crate::owned::OwnedDigest::CAP;
-/// The capacity of a `TPM2B_NAME` buffer (`sizeof(TPMU_NAME)`).
+/// The capacity of a `TPM2B_NAME` buffer: the largest Name, a `TPMT_HA` (the TCG references and
+/// `ibmswtpm2` with their `bug-fix-tpmu-name-size.patch`, which shrinks `TPMU_NAME` to it).
 const NAME_CAP: usize = crate::owned::OwnedName::CAP;
-/// `sizeof(HASH_STATE)`: the type, the hash, the descriptor pointer and the largest OpenSSL
-/// context (`SHA512_CTX`, also the context of SHA-384, which every profile implements).
+/// `sizeof(TPM2B_NAME)`: the size and the buffer.
+const NAME_STRUCT: usize = 2 + NAME_CAP;
+/// `sizeof(HASH_STATE)`: the type, the hash, the descriptor pointer and the largest library
+/// context (`SHA512_CTX`, 216 octets in OpenSSL, also the context of SHA-384, which every
+/// profile implements).
 const HASH_STATE_SIZE: usize = 232;
 /// `sizeof(HMAC_STATE)`: a `HASH_STATE` and the key block (`TPM2B_HASH_BLOCK`, 128 octets for
 /// SHA-384/512), aligned to 8.
-const HMAC_STATE_SIZE: usize = 368;
+const HMAC_STATE_SIZE: usize = align(HASH_STATE_SIZE + 2 + HMAC_KEY_CAP, 8);
 /// The capacity of the HMAC key block (`TPM2B_HASH_BLOCK`).
 const HMAC_KEY_CAP: usize = 128;
 /// `sizeof(CRYPTO_MLDSA_EXPORTED_SIGN_SEQUENCE_STATE)` (`OPENSSL_EXPORTED_SHAKE_STATE`) with
@@ -160,8 +168,13 @@ mod attr {
     pub const EXTERNAL: u32 = 1 << 17;
     pub const SIGN_SEQ: u32 = 1 << 18;
     pub const VERIFY_SEQ: u32 = 1 << 19;
-    /// The kinds of sequence objects.
-    pub const ANY_SEQ: u32 = HMAC_SEQ | HASH_SEQ | EVENT_SEQ | SIGN_SEQ | VERIFY_SEQ;
+    /// The kinds of sequence objects (`ObjectIsSequence()`; the references before version 185
+    /// have neither signing nor verification sequences).
+    pub const ANY_SEQ: u32 = if cfg!(feature = "context-format-pre-v185") {
+        HMAC_SEQ | HASH_SEQ | EVENT_SEQ
+    } else {
+        HMAC_SEQ | HASH_SEQ | EVENT_SEQ | SIGN_SEQ | VERIFY_SEQ
+    };
 }
 
 /// `OBJECT` member offsets.
@@ -171,9 +184,9 @@ mod obj {
     pub const PUBLIC: usize = 4;
     pub const SENSITIVE: usize = align(PUBLIC + public::SIZE, 2);
     pub const QUALIFIED_NAME: usize = SENSITIVE + sensitive::SIZE;
-    pub const EVICT_HANDLE: usize = align(QUALIFIED_NAME + 2 + NAME_CAP, 4);
+    pub const EVICT_HANDLE: usize = align(QUALIFIED_NAME + NAME_STRUCT, 4);
     pub const NAME: usize = EVICT_HANDLE + 4;
-    pub const HIERARCHY: usize = align(NAME + 2 + NAME_CAP, 4);
+    pub const HIERARCHY: usize = align(NAME + NAME_STRUCT, 4);
     pub const SIZE: usize = HIERARCHY + 4;
 }
 
@@ -296,6 +309,12 @@ mod seq {
     pub const SIZE: usize = STATE + STATE_SIZE;
     /// `HMAC_STATE.hmacKey`.
     pub const HMAC_KEY: usize = HASH_STATE_SIZE;
+    /// `HASH_STATE.type` and `HASH_STATE.hashAlg` (`{ type; hashAlg; def; state }`).
+    pub const HASH_TYPE: usize = 0;
+    pub const HASH_ALG: usize = 2;
+    /// `HASH_STATE.def`, the pointer to the hash descriptor (zero in an exported state).
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub const HASH_DEF: usize = 8;
     /// `HASH_STATE.state`.
     pub const HASH_CONTEXT: usize = 16;
     /// `HASH_STATE.state.smac.state.cmac`.
@@ -322,13 +341,14 @@ mod sess {
     pub const EPOCH: usize = 24;
     pub const COMMAND_CODE: usize = 28;
     pub const AUTH_HASH_ALG: usize = 32;
+    /// `commandLocality`: a `TPMA_LOCALITY` (one octet).
     pub const COMMAND_LOCALITY: usize = 34;
     pub const SYMMETRIC: usize = 36;
-    pub const SESSION_KEY: usize = 42;
+    pub const SESSION_KEY: usize = SYMMETRIC + 6;
     pub const NONCE_TPM: usize = SESSION_KEY + 2 + DIGEST_CAP;
     pub const U1: usize = NONCE_TPM + 2 + DIGEST_CAP;
     /// `u1` is a `TPM2B_NAME` or a `TPM2B_DIGEST`.
-    pub const U2: usize = U1 + 2 + NAME_CAP;
+    pub const U2: usize = U1 + NAME_STRUCT;
     /// `scKeyNameHash` (`SEC_CHANNEL_SUPPORT`, the `sec-channel` feature).
     pub const SC_KEY_NAME_HASH: usize = U2 + 2 + DIGEST_CAP;
     const END: usize = if cfg!(feature = "sec-channel") {
@@ -696,14 +716,16 @@ const fn openssl_md_len(alg: TpmiAlgHash) -> u32 {
 }
 
 /// Writes the running hash `st` as an exported `HASH_STATE` of type `ty` (`hashAlg` and the
-/// OpenSSL context: `SHA_CTX`, `SHA256_CTX` or `SHA512_CTX`) to `img` (zero on entry).
+/// OpenSSL context: `SHA_CTX`, `SHA256_CTX` or `SHA512_CTX`) to `img` (zero on entry; `def`
+/// stays zero).
 ///
 /// OpenSSL keeps the unprocessed octets of SHA-1 and SHA-256 at the start of a zeroed block
 /// (`md32_common.h`: \"keep it zeroed\"); SHA-384/512 leave the rest of the last complete block in
-/// the buffer (`sha512.c`), as [`StreamingHashState::update`] does with its `block_buf`.
+/// the buffer (`sha512.c`), as [`StreamingHashState::update`] does with its `block_buf`. OpenSSL's
+/// `SHA512_CTX` is `{ h[8]; Nl, Nh (bits); p[128]; num, md_len }`.
 fn hash_state_to_c(st: &StreamingHashState, ty: u8, img: &mut [u8]) {
-    img[0] = ty;
-    put_u16(img, 2, hash_id(st.alg));
+    img[seq::HASH_TYPE] = ty;
+    put_u16(img, seq::HASH_ALG, hash_id(st.alg));
     let c = &mut img[seq::HASH_CONTEXT..];
     let bits = u128::from(st.total_len) * 8;
     match st.block_size() {
@@ -739,8 +761,8 @@ fn hash_state_to_c(st: &StreamingHashState, ty: u8, img: &mut [u8]) {
 
 /// Reads an exported `HASH_STATE` ([`hash_state_to_c`]): its type and running hash.
 fn hash_state_from_c(img: &[u8]) -> Option<(u8, StreamingHashState)> {
-    let ty = img[0];
-    let alg = hash_from_id(get_u16(img, 2))?;
+    let ty = img[seq::HASH_TYPE];
+    let alg = hash_from_id(get_u16(img, seq::HASH_ALG))?;
     let c = &img[seq::HASH_CONTEXT..];
     let mut st = StreamingHashState::new(alg);
     let bits: u128;
@@ -914,34 +936,35 @@ impl<P: Platform> CommandHandler<'_, P> {
         // encrypted in place).
         let mut blob = [0u8; INTEGRITY_SIZE + FINGERPRINT_SIZE + OBJECT_SIZE];
         let entity_at = INTEGRITY_SIZE + FINGERPRINT_SIZE;
-        let (hierarchy, saved_handle, entity_len, is_session) = if let Some(obj) =
-            self.context.state.find_transient_object(save_handle)
-        {
-            let obj = obj.clone();
-            self.tcg_object_image(&obj, &mut blob[entity_at..])?;
-            let st_clear = obj.st_clear
-                || obj
-                    .public
-                    .object_attributes
-                    .contains(tpm2::TpmaObject::ST_CLEAR);
-            let saved = if st_clear { 0x8000_0002 } else { 0x8000_0000 };
-            (obj.hierarchy, saved, OBJECT_SIZE, false)
-        } else if let Some(sess) = self.context.state.session(save_handle) {
-            Self::tcg_session_image(sess, &mut blob[entity_at..entity_at + SESSION_SIZE])?;
-            (Handle::RH_NULL.0, save_handle, SESSION_SIZE, true)
-        } else if let Some(seq) = self.context.state.find_active_sequence(save_handle) {
-            let seq = seq.clone();
-            self.tcg_sequence_image(&seq, &mut blob[entity_at..entity_at + SEQUENCE_OBJECT_SIZE])?;
-            // `fixed-size-context`: padded with zeros to an `OBJECT`.
-            let len = if cfg!(feature = "fixed-size-context") {
-                OBJECT_SIZE
+        let (hierarchy, saved_handle, entity_len, is_session) =
+            if let Some(obj) = self.context.state.find_transient_object(save_handle) {
+                let obj = obj.clone();
+                object_image::<P::Crypto>(&obj, &mut blob[entity_at..])?;
+                let st_clear = obj.st_clear
+                    || obj
+                        .public
+                        .object_attributes
+                        .contains(tpm2::TpmaObject::ST_CLEAR);
+                let saved = if st_clear { 0x8000_0002 } else { 0x8000_0000 };
+                (obj.hierarchy, saved, OBJECT_SIZE, false)
+            } else if let Some(sess) = self.context.state.session(save_handle) {
+                session_image(sess, &mut blob[entity_at..])?;
+                (Handle::RH_NULL.0, save_handle, SESSION_SIZE, true)
+            } else if let Some(seq) = self.context.state.find_active_sequence(save_handle) {
+                let seq = seq.clone();
+                sequence_image::<P::Crypto>(&seq, &mut blob[entity_at..], |h| {
+                    self.resolve_hierarchy_proof(h).map(|(proof, _)| proof)
+                })?;
+                // `fixed-size-context`: padded with zeros to an `OBJECT`.
+                let len = if cfg!(feature = "fixed-size-context") {
+                    OBJECT_SIZE
+                } else {
+                    SEQUENCE_OBJECT_SIZE
+                };
+                (Handle::RH_NULL.0, 0x8000_0001, len, false)
             } else {
-                SEQUENCE_OBJECT_SIZE
+                return Err(TpmRc::REFERENCE_H0);
             };
-            (Handle::RH_NULL.0, 0x8000_0001, len, false)
-        } else {
-            return Err(TpmRc::REFERENCE_H0);
-        };
 
         let (proof, _) = self.resolve_hierarchy_proof(hierarchy)?;
         let sequence = if is_session {
@@ -985,354 +1008,6 @@ impl<P: Platform> CommandHandler<'_, P> {
         };
         let response = request.into_response();
         self.write_response_rsp(response, &rsp, session_responses)
-    }
-
-    /// Whether `obj` is a primary object (`OBJECT_ATTRIBUTES.primary`): loaded without a parent
-    /// (`TPM2_CreatePrimary`, `TPM2_CreateLoaded` of a primary object, `TPM2_LoadExternal`)
-    /// into a hierarchy other than `TPM_RH_NULL` (`ObjectSetLoadedAttributes()`). An external
-    /// object always has no parent; any other object has none if its qualified name is that of
-    /// a child of its hierarchy (`ComputeQualifiedName()`: `H(hierarchy || name)`).
-    fn tcg_is_primary(&self, obj: &TransientObject) -> Result<bool, TpmRc> {
-        if crate::hierarchy::normalize(obj.hierarchy) == Handle::RH_NULL.0 {
-            return Ok(false);
-        }
-        if obj.external {
-            return Ok(true);
-        }
-        let qn = self.compute_qualified_name(
-            obj.public.name_alg,
-            &obj.hierarchy.to_be_bytes(),
-            obj.name.get_buffer(),
-        )?;
-        Ok(qn.get_buffer() == obj.qualified_name.get_buffer())
-    }
-
-    /// Writes the reference's `OBJECT` structure of the loaded object `obj` to
-    /// `img[..OBJECT_SIZE]` (zero on entry).
-    fn tcg_object_image(&self, obj: &TransientObject, img: &mut [u8]) -> Result<(), TpmRc> {
-        let img = &mut img[..OBJECT_SIZE];
-        let attributes = obj.public.object_attributes;
-        let mut a = attr::OCCUPIED;
-        if obj.public_only {
-            a |= attr::PUBLIC_ONLY;
-        }
-        if obj.external {
-            a |= attr::EXTERNAL;
-        }
-        if obj.st_clear || attributes.contains(tpm2::TpmaObject::ST_CLEAR) {
-            a |= attr::ST_CLEAR;
-        }
-        let base = crate::hierarchy::normalize(obj.hierarchy);
-        a |= match base {
-            h if h == Handle::RH_ENDORSEMENT.0 => attr::EPS_HIERARCHY,
-            h if h == Handle::RH_OWNER.0 => attr::SPS_HIERARCHY,
-            h if h == Handle::RH_PLATFORM.0 => attr::PPS_HIERARCHY,
-            _ => attr::TEMPORARY,
-        };
-        if self.tcg_is_primary(obj)? {
-            a |= attr::PRIMARY;
-        }
-        if !obj.external
-            && !obj.public_only
-            && attributes.contains(tpm2::TpmaObject::RESTRICTED)
-            && attributes.contains(tpm2::TpmaObject::DECRYPT)
-            && obj.public.name_alg.is_some()
-        {
-            a |= if obj.public.algorithm() == Alg::KEYEDHASH {
-                attr::DERIVATION
-            } else {
-                attr::IS_PARENT
-            };
-        }
-        put_u32(img, obj::ATTRIBUTES, a);
-
-        let mut wire = [0u8; tpm2::TpmtPublic::MAX_SIZE];
-        let len = obj.public.as_tpmt().marshal(&mut wire);
-        public_to_c(
-            &wire[..len],
-            &mut img[obj::PUBLIC..obj::PUBLIC + public::SIZE],
-        )
-        .ok_or(TpmRc::FAILURE)?;
-
-        if !obj.public_only {
-            let s = obj::SENSITIVE;
-            put_u16(img, s + sensitive::TYPE, obj.public.algorithm().id());
-            put_tpm2b(img, s + sensitive::AUTH, DIGEST_CAP, obj.auth.get_buffer())
-                .ok_or(TpmRc::FAILURE)?;
-            put_tpm2b(img, s + sensitive::SEED, DIGEST_CAP, obj.seed_bytes())
-                .ok_or(TpmRc::FAILURE)?;
-            let value = s + sensitive::VALUE;
-            if obj.public.algorithm() == Alg::RSA && obj.private_len > 0 {
-                // The packed CRT form of `CryptoRsa_LoadPrivateExponent()`, which every RSA
-                // object with a private key has once loaded (and `TPM2_ContextSave` ensures).
-                let key = obj
-                    .rsa_private_key::<P::Crypto>()
-                    .ok()
-                    .flatten()
-                    .ok_or(TpmRc::FAILURE)?;
-                let mut crt = [0u8; crate::handler::rsa_sensitive::RSA_PRIVATE_SIZE];
-                let len = self.rsa_crt_value(&key, obj.private_bytes(), &mut crt)?;
-                put_tpm2b(img, value, sensitive::VALUE_CAP, &crt[..len]).ok_or(TpmRc::FAILURE)?;
-                let size = get_u16(img, value) | sensitive::RSA_CRT_FLAGS;
-                put_u16(img, value, size);
-            } else {
-                put_tpm2b(img, value, sensitive::VALUE_CAP, obj.private_bytes())
-                    .ok_or(TpmRc::FAILURE)?;
-            }
-        }
-        put_tpm2b(
-            img,
-            obj::QUALIFIED_NAME,
-            NAME_CAP,
-            obj.qualified_name.get_buffer(),
-        )
-        .ok_or(TpmRc::FAILURE)?;
-        put_tpm2b(img, obj::NAME, NAME_CAP, obj.name.get_buffer()).ok_or(TpmRc::FAILURE)?;
-        put_u32(img, obj::HIERARCHY, obj.hierarchy);
-        Ok(())
-    }
-
-    /// Writes the reference's `SESSION` structure of `s` to `img` ([`SESSION_SIZE`] octets, zero
-    /// on entry).
-    fn tcg_session_image(s: &SessionState, img: &mut [u8]) -> Result<(), TpmRc> {
-        let is_policy = s.session_type != TpmSe::HMAC;
-        let flags = [
-            (is_policy, sattr::IS_POLICY),
-            (s.audit_digest.is_some(), sattr::IS_AUDIT),
-            (s.bound_entity.get_size() > 0, sattr::IS_BOUND),
-            (s.is_cp_hash_defined, sattr::IS_CP_HASH_DEFINED),
-            (
-                is_policy && s.is_name_hash_defined(),
-                sattr::IS_NAME_HASH_DEFINED,
-            ),
-            (
-                s.is_parameters_hash_defined,
-                sattr::IS_PARAMETERS_HASH_DEFINED,
-            ),
-            (s.is_template_hash_defined, sattr::IS_TEMPLATE_HASH_DEFINED),
-            (s.is_auth_value_needed, sattr::IS_AUTH_VALUE_NEEDED),
-            (s.is_password_needed, sattr::IS_PASSWORD_NEEDED),
-            (s.is_pp_required, sattr::IS_PP_REQUIRED),
-            (s.session_type == TpmSe::Trial, sattr::IS_TRIAL_POLICY),
-            (s.is_da_bound, sattr::IS_DA_BOUND),
-            (s.is_lockout_bound, sattr::IS_LOCKOUT_BOUND),
-            (s.include_auth, sattr::INCLUDE_AUTH),
-            (s.check_nv_written, sattr::CHECK_NV_WRITTEN),
-            (s.nv_written_state, sattr::NV_WRITTEN_STATE),
-            (
-                s.sec_channel.check_secure_channel,
-                sattr::CHECK_SECURE_CHANNEL,
-            ),
-            (s.sec_channel.check_req_key, sattr::CHECK_REQ_KEY),
-            (s.sec_channel.check_tpm_key, sattr::CHECK_TPM_KEY),
-        ];
-        let a = flags
-            .iter()
-            .filter(|(set, _)| *set)
-            .fold(0, |a, (_, bit)| a | bit);
-        put_u32(img, sess::ATTRIBUTES, a);
-        put_u32(img, sess::PCR_COUNTER, s.pcr_counter.unwrap_or(0));
-        put_u64(img, sess::START_TIME, s.start_time);
-        put_u64(img, sess::TIMEOUT, s.timeout);
-        put_u32(img, sess::EPOCH, s.epoch);
-        put_u32(img, sess::COMMAND_CODE, s.command_code);
-        put_u16(img, sess::AUTH_HASH_ALG, hash_id(s.auth_hash));
-        img[sess::COMMAND_LOCALITY] = s.command_locality;
-        let mut wire = [0u8; <Option<tpm2::TpmtSymDef>>::MAX_SIZE];
-        let len = s.symmetric.marshal(&mut wire);
-        sym_def_to_c(&mut Wire(&wire[..len]), img, sess::SYMMETRIC).ok_or(TpmRc::FAILURE)?;
-        put_tpm2b(
-            img,
-            sess::SESSION_KEY,
-            DIGEST_CAP,
-            &s.session_key[..s.session_key_len],
-        )
-        .ok_or(TpmRc::FAILURE)?;
-        put_tpm2b(img, sess::NONCE_TPM, DIGEST_CAP, s.nonce_tpm.get_buffer())
-            .ok_or(TpmRc::FAILURE)?;
-        if is_policy {
-            // `u1` holds the cpHash, nameHash, templateHash or pHash; `SessionResetPolicyData()`
-            // only zeroes its size, so the whole buffer is kept.
-            put_u16(img, sess::U1, s.policy_hash_len as u16);
-            img[sess::U1 + 2..sess::U1 + 2 + DIGEST_CAP]
-                .copy_from_slice(&s.policy_hash[..DIGEST_CAP]);
-            put_tpm2b(
-                img,
-                sess::U2,
-                DIGEST_CAP,
-                &s.policy_digest[..s.policy_digest_len],
-            )
-            .ok_or(TpmRc::FAILURE)?;
-        } else {
-            put_tpm2b(img, sess::U1, NAME_CAP, s.bound_entity.get_buffer())
-                .ok_or(TpmRc::FAILURE)?;
-            if let Some(digest) = &s.audit_digest {
-                put_tpm2b(img, sess::U2, DIGEST_CAP, &digest[..s.audit_digest_len])
-                    .ok_or(TpmRc::FAILURE)?;
-            }
-        }
-        // `scKeyNameHash` (`SEC_CHANNEL_SUPPORT`).
-        if cfg!(feature = "sec-channel") {
-            let sc = &s.sec_channel;
-            put_tpm2b(
-                img,
-                sess::SC_KEY_NAME_HASH,
-                DIGEST_CAP,
-                &sc.sc_key_name_hash[..sc.sc_key_name_hash_len],
-            )
-            .ok_or(TpmRc::FAILURE)?;
-        }
-        Ok(())
-    }
-
-    /// Writes an `HMAC_STATE` (the running inner hash `inner` and the key block of `key`) to
-    /// `img` (zero on entry).
-    fn tcg_hmac_state(
-        &self,
-        inner: &StreamingHashState,
-        key: &[u8],
-        img: &mut [u8],
-    ) -> Result<(), TpmRc> {
-        hash_state_to_c(inner, seq::TYPE_HMAC, img);
-        let block = inner.block_size();
-        let (digest, digest_len) = if key.len() > block {
-            self.compute_hash(inner.alg, &[key])?
-        } else {
-            ([0u8; 64], 0)
-        };
-        let digest = (key.len() > block).then(|| &digest[..digest_len]);
-        put_u16(img, seq::HMAC_KEY, block as u16);
-        hmac_key_block(
-            digest,
-            key,
-            block,
-            &mut img[seq::HMAC_KEY + 2..seq::HMAC_KEY + 2 + block],
-        );
-        Ok(())
-    }
-
-    /// Writes the reference's `SEQUENCE_OBJECT` structure of `s` (with its states exported,
-    /// `SequenceDataExport()`) to `img` ([`SEQUENCE_OBJECT_SIZE`] octets, zero on entry).
-    fn tcg_sequence_image(&self, s: &ActiveSequence, img: &mut [u8]) -> Result<(), TpmRc> {
-        let mut a = attr::OCCUPIED | attr::TEMPORARY;
-        if s.first_block {
-            a |= attr::FIRST_BLOCK;
-        }
-        if s.ticket_safe {
-            a |= attr::TICKET_SAFE;
-        }
-        a |= match s.sequence_type {
-            SequenceType::Hash { .. } => attr::HASH_SEQ,
-            SequenceType::Hmac { .. } => attr::HMAC_SEQ,
-            #[cfg(feature = "cmac")]
-            SequenceType::Cmac { .. } => attr::HMAC_SEQ,
-            SequenceType::Event => attr::EVENT_SEQ,
-            SequenceType::Sign(_) => attr::SIGN_SEQ,
-            SequenceType::Verify(_) => attr::VERIFY_SEQ,
-        };
-        put_u32(img, seq::ATTRIBUTES, a);
-        put_u16(img, seq::TYPE, alg::NULL);
-        put_u16(img, seq::NAME_ALG, alg::NULL);
-        put_u32(img, seq::OBJECT_ATTRIBUTES, TPMA_OBJECT_NO_DA);
-        put_tpm2b(img, seq::AUTH, DIGEST_CAP, s.auth.get_buffer()).ok_or(TpmRc::FAILURE)?;
-        let state = seq::STATE;
-        match &s.sequence_type {
-            SequenceType::Hash { .. } => {
-                hash_state_to_c(&s.hash_states[0], seq::TYPE_HASH, &mut img[state..]);
-            }
-            SequenceType::Hmac { key, .. } => {
-                self.tcg_hmac_state(&s.hash_states[0], key.get_buffer(), &mut img[state..])?;
-            }
-            #[cfg(feature = "cmac")]
-            SequenceType::Cmac { state: cmac } => {
-                // `CryptSmacStart()`: an SMAC `HASH_STATE` (no `hashAlg`) with the
-                // `tpmCmacState_t`.
-                let h = &mut img[state..];
-                h[0] = seq::TYPE_SMAC;
-                let c = seq::CMAC;
-                let (key, iv, bcount) = cmac.parts();
-                put_u16(h, c, cmac.alg.algorithm().id());
-                put_u16(h, c + 2, cmac.alg.key_bits());
-                put_u16(h, c + 4, u16::from(bcount));
-                put_tpm2b(h, c + 6, 16, iv).ok_or(TpmRc::FAILURE)?;
-                put_tpm2b(h, c + 24, 32, key).ok_or(TpmRc::FAILURE)?;
-            }
-            SequenceType::Event => {
-                for (i, st) in s.event_hash_states().iter().enumerate() {
-                    let at = state + i * HASH_STATE_SIZE;
-                    hash_state_to_c(st, seq::TYPE_HASH, &mut img[at..]);
-                }
-            }
-            // The `HASH_OBJECT` of the earlier references has no signing or verification
-            // sequences (`context-format-pre-v185` excludes their commands).
-            SequenceType::Sign(_) | SequenceType::Verify(_)
-                if cfg!(feature = "context-format-pre-v185") =>
-            {
-                return Err(TpmRc::FAILURE);
-            }
-            SequenceType::Sign(sig) | SequenceType::Verify(sig) => {
-                let mut wire = [0u8; tpm2::TpmtSigScheme::MAX_SIZE];
-                let len = sig.scheme.marshal(&mut wire);
-                scheme_to_c(&mut Wire(&wire[..len]), img, seq::SIGN_SCHEME)
-                    .ok_or(TpmRc::FAILURE)?;
-                put_tpm2b(
-                    img,
-                    seq::ASSOCIATED_NAME,
-                    NAME_CAP,
-                    sig.key_name.get_buffer(),
-                )
-                .ok_or(TpmRc::FAILURE)?;
-                match (sig.scheme, &s.mu_state) {
-                    (tpm2::TpmtSigScheme::Mldsa, Some(mu)) => {
-                        let (lanes, bufsz, pending) = mu.to_openssl();
-                        img[state..state + seq::SHAKE_SIZE].copy_from_slice(&lanes);
-                        put_u32(img, state + seq::SHAKE_SIZE, bufsz as u32);
-                        let buf = state + seq::SHAKE_BUF;
-                        img[buf..buf + pending.len()].copy_from_slice(pending);
-                    }
-                    (tpm2::TpmtSigScheme::Hmac(_), _) => {
-                        self.tcg_hmac_state(
-                            &s.hash_states[0],
-                            sig.hmac_key.get_buffer(),
-                            &mut img[state..],
-                        )?;
-                    }
-                    (tpm2::TpmtSigScheme::HashMldsa, Some(mu)) => {
-                        // Not in the references' profiles (`hash_mldsa`): the pre-hash in the
-                        // reference's place (`hashState[0]`) and, as a `tpm-rs` extension, the
-                        // running `mu` prefix in the unused `hashState[1]`.
-                        hash_state_to_c(&s.hash_states[0], seq::TYPE_HASH, &mut img[state..]);
-                        let at = state + HASH_STATE_SIZE;
-                        let (lanes, bufsz, pending) = mu.to_openssl();
-                        img[at..at + seq::SHAKE_SIZE].copy_from_slice(&lanes);
-                        put_u32(img, at + seq::SHAKE_SIZE, bufsz as u32);
-                        img[at + seq::SHAKE_BUF..at + seq::SHAKE_BUF + pending.len()]
-                            .copy_from_slice(pending);
-                    }
-                    (tpm2::TpmtSigScheme::Mldsa | tpm2::TpmtSigScheme::HashMldsa, None) => {
-                        return Err(TpmRc::FAILURE);
-                    }
-                    _ => hash_state_to_c(&s.hash_states[0], seq::TYPE_HASH, &mut img[state..]),
-                }
-                if let SequenceType::Verify(_) = s.sequence_type {
-                    match sig.ticket_hierarchy {
-                        Some(hierarchy) => {
-                            put_u32(img, seq::TICKET_HIERARCHY, hierarchy);
-                            // The ticket HMAC is keyed with the hierarchy proof
-                            // (`TPM2_VerifySequenceStart`).
-                            let (proof, _) = self.resolve_hierarchy_proof(hierarchy)?;
-                            self.tcg_hmac_state(
-                                &s.hash_states[SignatureSequence::TICKET_INNER_STATE],
-                                proof.as_bytes(),
-                                &mut img[seq::TICKET..],
-                            )?;
-                        }
-                        None => put_u32(img, seq::TICKET_HIERARCHY, Handle::RH_NULL.0),
-                    }
-                }
-            }
-        }
-        Ok(())
     }
 
     // -----------------------------------------------------------------------------------------
@@ -1415,7 +1090,7 @@ impl<P: Platform> CommandHandler<'_, P> {
                 {
                     return Err(TpmRc::CONTEXT_GAP);
                 }
-                let sess = Self::tcg_session_from_image(entity, saved_handle.0)
+                let sess = session_from_image(entity, saved_handle.0)
                     .ok_or(TpmRc::INTEGRITY.with(Position::parameter(1)))?;
                 self.context.state.remove_saved_session(saved_handle.0);
                 self.context.state.add_session(sess)?;
@@ -1432,17 +1107,15 @@ impl<P: Platform> CommandHandler<'_, P> {
                 // context).
                 let mut img = [0u8; OBJECT_SIZE];
                 img[..entity.len()].copy_from_slice(entity);
-                if get_u32(&img, obj::ATTRIBUTES) & attr::ANY_SEQ != 0 {
-                    let mut seq = self
-                        .tcg_sequence_from_image(&img)
+                if image_is_sequence(&img) {
+                    let mut seq = sequence_from_image(&img)
                         .ok_or(TpmRc::INTEGRITY.with(Position::parameter(1)))?;
                     let (slot, handle) = self.context.state.find_empty_sequence_slot()?;
                     seq.handle = handle;
                     self.context.state.active_sequences[slot] = Some(seq);
                     handle
                 } else {
-                    let mut obj = self
-                        .tcg_object_from_image(&img)
+                    let mut obj = object_from_image::<P::Crypto>(&img)
                         .ok_or(TpmRc::INTEGRITY.with(Position::parameter(1)))?;
                     let (slot, handle) = self.context.state.find_empty_transient_slot(true)?;
                     obj.handle = handle;
@@ -1453,325 +1126,733 @@ impl<P: Platform> CommandHandler<'_, P> {
         };
         Ok(loaded_handle)
     }
+}
 
-    /// The loaded object of the reference's `OBJECT` structure `img`, or `None` if it is not
-    /// one this TPM can load (its RSA private key is validated against its public key, as the
-    /// reference's `CryptoRsa_LoadPrivateExponent()` does).
-    fn tcg_object_from_image(&self, img: &[u8]) -> Option<TransientObject> {
-        let a = get_u32(img, obj::ATTRIBUTES);
-        let mut wire = [0u8; tpm2::TpmtPublic::MAX_SIZE];
-        let len = public_from_c(&img[obj::PUBLIC..obj::PUBLIC + public::SIZE], &mut wire)?;
-        let public = OwnedPublic::unmarshal_nullable(&mut &wire[..len]).ok()?;
-        let public_only = a & attr::PUBLIC_ONLY != 0;
+// ---------------------------------------------------------------------------------------------
+// The conversions between the loaded entities and the reference's structures.
+// ---------------------------------------------------------------------------------------------
+
+/// Whether `obj` is a primary object (`OBJECT_ATTRIBUTES.primary`): loaded without a parent
+/// (`TPM2_CreatePrimary`, `TPM2_CreateLoaded` of a primary object, `TPM2_LoadExternal`)
+/// into a hierarchy other than `TPM_RH_NULL` (`ObjectSetLoadedAttributes()`). An external
+/// object always has no parent; any other object has none if its qualified name is that of
+/// a child of its hierarchy (`ComputeQualifiedName()`: `H(hierarchy || name)`).
+///
+/// The digest is computed with the backend `C` directly, without the self test of a
+/// [`crate::self_test::Tested`] backend: the reference does not compute it (its `OBJECT` keeps the
+/// attribute), so it must not run a self test the reference does not run.
+fn is_primary<C: Crypto>(obj: &TransientObject) -> Result<bool, TpmRc> {
+    if crate::hierarchy::normalize(obj.hierarchy) == Handle::RH_NULL.0 {
+        return Ok(false);
+    }
+    if obj.external {
+        return Ok(true);
+    }
+    let alg = obj.public.name_alg.ok_or(TpmRc::HASH.to_rc())?;
+    let mut digest = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
+    let digest = tpm2::crypto::hash::<C>(
+        alg,
+        &[&obj.hierarchy.to_be_bytes(), obj.name.get_buffer()],
+        &mut digest,
+    )
+    .map_err(|_| TpmRc::FAILURE)?;
+    let qn = obj.qualified_name.get_buffer();
+    Ok(qn.len() == 2 + digest.digest().len()
+        && qn[..2] == hash_id(alg).to_be_bytes()
+        && qn[2..] == *digest.digest())
+}
+
+/// Writes the reference's `OBJECT` structure of the loaded object `obj` to `img[..OBJECT_SIZE]`
+/// (zeroed first): the image the reference keeps in its object slot (`s_objects[]`) and copies
+/// into a saved context (`TPM2_ContextSave()` copies the slot as it is). `evictHandle` is zero
+/// and `evict` clear (a transient object).
+///
+/// Fails with `TPM_RC_FAILURE` if `img` is shorter than an `OBJECT` or a value of `obj` does not
+/// fit the reference's structure.
+pub(crate) fn object_image<C: Crypto>(obj: &TransientObject, img: &mut [u8]) -> Result<(), TpmRc> {
+    let img = img.get_mut(..OBJECT_SIZE).ok_or(TpmRc::FAILURE)?;
+    img.fill(0);
+    let attributes = obj.public.object_attributes;
+    let mut a = attr::OCCUPIED;
+    if obj.public_only {
+        a |= attr::PUBLIC_ONLY;
+    }
+    if obj.external {
+        a |= attr::EXTERNAL;
+    }
+    if obj.st_clear || attributes.contains(tpm2::TpmaObject::ST_CLEAR) {
+        a |= attr::ST_CLEAR;
+    }
+    let base = crate::hierarchy::normalize(obj.hierarchy);
+    a |= match base {
+        h if h == Handle::RH_ENDORSEMENT.0 => attr::EPS_HIERARCHY,
+        h if h == Handle::RH_OWNER.0 => attr::SPS_HIERARCHY,
+        h if h == Handle::RH_PLATFORM.0 => attr::PPS_HIERARCHY,
+        _ => attr::TEMPORARY,
+    };
+    if is_primary::<C>(obj)? {
+        a |= attr::PRIMARY;
+    }
+    if !obj.external
+        && !obj.public_only
+        && attributes.contains(tpm2::TpmaObject::RESTRICTED)
+        && attributes.contains(tpm2::TpmaObject::DECRYPT)
+        && obj.public.name_alg.is_some()
+    {
+        a |= if obj.public.algorithm() == Alg::KEYEDHASH {
+            attr::DERIVATION
+        } else {
+            attr::IS_PARENT
+        };
+    }
+    put_u32(img, obj::ATTRIBUTES, a);
+
+    let mut wire = [0u8; tpm2::TpmtPublic::MAX_SIZE];
+    let len = obj.public.as_tpmt().marshal(&mut wire);
+    public_to_c(
+        &wire[..len],
+        &mut img[obj::PUBLIC..obj::PUBLIC + public::SIZE],
+    )
+    .ok_or(TpmRc::FAILURE)?;
+
+    if !obj.public_only {
         let s = obj::SENSITIVE;
-        let (auth, seed, mut private, mut private_len) = if public_only {
-            (
-                OwnedAuth::default(),
-                &[][..],
-                [0u8; super::MAX_PRIVATE_KEY_SIZE],
-                0,
-            )
+        put_u16(img, s + sensitive::TYPE, obj.public.algorithm().id());
+        put_tpm2b(img, s + sensitive::AUTH, DIGEST_CAP, obj.auth.get_buffer())
+            .ok_or(TpmRc::FAILURE)?;
+        put_tpm2b(img, s + sensitive::SEED, DIGEST_CAP, obj.seed_bytes()).ok_or(TpmRc::FAILURE)?;
+        let value = s + sensitive::VALUE;
+        if obj.public.algorithm() == Alg::RSA && obj.private_len > 0 {
+            // The packed CRT form of `CryptoRsa_LoadPrivateExponent()`, which every RSA
+            // object with a private key has once loaded (and `TPM2_ContextSave` ensures).
+            let key = obj
+                .rsa_private_key::<C>()
+                .ok()
+                .flatten()
+                .ok_or(TpmRc::FAILURE)?;
+            let mut crt = [0u8; crate::handler::rsa_sensitive::RSA_PRIVATE_SIZE];
+            let len = key
+                .crt(&mut crt)
+                .map_err(|_| TpmRc::FAILURE)?
+                .as_slice()
+                .len();
+            if !crate::handler::rsa_sensitive::order_crt_for_prime(
+                obj.private_bytes(),
+                &mut crt[..len],
+            ) {
+                return Err(TpmRc::FAILURE);
+            }
+            put_tpm2b(img, value, sensitive::VALUE_CAP, &crt[..len]).ok_or(TpmRc::FAILURE)?;
+            let size = get_u16(img, value) | sensitive::RSA_CRT_FLAGS;
+            put_u16(img, value, size);
         } else {
-            let auth = OwnedAuth::new(get_tpm2b(img, s + sensitive::AUTH, DIGEST_CAP)?)?;
-            let seed = get_tpm2b(img, s + sensitive::SEED, DIGEST_CAP)?;
-            let value_at = s + sensitive::VALUE;
-            let size = get_u16(img, value_at);
-            let value = if public.algorithm() == Alg::RSA && size & sensitive::RSA_PRIME_FLAG != 0 {
-                // The packed CRT form: its first value is the prime.
-                let packed = usize::from(size & !sensitive::RSA_SIZE_FLAGS);
-                if packed > sensitive::VALUE_CAP
-                    || !packed.is_multiple_of(crate::handler::rsa_sensitive::CRT_VALUES)
-                {
-                    return None;
+            put_tpm2b(img, value, sensitive::VALUE_CAP, obj.private_bytes())
+                .ok_or(TpmRc::FAILURE)?;
+        }
+    }
+    put_tpm2b(
+        img,
+        obj::QUALIFIED_NAME,
+        NAME_CAP,
+        obj.qualified_name.get_buffer(),
+    )
+    .ok_or(TpmRc::FAILURE)?;
+    put_tpm2b(img, obj::NAME, NAME_CAP, obj.name.get_buffer()).ok_or(TpmRc::FAILURE)?;
+    put_u32(img, obj::HIERARCHY, obj.hierarchy);
+    Ok(())
+}
+
+/// Writes the reference's `SESSION` structure of `s` to `img[..SESSION_SIZE]` (zeroed first):
+/// the session in the reference's session slot (`s_sessions[].session`), which
+/// `TPM2_ContextSave()` copies into a saved context as it is.
+///
+/// Fails with `TPM_RC_FAILURE` if `img` is shorter than a `SESSION` or a value of `s` does not
+/// fit the reference's structure.
+pub(crate) fn session_image(s: &SessionState, img: &mut [u8]) -> Result<(), TpmRc> {
+    let img = img.get_mut(..SESSION_SIZE).ok_or(TpmRc::FAILURE)?;
+    img.fill(0);
+    let is_policy = s.session_type != TpmSe::HMAC;
+    let flags = [
+        (is_policy, sattr::IS_POLICY),
+        (s.audit_digest.is_some(), sattr::IS_AUDIT),
+        (s.bound_entity.get_size() > 0, sattr::IS_BOUND),
+        (s.is_cp_hash_defined, sattr::IS_CP_HASH_DEFINED),
+        (
+            is_policy && s.is_name_hash_defined(),
+            sattr::IS_NAME_HASH_DEFINED,
+        ),
+        (
+            s.is_parameters_hash_defined,
+            sattr::IS_PARAMETERS_HASH_DEFINED,
+        ),
+        (s.is_template_hash_defined, sattr::IS_TEMPLATE_HASH_DEFINED),
+        (s.is_auth_value_needed, sattr::IS_AUTH_VALUE_NEEDED),
+        (s.is_password_needed, sattr::IS_PASSWORD_NEEDED),
+        (s.is_pp_required, sattr::IS_PP_REQUIRED),
+        (s.session_type == TpmSe::Trial, sattr::IS_TRIAL_POLICY),
+        (s.is_da_bound, sattr::IS_DA_BOUND),
+        (s.is_lockout_bound, sattr::IS_LOCKOUT_BOUND),
+        (s.include_auth, sattr::INCLUDE_AUTH),
+        (s.check_nv_written, sattr::CHECK_NV_WRITTEN),
+        (s.nv_written_state, sattr::NV_WRITTEN_STATE),
+        (
+            s.sec_channel.check_secure_channel,
+            sattr::CHECK_SECURE_CHANNEL,
+        ),
+        (s.sec_channel.check_req_key, sattr::CHECK_REQ_KEY),
+        (s.sec_channel.check_tpm_key, sattr::CHECK_TPM_KEY),
+    ];
+    let a = flags
+        .iter()
+        .filter(|(set, _)| *set)
+        .fold(0, |a, (_, bit)| a | bit);
+    put_u32(img, sess::ATTRIBUTES, a);
+    put_u32(img, sess::PCR_COUNTER, s.pcr_counter.unwrap_or(0));
+    put_u64(img, sess::START_TIME, s.start_time);
+    put_u64(img, sess::TIMEOUT, s.timeout);
+    put_u32(img, sess::EPOCH, s.epoch);
+    put_u32(img, sess::COMMAND_CODE, s.command_code);
+    put_u16(img, sess::AUTH_HASH_ALG, hash_id(s.auth_hash));
+    img[sess::COMMAND_LOCALITY] = s.command_locality;
+    let mut wire = [0u8; <Option<tpm2::TpmtSymDef>>::MAX_SIZE];
+    let len = s.symmetric.marshal(&mut wire);
+    sym_def_to_c(&mut Wire(&wire[..len]), img, sess::SYMMETRIC).ok_or(TpmRc::FAILURE)?;
+    put_tpm2b(
+        img,
+        sess::SESSION_KEY,
+        DIGEST_CAP,
+        &s.session_key[..s.session_key_len],
+    )
+    .ok_or(TpmRc::FAILURE)?;
+    put_tpm2b(img, sess::NONCE_TPM, DIGEST_CAP, s.nonce_tpm.get_buffer()).ok_or(TpmRc::FAILURE)?;
+    if is_policy {
+        // `u1` holds the cpHash, nameHash, templateHash or pHash; `SessionResetPolicyData()`
+        // only zeroes its size, so the whole buffer is kept.
+        put_u16(img, sess::U1, s.policy_hash_len as u16);
+        img[sess::U1 + 2..sess::U1 + 2 + DIGEST_CAP].copy_from_slice(&s.policy_hash[..DIGEST_CAP]);
+        put_tpm2b(
+            img,
+            sess::U2,
+            DIGEST_CAP,
+            &s.policy_digest[..s.policy_digest_len],
+        )
+        .ok_or(TpmRc::FAILURE)?;
+    } else {
+        put_tpm2b(img, sess::U1, NAME_CAP, s.bound_entity.get_buffer()).ok_or(TpmRc::FAILURE)?;
+        if let Some(digest) = &s.audit_digest {
+            put_tpm2b(img, sess::U2, DIGEST_CAP, &digest[..s.audit_digest_len])
+                .ok_or(TpmRc::FAILURE)?;
+        }
+    }
+    // `scKeyNameHash` (`SEC_CHANNEL_SUPPORT`).
+    if cfg!(feature = "sec-channel") {
+        let sc = &s.sec_channel;
+        put_tpm2b(
+            img,
+            sess::SC_KEY_NAME_HASH,
+            DIGEST_CAP,
+            &sc.sc_key_name_hash[..sc.sc_key_name_hash_len],
+        )
+        .ok_or(TpmRc::FAILURE)?;
+    }
+    Ok(())
+}
+
+/// Writes an `HMAC_STATE` (the running inner hash `inner` and the key block of `key`) to
+/// `img` (zero on entry). A key longer than a block is hashed with the backend `C` directly (see
+/// [`is_primary`]).
+fn hmac_state_to_c<C: Crypto>(
+    inner: &StreamingHashState,
+    key: &[u8],
+    img: &mut [u8],
+) -> Result<(), TpmRc> {
+    hash_state_to_c(inner, seq::TYPE_HMAC, img);
+    let block = inner.block_size();
+    let mut digest_buf = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
+    let digest = if key.len() > block {
+        let digest = tpm2::crypto::hash::<C>(inner.alg, &[key], &mut digest_buf)
+            .map_err(|_| TpmRc::FAILURE)?;
+        Some(digest.digest())
+    } else {
+        None
+    };
+    put_u16(img, seq::HMAC_KEY, block as u16);
+    hmac_key_block(
+        digest,
+        key,
+        block,
+        &mut img[seq::HMAC_KEY + 2..seq::HMAC_KEY + 2 + block],
+    );
+    Ok(())
+}
+
+/// Writes the reference's `SEQUENCE_OBJECT` structure of `s` (with its states exported,
+/// `SequenceDataExport()`) to `img[..SEQUENCE_OBJECT_SIZE]` (zeroed first). The exported states
+/// are the states in the reference's object slot (it copies its OpenSSL hash contexts
+/// with `memcpy`), except that the export zeroes the pointer `HASH_STATE.def`
+/// (`harness-context-no-pointers.patch`; the slot holds the address of the hash descriptor in
+/// the reference's process) and the SMAC dispatch pointers.
+///
+/// `ticket_proof` returns the proof of a hierarchy, the key of the ticket HMAC of a verification
+/// sequence (version 185's `SEQUENCE_OBJECT` only).
+///
+/// Fails with `TPM_RC_FAILURE` if `img` is shorter than a sequence object or a value of `s` does
+/// not fit the reference's structure.
+pub(crate) fn sequence_image<C: Crypto>(
+    s: &ActiveSequence,
+    img: &mut [u8],
+    ticket_proof: impl Fn(u32) -> Result<crate::hierarchy::HierarchySecret, TpmRc>,
+) -> Result<(), TpmRc> {
+    let img = img.get_mut(..SEQUENCE_OBJECT_SIZE).ok_or(TpmRc::FAILURE)?;
+    img.fill(0);
+    let mut a = attr::OCCUPIED | attr::TEMPORARY;
+    if s.first_block {
+        a |= attr::FIRST_BLOCK;
+    }
+    if s.ticket_safe {
+        a |= attr::TICKET_SAFE;
+    }
+    a |= match s.sequence_type {
+        SequenceType::Hash { .. } => attr::HASH_SEQ,
+        SequenceType::Hmac { .. } => attr::HMAC_SEQ,
+        #[cfg(feature = "cmac")]
+        SequenceType::Cmac { .. } => attr::HMAC_SEQ,
+        SequenceType::Event => attr::EVENT_SEQ,
+        SequenceType::Sign(_) => attr::SIGN_SEQ,
+        SequenceType::Verify(_) => attr::VERIFY_SEQ,
+    };
+    put_u32(img, seq::ATTRIBUTES, a);
+    put_u16(img, seq::TYPE, alg::NULL);
+    put_u16(img, seq::NAME_ALG, alg::NULL);
+    put_u32(img, seq::OBJECT_ATTRIBUTES, TPMA_OBJECT_NO_DA);
+    put_tpm2b(img, seq::AUTH, DIGEST_CAP, s.auth.get_buffer()).ok_or(TpmRc::FAILURE)?;
+    let state = seq::STATE;
+    match &s.sequence_type {
+        SequenceType::Hash { .. } => {
+            hash_state_to_c(&s.hash_states[0], seq::TYPE_HASH, &mut img[state..]);
+        }
+        SequenceType::Hmac { key, .. } => {
+            hmac_state_to_c::<C>(&s.hash_states[0], key.get_buffer(), &mut img[state..])?;
+        }
+        #[cfg(feature = "cmac")]
+        SequenceType::Cmac { state: cmac } => {
+            // `CryptSmacStart()`: an SMAC `HASH_STATE` (no `hashAlg`) with the
+            // `tpmCmacState_t`.
+            let h = &mut img[state..];
+            h[seq::HASH_TYPE] = seq::TYPE_SMAC;
+            let c = seq::CMAC;
+            let (key, iv, bcount) = cmac.parts();
+            put_u16(h, c, cmac.alg.algorithm().id());
+            put_u16(h, c + 2, cmac.alg.key_bits());
+            put_u16(h, c + 4, u16::from(bcount));
+            put_tpm2b(h, c + 6, 16, iv).ok_or(TpmRc::FAILURE)?;
+            put_tpm2b(h, c + 24, 32, key).ok_or(TpmRc::FAILURE)?;
+        }
+        SequenceType::Event => {
+            for (i, st) in s.event_hash_states().iter().enumerate() {
+                let at = state + i * HASH_STATE_SIZE;
+                hash_state_to_c(st, seq::TYPE_HASH, &mut img[at..]);
+            }
+        }
+        // The `HASH_OBJECT` of the earlier references has no signing or verification
+        // sequences (`context-format-pre-v185` excludes their commands).
+        SequenceType::Sign(_) | SequenceType::Verify(_)
+            if cfg!(feature = "context-format-pre-v185") =>
+        {
+            return Err(TpmRc::FAILURE);
+        }
+        SequenceType::Sign(sig) | SequenceType::Verify(sig) => {
+            let mut wire = [0u8; tpm2::TpmtSigScheme::MAX_SIZE];
+            let len = sig.scheme.marshal(&mut wire);
+            scheme_to_c(&mut Wire(&wire[..len]), img, seq::SIGN_SCHEME).ok_or(TpmRc::FAILURE)?;
+            put_tpm2b(
+                img,
+                seq::ASSOCIATED_NAME,
+                NAME_CAP,
+                sig.key_name.get_buffer(),
+            )
+            .ok_or(TpmRc::FAILURE)?;
+            match (sig.scheme, &s.mu_state) {
+                (tpm2::TpmtSigScheme::Mldsa, Some(mu)) => {
+                    let (lanes, bufsz, pending) = mu.to_openssl();
+                    img[state..state + seq::SHAKE_SIZE].copy_from_slice(&lanes);
+                    put_u32(img, state + seq::SHAKE_SIZE, bufsz as u32);
+                    let buf = state + seq::SHAKE_BUF;
+                    img[buf..buf + pending.len()].copy_from_slice(pending);
                 }
-                &img[value_at + 2
-                    ..value_at + 2 + packed / crate::handler::rsa_sensitive::CRT_VALUES]
-            } else {
-                get_tpm2b(img, value_at, sensitive::VALUE_CAP)?
-            };
-            let mut private = [0u8; super::MAX_PRIVATE_KEY_SIZE];
-            private.get_mut(..value.len())?.copy_from_slice(value);
-            (auth, seed, private, value.len())
-        };
-        if public.algorithm() == Alg::RSA && private_len > 0 {
-            let crate::owned::OwnedPublicParmsAndId::Rsa(parms, unique) = &public.parms_and_id
-            else {
-                return None;
-            };
-            let key = crate::handler::rsa_private_key::<P::Crypto>(
-                parms,
-                unique.get_buffer(),
-                &private[..private_len],
-            )
-            .ok()??;
-            private_len = crate::handler::rsa_private_prime(&key, &mut private).ok()?;
+                (tpm2::TpmtSigScheme::Hmac(_), _) => {
+                    hmac_state_to_c::<C>(
+                        &s.hash_states[0],
+                        sig.hmac_key.get_buffer(),
+                        &mut img[state..],
+                    )?;
+                }
+                (tpm2::TpmtSigScheme::HashMldsa, Some(mu)) => {
+                    // Not in the references' profiles (`hash_mldsa`): the pre-hash in the
+                    // reference's place (`hashState[0]`) and, as a `tpm-rs` extension, the
+                    // running `mu` prefix in the unused `hashState[1]`.
+                    hash_state_to_c(&s.hash_states[0], seq::TYPE_HASH, &mut img[state..]);
+                    let at = state + HASH_STATE_SIZE;
+                    let (lanes, bufsz, pending) = mu.to_openssl();
+                    img[at..at + seq::SHAKE_SIZE].copy_from_slice(&lanes);
+                    put_u32(img, at + seq::SHAKE_SIZE, bufsz as u32);
+                    img[at + seq::SHAKE_BUF..at + seq::SHAKE_BUF + pending.len()]
+                        .copy_from_slice(pending);
+                }
+                (tpm2::TpmtSigScheme::Mldsa | tpm2::TpmtSigScheme::HashMldsa, None) => {
+                    return Err(TpmRc::FAILURE);
+                }
+                _ => hash_state_to_c(&s.hash_states[0], seq::TYPE_HASH, &mut img[state..]),
+            }
+            if let SequenceType::Verify(_) = s.sequence_type {
+                match sig.ticket_hierarchy {
+                    Some(hierarchy) => {
+                        put_u32(img, seq::TICKET_HIERARCHY, hierarchy);
+                        // The ticket HMAC is keyed with the hierarchy proof
+                        // (`TPM2_VerifySequenceStart`).
+                        let proof = ticket_proof(hierarchy)?;
+                        hmac_state_to_c::<C>(
+                            &s.hash_states[SignatureSequence::TICKET_INNER_STATE],
+                            proof.as_bytes(),
+                            &mut img[seq::TICKET..],
+                        )?;
+                    }
+                    None => put_u32(img, seq::TICKET_HIERARCHY, Handle::RH_NULL.0),
+                }
+            }
         }
-        let (seed, seed_len) = TransientObject::seed_from_bytes(seed);
-        Some(TransientObject {
-            handle: 0,
-            seed,
-            seed_len,
-            external: a & attr::EXTERNAL != 0,
-            public_only,
-            name: OwnedName::new(get_tpm2b(img, obj::NAME, NAME_CAP)?)?,
-            auth,
-            public,
-            private,
-            private_len,
-            qualified_name: OwnedName::new(get_tpm2b(img, obj::QUALIFIED_NAME, NAME_CAP)?)?,
-            hierarchy: get_u32(img, obj::HIERARCHY),
-            st_clear: a & attr::ST_CLEAR != 0,
-        })
     }
+    Ok(())
+}
 
-    /// The session of the reference's `SESSION` structure `img`, loaded as `handle`.
-    fn tcg_session_from_image(img: &[u8], handle: u32) -> Option<SessionState> {
-        let a = get_u32(img, sess::ATTRIBUTES);
-        let flag = |bit: u32| a & bit != 0;
-        let is_policy = flag(sattr::IS_POLICY);
-        let session_type = match (is_policy, flag(sattr::IS_TRIAL_POLICY)) {
-            (false, _) => TpmSe::HMAC,
-            (true, false) => TpmSe::Policy,
-            (true, true) => TpmSe::Trial,
-        };
-        // A session handle's type must match the session (`HandleGetType` of `savedHandle`).
-        let expected = if is_policy {
-            TpmHt::PolicySession
-        } else {
-            TpmHt::HMACSession
-        };
-        if Handle(handle).handle_type() != Some(expected) {
-            return None;
-        }
-        let auth_hash = hash_from_id(get_u16(img, sess::AUTH_HASH_ALG))?;
-        let mut wire = [0u8; 6];
-        let mut w = WireOut::new(&mut wire);
-        sym_def_from_c(img, sess::SYMMETRIC, &mut w)?;
-        let len = w.len;
-        let symmetric = <Option<tpm2::TpmtSymDef>>::unmarshal(&mut &wire[..len]).ok()?;
-        let key = get_tpm2b(img, sess::SESSION_KEY, DIGEST_CAP)?;
-        let mut session_key = [0u8; 128];
-        session_key[..key.len()].copy_from_slice(key);
-        let u1_size = usize::from(get_u16(img, sess::U1));
-        let mut policy_hash = [0u8; 64];
-        let mut policy_hash_len = 0;
-        let mut bound_entity = OwnedName::default();
-        let mut audit_digest = None;
-        let mut audit_digest_len = 0;
-        let mut policy_digest = [0u8; 64];
-        let mut policy_digest_len = auth_hash.digest_size();
-        if is_policy {
-            if u1_size > DIGEST_CAP {
+/// Whether the object slot image `img` holds a sequence object (`ObjectIsSequence()`).
+fn image_is_sequence(img: &[u8]) -> bool {
+    img.len() >= 4 && get_u32(img, obj::ATTRIBUTES) & attr::ANY_SEQ != 0
+}
+
+/// The loaded object of the reference's `OBJECT` structure `img` ([`object_image`]), or `None`
+/// if `img` is shorter than an `OBJECT` or not an object this TPM can load (its RSA private key
+/// is validated against its public key, as the reference's `CryptoRsa_LoadPrivateExponent()`
+/// does). Octets the reference does not define (padding, the unused ends of buffers) are ignored.
+/// The object's hierarchy is the reference's `hierarchy` member. The returned object's `handle`
+/// is 0.
+pub(crate) fn object_from_image<C: Crypto>(img: &[u8]) -> Option<TransientObject> {
+    let img = img.get(..OBJECT_SIZE)?;
+    let a = get_u32(img, obj::ATTRIBUTES);
+    let mut wire = [0u8; tpm2::TpmtPublic::MAX_SIZE];
+    let len = public_from_c(&img[obj::PUBLIC..obj::PUBLIC + public::SIZE], &mut wire)?;
+    let public = OwnedPublic::unmarshal_nullable(&mut &wire[..len]).ok()?;
+    let public_only = a & attr::PUBLIC_ONLY != 0;
+    let s = obj::SENSITIVE;
+    let (auth, seed, mut private, mut private_len) = if public_only {
+        (
+            OwnedAuth::default(),
+            &[][..],
+            [0u8; super::MAX_PRIVATE_KEY_SIZE],
+            0,
+        )
+    } else {
+        let auth = OwnedAuth::new(get_tpm2b(img, s + sensitive::AUTH, DIGEST_CAP)?)?;
+        let seed = get_tpm2b(img, s + sensitive::SEED, DIGEST_CAP)?;
+        let value_at = s + sensitive::VALUE;
+        let size = get_u16(img, value_at);
+        let value = if public.algorithm() == Alg::RSA && size & sensitive::RSA_PRIME_FLAG != 0 {
+            // The packed CRT form: its first value is the prime.
+            let packed = usize::from(size & !sensitive::RSA_SIZE_FLAGS);
+            if packed > sensitive::VALUE_CAP
+                || !packed.is_multiple_of(crate::handler::rsa_sensitive::CRT_VALUES)
+            {
                 return None;
             }
-            policy_hash[..DIGEST_CAP]
-                .copy_from_slice(&img[sess::U1 + 2..sess::U1 + 2 + DIGEST_CAP]);
-            policy_hash_len = u1_size;
+            &img[value_at + 2..value_at + 2 + packed / crate::handler::rsa_sensitive::CRT_VALUES]
+        } else {
+            get_tpm2b(img, value_at, sensitive::VALUE_CAP)?
+        };
+        let mut private = [0u8; super::MAX_PRIVATE_KEY_SIZE];
+        private.get_mut(..value.len())?.copy_from_slice(value);
+        (auth, seed, private, value.len())
+    };
+    if public.algorithm() == Alg::RSA && private_len > 0 {
+        let crate::owned::OwnedPublicParmsAndId::Rsa(parms, unique) = &public.parms_and_id else {
+            return None;
+        };
+        let key = crate::handler::rsa_private_key::<C>(
+            parms,
+            unique.get_buffer(),
+            &private[..private_len],
+        )
+        .ok()??;
+        private_len = crate::handler::rsa_private_prime(&key, &mut private).ok()?;
+    }
+    let (seed, seed_len) = TransientObject::seed_from_bytes(seed);
+    Some(TransientObject {
+        handle: 0,
+        seed,
+        seed_len,
+        external: a & attr::EXTERNAL != 0,
+        public_only,
+        name: OwnedName::new(get_tpm2b(img, obj::NAME, NAME_CAP)?)?,
+        auth,
+        public,
+        private,
+        private_len,
+        qualified_name: OwnedName::new(get_tpm2b(img, obj::QUALIFIED_NAME, NAME_CAP)?)?,
+        hierarchy: get_u32(img, obj::HIERARCHY),
+        st_clear: a & attr::ST_CLEAR != 0,
+    })
+}
+
+/// The session of the reference's `SESSION` structure `img` ([`session_image`]) with the
+/// session handle `handle`, or `None` if `img` is shorter than a `SESSION`, the type of `handle`
+/// does not match the session's (an HMAC or a policy session) or a value does not fit this TPM.
+pub(crate) fn session_from_image(img: &[u8], handle: u32) -> Option<SessionState> {
+    let img = img.get(..SESSION_SIZE)?;
+    let a = get_u32(img, sess::ATTRIBUTES);
+    let flag = |bit: u32| a & bit != 0;
+    let is_policy = flag(sattr::IS_POLICY);
+    let session_type = match (is_policy, flag(sattr::IS_TRIAL_POLICY)) {
+        (false, _) => TpmSe::HMAC,
+        (true, false) => TpmSe::Policy,
+        (true, true) => TpmSe::Trial,
+    };
+    // A session handle's type must match the session (`HandleGetType` of `savedHandle`).
+    let expected = if is_policy {
+        TpmHt::PolicySession
+    } else {
+        TpmHt::HMACSession
+    };
+    if Handle(handle).handle_type() != Some(expected) {
+        return None;
+    }
+    let auth_hash = hash_from_id(get_u16(img, sess::AUTH_HASH_ALG))?;
+    let mut wire = [0u8; 6];
+    let mut w = WireOut::new(&mut wire);
+    sym_def_from_c(img, sess::SYMMETRIC, &mut w)?;
+    let len = w.len;
+    let symmetric = <Option<tpm2::TpmtSymDef>>::unmarshal(&mut &wire[..len]).ok()?;
+    let key = get_tpm2b(img, sess::SESSION_KEY, DIGEST_CAP)?;
+    let mut session_key = [0u8; 128];
+    session_key[..key.len()].copy_from_slice(key);
+    let u1_size = usize::from(get_u16(img, sess::U1));
+    let mut policy_hash = [0u8; 64];
+    let mut policy_hash_len = 0;
+    let mut bound_entity = OwnedName::default();
+    let mut audit_digest = None;
+    let mut audit_digest_len = 0;
+    let mut policy_digest = [0u8; 64];
+    let mut policy_digest_len = auth_hash.digest_size();
+    if is_policy {
+        if u1_size > DIGEST_CAP {
+            return None;
+        }
+        policy_hash[..DIGEST_CAP].copy_from_slice(&img[sess::U1 + 2..sess::U1 + 2 + DIGEST_CAP]);
+        policy_hash_len = u1_size;
+        let digest = get_tpm2b(img, sess::U2, DIGEST_CAP)?;
+        policy_digest[..digest.len()].copy_from_slice(digest);
+        policy_digest_len = digest.len();
+    } else {
+        if flag(sattr::IS_BOUND) {
+            bound_entity = OwnedName::new(get_tpm2b(img, sess::U1, NAME_CAP)?)?;
+        }
+        if flag(sattr::IS_AUDIT) {
             let digest = get_tpm2b(img, sess::U2, DIGEST_CAP)?;
-            policy_digest[..digest.len()].copy_from_slice(digest);
-            policy_digest_len = digest.len();
-        } else {
-            if flag(sattr::IS_BOUND) {
-                bound_entity = OwnedName::new(get_tpm2b(img, sess::U1, NAME_CAP)?)?;
-            }
-            if flag(sattr::IS_AUDIT) {
-                let digest = get_tpm2b(img, sess::U2, DIGEST_CAP)?;
-                let mut d = [0u8; 64];
-                d[..digest.len()].copy_from_slice(digest);
-                audit_digest = Some(d);
-                audit_digest_len = digest.len();
-            }
+            let mut d = [0u8; 64];
+            d[..digest.len()].copy_from_slice(digest);
+            audit_digest = Some(d);
+            audit_digest_len = digest.len();
         }
-        let sc_hash = if cfg!(feature = "sec-channel") {
-            get_tpm2b(img, sess::SC_KEY_NAME_HASH, DIGEST_CAP)?
-        } else {
-            &[]
-        };
-        let mut sec_channel = SecChannelPolicy {
-            check_secure_channel: flag(sattr::CHECK_SECURE_CHANNEL),
-            check_req_key: flag(sattr::CHECK_REQ_KEY),
-            check_tpm_key: flag(sattr::CHECK_TPM_KEY),
-            ..SecChannelPolicy::default()
-        };
-        sec_channel.sc_key_name_hash[..sc_hash.len()].copy_from_slice(sc_hash);
-        sec_channel.sc_key_name_hash_len = sc_hash.len();
-        let pcr_counter = get_u32(img, sess::PCR_COUNTER);
-        Some(SessionState {
-            session_handle: handle,
-            session_type,
-            auth_hash,
-            nonce_tpm: OwnedNonce::new(get_tpm2b(img, sess::NONCE_TPM, DIGEST_CAP)?)?,
-            session_key,
-            session_key_len: key.len(),
-            symmetric,
-            bound_entity,
-            audit_digest,
-            audit_digest_len,
-            policy_hash,
-            policy_hash_len,
-            is_cp_hash_defined: flag(sattr::IS_CP_HASH_DEFINED),
-            is_template_hash_defined: flag(sattr::IS_TEMPLATE_HASH_DEFINED),
-            is_parameters_hash_defined: flag(sattr::IS_PARAMETERS_HASH_DEFINED),
-            is_pp_required: flag(sattr::IS_PP_REQUIRED),
-            policy_digest,
-            policy_digest_len,
-            command_code: get_u32(img, sess::COMMAND_CODE),
-            start_time: get_u64(img, sess::START_TIME),
-            timeout: get_u64(img, sess::TIMEOUT),
-            epoch: get_u32(img, sess::EPOCH),
-            is_auth_value_needed: flag(sattr::IS_AUTH_VALUE_NEEDED),
-            is_password_needed: flag(sattr::IS_PASSWORD_NEEDED),
-            pcr_counter: (pcr_counter != 0).then_some(pcr_counter),
-            check_nv_written: flag(sattr::CHECK_NV_WRITTEN),
-            nv_written_state: flag(sattr::NV_WRITTEN_STATE),
-            command_locality: img[sess::COMMAND_LOCALITY],
-            include_auth: flag(sattr::INCLUDE_AUTH),
-            is_da_bound: flag(sattr::IS_DA_BOUND),
-            is_lockout_bound: flag(sattr::IS_LOCKOUT_BOUND),
-            sec_channel,
-        })
     }
+    let sc_hash = if cfg!(feature = "sec-channel") {
+        get_tpm2b(img, sess::SC_KEY_NAME_HASH, DIGEST_CAP)?
+    } else {
+        &[]
+    };
+    let mut sec_channel = SecChannelPolicy {
+        check_secure_channel: flag(sattr::CHECK_SECURE_CHANNEL),
+        check_req_key: flag(sattr::CHECK_REQ_KEY),
+        check_tpm_key: flag(sattr::CHECK_TPM_KEY),
+        ..SecChannelPolicy::default()
+    };
+    sec_channel.sc_key_name_hash[..sc_hash.len()].copy_from_slice(sc_hash);
+    sec_channel.sc_key_name_hash_len = sc_hash.len();
+    let pcr_counter = get_u32(img, sess::PCR_COUNTER);
+    Some(SessionState {
+        session_handle: handle,
+        session_type,
+        auth_hash,
+        nonce_tpm: OwnedNonce::new(get_tpm2b(img, sess::NONCE_TPM, DIGEST_CAP)?)?,
+        session_key,
+        session_key_len: key.len(),
+        symmetric,
+        bound_entity,
+        audit_digest,
+        audit_digest_len,
+        policy_hash,
+        policy_hash_len,
+        is_cp_hash_defined: flag(sattr::IS_CP_HASH_DEFINED),
+        is_template_hash_defined: flag(sattr::IS_TEMPLATE_HASH_DEFINED),
+        is_parameters_hash_defined: flag(sattr::IS_PARAMETERS_HASH_DEFINED),
+        is_pp_required: flag(sattr::IS_PP_REQUIRED),
+        policy_digest,
+        policy_digest_len,
+        command_code: get_u32(img, sess::COMMAND_CODE),
+        start_time: get_u64(img, sess::START_TIME),
+        timeout: get_u64(img, sess::TIMEOUT),
+        epoch: get_u32(img, sess::EPOCH),
+        is_auth_value_needed: flag(sattr::IS_AUTH_VALUE_NEEDED),
+        is_password_needed: flag(sattr::IS_PASSWORD_NEEDED),
+        pcr_counter: (pcr_counter != 0).then_some(pcr_counter),
+        check_nv_written: flag(sattr::CHECK_NV_WRITTEN),
+        nv_written_state: flag(sattr::NV_WRITTEN_STATE),
+        command_locality: img[sess::COMMAND_LOCALITY],
+        include_auth: flag(sattr::INCLUDE_AUTH),
+        is_da_bound: flag(sattr::IS_DA_BOUND),
+        is_lockout_bound: flag(sattr::IS_LOCKOUT_BOUND),
+        sec_channel,
+    })
+}
 
-    /// Reads an `HMAC_STATE` ([`Self::tcg_hmac_state`]): the running inner hash and the key.
-    fn tcg_hmac_from_image(img: &[u8]) -> Option<(StreamingHashState, OwnedSensitiveData)> {
-        let (ty, inner) = hash_state_from_c(img)?;
-        let block = inner.block_size();
-        if ty != seq::TYPE_HMAC || usize::from(get_u16(img, seq::HMAC_KEY)) != block {
+/// Reads an `HMAC_STATE` ([`hmac_state_to_c`]): the running inner hash and the key.
+fn hmac_state_from_c(img: &[u8]) -> Option<(StreamingHashState, OwnedSensitiveData)> {
+    let (ty, inner) = hash_state_from_c(img)?;
+    let block = inner.block_size();
+    if ty != seq::TYPE_HMAC || usize::from(get_u16(img, seq::HMAC_KEY)) != block {
+        return None;
+    }
+    let key = hmac_key_from_block(&img[seq::HMAC_KEY + 2..seq::HMAC_KEY + 2 + block])?;
+    Some((inner, key))
+}
+
+/// The sequence of the reference's `SEQUENCE_OBJECT` structure `img` (with exported states,
+/// [`sequence_image`]; `HASH_STATE.def` is ignored), or `None` if `img` is shorter than a
+/// sequence object or not a sequence this TPM can load. The returned sequence's `handle` is 0.
+pub(crate) fn sequence_from_image(img: &[u8]) -> Option<ActiveSequence> {
+    let img = img.get(..SEQUENCE_OBJECT_SIZE)?;
+    let a = get_u32(img, seq::ATTRIBUTES);
+    let auth = OwnedAuth::new(get_tpm2b(img, seq::AUTH, DIGEST_CAP)?)?;
+    let state = &img[seq::STATE..SEQUENCE_OBJECT_SIZE];
+    let mut hash_states = [StreamingHashState::default(); 4];
+    let mut mu_state = None;
+    let sequence_type = if a & attr::HASH_SEQ != 0 {
+        let (ty, st) = hash_state_from_c(state)?;
+        if ty != seq::TYPE_HASH {
             return None;
         }
-        let key = hmac_key_from_block(&img[seq::HMAC_KEY + 2..seq::HMAC_KEY + 2 + block])?;
-        Some((inner, key))
-    }
-
-    /// The sequence of the reference's `SEQUENCE_OBJECT` structure `img` (with exported states).
-    fn tcg_sequence_from_image(&self, img: &[u8]) -> Option<ActiveSequence> {
-        let a = get_u32(img, seq::ATTRIBUTES);
-        let auth = OwnedAuth::new(get_tpm2b(img, seq::AUTH, DIGEST_CAP)?)?;
-        let state = &img[seq::STATE..SEQUENCE_OBJECT_SIZE];
-        let mut hash_states = [StreamingHashState::default(); 4];
-        let mut mu_state = None;
-        let sequence_type = if a & attr::HASH_SEQ != 0 {
-            let (ty, st) = hash_state_from_c(state)?;
+        hash_states[0] = st;
+        SequenceType::Hash { alg: st.alg }
+    } else if a & attr::EVENT_SEQ != 0 {
+        for (i, slot) in hash_states
+            .iter_mut()
+            .enumerate()
+            .take(ActiveSequence::EVENT_HASH_COUNT)
+        {
+            let (ty, st) = hash_state_from_c(&state[i * HASH_STATE_SIZE..])?;
             if ty != seq::TYPE_HASH {
                 return None;
             }
-            hash_states[0] = st;
-            SequenceType::Hash { alg: st.alg }
-        } else if a & attr::EVENT_SEQ != 0 {
-            for (i, slot) in hash_states
-                .iter_mut()
-                .enumerate()
-                .take(ActiveSequence::EVENT_HASH_COUNT)
+            *slot = st;
+        }
+        SequenceType::Event
+    } else if a & attr::HMAC_SEQ != 0 {
+        #[cfg(feature = "cmac")]
+        let smac = state[seq::HASH_TYPE] == seq::TYPE_SMAC;
+        #[cfg(not(feature = "cmac"))]
+        let smac = false;
+        if smac {
+            #[cfg(not(feature = "cmac"))]
+            return None;
+            #[cfg(feature = "cmac")]
             {
-                let (ty, st) = hash_state_from_c(&state[i * HASH_STATE_SIZE..])?;
+                let c = seq::CMAC;
+                let alg =
+                    AlgSym::from_parts(Alg::new(get_u16(state, c)), get_u16(state, c + 2)).ok()?;
+                let bcount = u8::try_from(get_u16(state, c + 4)).ok()?;
+                let iv: [u8; 16] = get_tpm2b(state, c + 6, 16)?.try_into().ok()?;
+                let key = get_tpm2b(state, c + 24, 32)?;
+                SequenceType::Cmac {
+                    state: crate::cmac::CmacState::from_parts(alg, key, iv, bcount)?,
+                }
+            }
+        } else {
+            let (inner, key) = hmac_state_from_c(state)?;
+            hash_states[0] = inner;
+            SequenceType::Hmac {
+                hash_alg: inner.alg,
+                key,
+            }
+        }
+    } else if a & (attr::SIGN_SEQ | attr::VERIFY_SEQ) != 0
+        && !cfg!(feature = "context-format-pre-v185")
+    {
+        let mut wire = [0u8; tpm2::TpmtSigScheme::MAX_SIZE];
+        let mut w = WireOut::new(&mut wire);
+        scheme_from_c(img, seq::SIGN_SCHEME, &mut w)?;
+        let len = w.len;
+        let scheme = tpm2::TpmtSigScheme::unmarshal(&mut &wire[..len]).ok()?;
+        let mut hmac_key = OwnedSensitiveData::default();
+        let mut pre_hash = None;
+        match scheme {
+            tpm2::TpmtSigScheme::Mldsa => mu_state = Some(shake_from_c(state)?),
+            tpm2::TpmtSigScheme::HashMldsa => {
+                let (ty, st) = hash_state_from_c(state)?;
                 if ty != seq::TYPE_HASH {
                     return None;
                 }
-                *slot = st;
+                hash_states[0] = st;
+                pre_hash = Some(st.alg);
+                mu_state = Some(shake_from_c(&state[HASH_STATE_SIZE..])?);
             }
-            SequenceType::Event
-        } else if a & attr::HMAC_SEQ != 0 {
-            #[cfg(feature = "cmac")]
-            let smac = state[0] == seq::TYPE_SMAC;
-            #[cfg(not(feature = "cmac"))]
-            let smac = false;
-            if smac {
-                #[cfg(not(feature = "cmac"))]
-                return None;
-                #[cfg(feature = "cmac")]
-                {
-                    let c = seq::CMAC;
-                    let alg =
-                        AlgSym::from_parts(Alg::new(get_u16(state, c)), get_u16(state, c + 2))
-                            .ok()?;
-                    let bcount = u8::try_from(get_u16(state, c + 4)).ok()?;
-                    let iv: [u8; 16] = get_tpm2b(state, c + 6, 16)?.try_into().ok()?;
-                    let key = get_tpm2b(state, c + 24, 32)?;
-                    SequenceType::Cmac {
-                        state: crate::cmac::CmacState::from_parts(alg, key, iv, bcount)?,
-                    }
-                }
-            } else {
-                let (inner, key) = Self::tcg_hmac_from_image(state)?;
+            tpm2::TpmtSigScheme::Hmac(_) => {
+                let (inner, key) = hmac_state_from_c(state)?;
                 hash_states[0] = inner;
-                SequenceType::Hmac {
-                    hash_alg: inner.alg,
-                    key,
-                }
+                hmac_key = key;
             }
-        } else if a & (attr::SIGN_SEQ | attr::VERIFY_SEQ) != 0
-            && !cfg!(feature = "context-format-pre-v185")
-        {
-            let mut wire = [0u8; tpm2::TpmtSigScheme::MAX_SIZE];
-            let mut w = WireOut::new(&mut wire);
-            scheme_from_c(img, seq::SIGN_SCHEME, &mut w)?;
-            let len = w.len;
-            let scheme = tpm2::TpmtSigScheme::unmarshal(&mut &wire[..len]).ok()?;
-            let mut hmac_key = OwnedSensitiveData::default();
-            let mut pre_hash = None;
-            match scheme {
-                tpm2::TpmtSigScheme::Mldsa => mu_state = Some(shake_from_c(state)?),
-                tpm2::TpmtSigScheme::HashMldsa => {
-                    let (ty, st) = hash_state_from_c(state)?;
-                    if ty != seq::TYPE_HASH {
-                        return None;
-                    }
-                    hash_states[0] = st;
-                    pre_hash = Some(st.alg);
-                    mu_state = Some(shake_from_c(&state[HASH_STATE_SIZE..])?);
+            _ => {
+                let (ty, st) = hash_state_from_c(state)?;
+                if ty != seq::TYPE_HASH {
+                    return None;
                 }
-                tpm2::TpmtSigScheme::Hmac(_) => {
-                    let (inner, key) = Self::tcg_hmac_from_image(state)?;
-                    hash_states[0] = inner;
-                    hmac_key = key;
-                }
-                _ => {
-                    let (ty, st) = hash_state_from_c(state)?;
-                    if ty != seq::TYPE_HASH {
-                        return None;
-                    }
-                    hash_states[0] = st;
-                }
+                hash_states[0] = st;
             }
-            let ticket_hierarchy = get_u32(img, seq::TICKET_HIERARCHY);
-            let is_verify = a & attr::VERIFY_SEQ != 0;
-            let ticket_hierarchy = if is_verify && ticket_hierarchy != Handle::RH_NULL.0 {
-                let ticket = &img[seq::TICKET..seq::TICKET + HASH_STATE_SIZE + 2 + HMAC_KEY_CAP];
-                let (inner, _) = Self::tcg_hmac_from_image(ticket)?;
-                let block = inner.block_size();
-                let mut outer = StreamingHashState::new(inner.alg);
-                outer.update(&ticket[seq::HMAC_KEY + 2..seq::HMAC_KEY + 2 + block]);
-                hash_states[SignatureSequence::TICKET_INNER_STATE] = inner;
-                hash_states[SignatureSequence::TICKET_OUTER_STATE] = outer;
-                Some(ticket_hierarchy)
-            } else {
-                None
-            };
-            let sig = SignatureSequence {
-                scheme,
-                key_name: OwnedName::new(get_tpm2b(img, seq::ASSOCIATED_NAME, NAME_CAP)?)?,
-                hmac_key,
-                ticket_hierarchy,
-                pre_hash,
-            };
-            if is_verify {
-                SequenceType::Verify(sig)
-            } else {
-                SequenceType::Sign(sig)
-            }
+        }
+        let ticket_hierarchy = get_u32(img, seq::TICKET_HIERARCHY);
+        let is_verify = a & attr::VERIFY_SEQ != 0;
+        let ticket_hierarchy = if is_verify && ticket_hierarchy != Handle::RH_NULL.0 {
+            let ticket = &img[seq::TICKET..seq::TICKET + HASH_STATE_SIZE + 2 + HMAC_KEY_CAP];
+            let (inner, _) = hmac_state_from_c(ticket)?;
+            let block = inner.block_size();
+            let mut outer = StreamingHashState::new(inner.alg);
+            outer.update(&ticket[seq::HMAC_KEY + 2..seq::HMAC_KEY + 2 + block]);
+            hash_states[SignatureSequence::TICKET_INNER_STATE] = inner;
+            hash_states[SignatureSequence::TICKET_OUTER_STATE] = outer;
+            Some(ticket_hierarchy)
         } else {
-            return None;
+            None
         };
-        Some(ActiveSequence {
-            handle: 0,
-            auth,
-            sequence_type,
-            first_block: a & attr::FIRST_BLOCK != 0,
-            ticket_safe: a & attr::TICKET_SAFE != 0,
-            hash_states,
-            mu_state,
-        })
-    }
+        let sig = SignatureSequence {
+            scheme,
+            key_name: OwnedName::new(get_tpm2b(img, seq::ASSOCIATED_NAME, NAME_CAP)?)?,
+            hmac_key,
+            ticket_hierarchy,
+            pre_hash,
+        };
+        if is_verify {
+            SequenceType::Verify(sig)
+        } else {
+            SequenceType::Sign(sig)
+        }
+    } else {
+        return None;
+    };
+    Some(ActiveSequence {
+        handle: 0,
+        auth,
+        sequence_type,
+        first_block: a & attr::FIRST_BLOCK != 0,
+        ticket_safe: a & attr::TICKET_SAFE != 0,
+        hash_states,
+        mu_state,
+    })
 }
 
 /// The parameters of a `TPM2_ContextSave` response with the reference's `contextBlob`.
@@ -1897,5 +1978,327 @@ mod tests {
             hmac_key_from_block(&block).unwrap().get_buffer(),
             &[1, 2, 3]
         );
+    }
+
+    #[cfg(feature = "dev_crypto_bssl")]
+    use tpm2_crypto_bssl::BsslCryptoProvider as TestCrypto;
+    #[cfg(feature = "dev_crypto_crux")]
+    use tpm2_crypto_crux::CruxCryptoProvider as TestCrypto;
+    #[cfg(feature = "dev_crypto_rust")]
+    use tpm2_crypto_rust::RustCryptoProvider as TestCrypto;
+
+    /// `nameAlg || H(data...)` with SHA-256.
+    fn sha256_name(data: &[&[u8]]) -> OwnedName {
+        let mut digest = [0u8; 64];
+        let d = tpm2::crypto::hash::<TestCrypto>(TpmiAlgHash::Sha256, data, &mut digest).unwrap();
+        let mut name = alloc::vec![0x00, 0x0B];
+        name.extend_from_slice(d.digest());
+        OwnedName::new(&name).unwrap()
+    }
+
+    /// A loaded primary KEYEDHASH (sealed data) object in hierarchy `hierarchy` with
+    /// `attributes` (`TPMA_OBJECT`).
+    fn keyedhash_object(hierarchy: u32, attributes: u32) -> TransientObject {
+        // KEYEDHASH, SHA-256, `attributes`, an empty authPolicy, the NULL scheme and a 32-octet
+        // unique.
+        let mut wire = alloc::vec![0x00, 0x08, 0x00, 0x0B];
+        wire.extend_from_slice(&attributes.to_be_bytes());
+        wire.extend_from_slice(&[0x00, 0x00, 0x00, 0x10, 0x00, 0x20]);
+        wire.extend_from_slice(&[0x5A; 32]);
+        let public = OwnedPublic::unmarshal_nullable(&mut &wire[..]).unwrap();
+        let name = sha256_name(&[&wire]);
+        let qualified_name = sha256_name(&[&hierarchy.to_be_bytes(), name.get_buffer()]);
+        let (seed, seed_len) = TransientObject::seed_from_bytes(&[0x11; 32]);
+        let mut private = [0u8; super::super::MAX_PRIVATE_KEY_SIZE];
+        private[..5].copy_from_slice(b"hello");
+        TransientObject {
+            handle: 0x8000_0000,
+            seed,
+            seed_len,
+            external: false,
+            public_only: false,
+            name,
+            auth: OwnedAuth::new(&[0xAA; 32]).unwrap(),
+            public,
+            private,
+            private_len: 5,
+            qualified_name,
+            hierarchy,
+            st_clear: false,
+        }
+    }
+
+    /// Asserts that two loaded objects are the same (but for their handles).
+    fn assert_same_object(a: &TransientObject, b: &TransientObject) {
+        assert_eq!(a.seed_bytes(), b.seed_bytes());
+        assert_eq!(a.external, b.external);
+        assert_eq!(a.public_only, b.public_only);
+        assert_eq!(a.name.get_buffer(), b.name.get_buffer());
+        assert_eq!(a.auth.get_buffer(), b.auth.get_buffer());
+        assert_eq!(a.private_bytes(), b.private_bytes());
+        assert_eq!(a.qualified_name.get_buffer(), b.qualified_name.get_buffer());
+        assert_eq!(a.hierarchy, b.hierarchy);
+        assert_eq!(a.st_clear, b.st_clear);
+        let (mut wa, mut wb) = (
+            [0u8; tpm2::TpmtPublic::MAX_SIZE],
+            [0u8; tpm2::TpmtPublic::MAX_SIZE],
+        );
+        let la = a.public.as_tpmt().marshal(&mut wa);
+        let lb = b.public.as_tpmt().marshal(&mut wb);
+        assert_eq!(&wa[..la], &wb[..lb]);
+    }
+
+    /// An object survives the conversion to the reference's `OBJECT` and back; the image has
+    /// the reference's attributes and members at their offsets.
+    #[test]
+    fn object_image_round_trips() {
+        // fixedTPM | fixedParent | userWithAuth.
+        let obj = keyedhash_object(Handle::RH_OWNER.0, 0x0000_0052);
+        let mut img = [0xEEu8; OBJECT_SIZE + 4];
+        object_image::<TestCrypto>(&obj, &mut img).unwrap();
+        // Only the `OBJECT` is written.
+        assert_eq!(img[OBJECT_SIZE..], [0xEE; 4]);
+        let img = &img[..OBJECT_SIZE];
+        assert_eq!(
+            get_u32(img, obj::ATTRIBUTES),
+            attr::OCCUPIED | attr::SPS_HIERARCHY | attr::PRIMARY
+        );
+        assert_eq!(get_u16(img, obj::PUBLIC + public::TYPE), alg::KEYEDHASH);
+        assert_eq!(get_u16(img, obj::SENSITIVE + sensitive::AUTH), 32);
+        assert_eq!(get_u16(img, obj::SENSITIVE + sensitive::VALUE), 5);
+        assert_eq!(get_u16(img, obj::QUALIFIED_NAME), 34);
+        assert_eq!(get_u32(img, obj::EVICT_HANDLE), 0);
+        assert_eq!(get_u16(img, obj::NAME), 34);
+        assert_eq!(get_u32(img, obj::HIERARCHY), Handle::RH_OWNER.0);
+        assert!(!image_is_sequence(img));
+        assert_same_object(&object_from_image::<TestCrypto>(img).unwrap(), &obj);
+        // A short buffer is rejected both ways.
+        assert!(object_image::<TestCrypto>(&obj, &mut [0u8; OBJECT_SIZE - 1]).is_err());
+        assert!(object_from_image::<TestCrypto>(&img[..OBJECT_SIZE - 1]).is_none());
+
+        // A child (its qualified name is not that of a child of the hierarchy) is not primary;
+        // an object of the null hierarchy is temporary.
+        let mut child = keyedhash_object(Handle::RH_ENDORSEMENT.0, 0x0000_0052);
+        child.qualified_name = sha256_name(&[b"parent", child.name.get_buffer()]);
+        let mut img = [0u8; OBJECT_SIZE];
+        object_image::<TestCrypto>(&child, &mut img).unwrap();
+        assert_eq!(
+            get_u32(&img, obj::ATTRIBUTES),
+            attr::OCCUPIED | attr::EPS_HIERARCHY
+        );
+        assert_same_object(&object_from_image::<TestCrypto>(&img).unwrap(), &child);
+        let null = keyedhash_object(Handle::RH_NULL.0, 0x0000_0052);
+        object_image::<TestCrypto>(&null, &mut img).unwrap();
+        assert_eq!(
+            get_u32(&img, obj::ATTRIBUTES),
+            attr::OCCUPIED | attr::TEMPORARY
+        );
+        assert_same_object(&object_from_image::<TestCrypto>(&img).unwrap(), &null);
+    }
+
+    /// A session survives the conversion to the reference's `SESSION` and back, with the
+    /// attributes and members of the reference's layout.
+    #[test]
+    fn session_image_round_trips() {
+        let mut policy = crate::test_support::make_test_session_state(
+            0x0300_0001,
+            TpmSe::Policy,
+            TpmiAlgHash::Sha256,
+            tpm2::Tpm2bNonce::from_bytes(&[7u8; 16]).unwrap(),
+            &[9u8; 32],
+            None,
+        );
+        policy.policy_digest[..32].copy_from_slice(&[3; 32]);
+        policy.policy_digest_len = 32;
+        policy.policy_hash[..32].copy_from_slice(&[4; 32]);
+        policy.policy_hash_len = 32;
+        policy.is_cp_hash_defined = true;
+        policy.is_auth_value_needed = true;
+        policy.command_locality = 0x03;
+        policy.command_code = 0x0000_0153;
+        policy.start_time = 0x1122_3344_5566;
+        policy.timeout = 77;
+        policy.pcr_counter = Some(5);
+        let mut img = [0xEEu8; SESSION_SIZE];
+        session_image(&policy, &mut img).unwrap();
+        assert_eq!(
+            get_u32(&img, sess::ATTRIBUTES),
+            sattr::IS_POLICY | sattr::IS_CP_HASH_DEFINED | sattr::IS_AUTH_VALUE_NEEDED
+        );
+        assert_eq!(img[sess::COMMAND_LOCALITY], 0x03);
+        assert_eq!(img[sess::COMMAND_LOCALITY + 1], 0);
+        assert_eq!(get_u16(&img, sess::SESSION_KEY), 32);
+        assert_eq!(get_u16(&img, sess::NONCE_TPM), 16);
+        assert_eq!(get_u16(&img, sess::U1), 32);
+        assert_eq!(get_u16(&img, sess::U2), 32);
+        let back = session_from_image(&img, 0x0300_0001).unwrap();
+        let mut again = [0u8; SESSION_SIZE];
+        session_image(&back, &mut again).unwrap();
+        assert_eq!(img, again);
+        assert_eq!(back.session_type, TpmSe::Policy);
+        assert_eq!(back.start_time, policy.start_time);
+        assert_eq!(back.pcr_counter, Some(5));
+        assert!(back.is_cp_hash_defined && !back.is_name_hash_defined());
+        // The handle type must match the session.
+        assert!(session_from_image(&img, 0x0200_0001).is_none());
+        assert!(session_from_image(&img[..SESSION_SIZE - 1], 0x0300_0001).is_none());
+
+        // A bound, audited HMAC session.
+        let mut hmac = crate::test_support::make_test_session_state(
+            0x0200_0002,
+            TpmSe::HMAC,
+            TpmiAlgHash::Sha384,
+            tpm2::Tpm2bNonce::from_bytes(&[1u8; 48]).unwrap(),
+            &[2u8; 48],
+            None,
+        );
+        hmac.bound_entity = sha256_name(&[b"bound"]);
+        hmac.audit_digest = Some([6; 64]);
+        hmac.audit_digest_len = 48;
+        hmac.is_da_bound = true;
+        session_image(&hmac, &mut img).unwrap();
+        assert_eq!(
+            get_u32(&img, sess::ATTRIBUTES),
+            sattr::IS_AUDIT | sattr::IS_BOUND | sattr::IS_DA_BOUND
+        );
+        assert_eq!(get_u16(&img, sess::U1), 34);
+        assert_eq!(get_u16(&img, sess::U2), 48);
+        let back = session_from_image(&img, 0x0200_0002).unwrap();
+        assert_eq!(
+            back.bound_entity.get_buffer(),
+            hmac.bound_entity.get_buffer()
+        );
+        assert_eq!(back.audit_digest_len, 48);
+        session_image(&back, &mut again).unwrap();
+        assert_eq!(img, again);
+    }
+
+    /// A sequence of `ty` with the running states `states` and the given `auth`.
+    fn sequence(ty: SequenceType, states: &[StreamingHashState]) -> ActiveSequence {
+        let mut hash_states = [StreamingHashState::default(); 4];
+        hash_states[..states.len()].copy_from_slice(states);
+        ActiveSequence {
+            handle: 0x8000_0001,
+            auth: OwnedAuth::new(b"seq").unwrap(),
+            sequence_type: ty,
+            first_block: true,
+            ticket_safe: true,
+            hash_states,
+            mu_state: None,
+        }
+    }
+
+    /// Asserts that two sequences finish to the same digests after the same further data.
+    fn assert_same_sequence(a: &ActiveSequence, b: &ActiveSequence, count: usize) {
+        assert_eq!(a.auth.get_buffer(), b.auth.get_buffer());
+        assert_eq!(
+            (a.first_block, a.ticket_safe),
+            (b.first_block, b.ticket_safe)
+        );
+        for i in 0..count {
+            let (mut x, mut y) = (a.hash_states[i], b.hash_states[i]);
+            x.update(b"more");
+            y.update(b"more");
+            assert_eq!(x.finalize(), y.finalize());
+        }
+    }
+
+    /// Hash, HMAC and event sequences survive the conversion to the reference's sequence object
+    /// and back; the hash states have the reference's type, algorithm and a zero `def`.
+    #[test]
+    fn sequence_image_round_trips() {
+        let data: [u8; 150] = core::array::from_fn(|i| i as u8);
+        let mut sha384 = StreamingHashState::new(TpmiAlgHash::Sha384);
+        sha384.update(&data);
+        let hash = sequence(
+            SequenceType::Hash {
+                alg: TpmiAlgHash::Sha384,
+            },
+            &[sha384],
+        );
+        let mut img = [0xEEu8; SEQUENCE_OBJECT_SIZE];
+        sequence_image::<TestCrypto>(&hash, &mut img, |_| Err(TpmRc::FAILURE)).unwrap();
+        assert_eq!(
+            get_u32(&img, seq::ATTRIBUTES),
+            attr::OCCUPIED
+                | attr::TEMPORARY
+                | attr::HASH_SEQ
+                | attr::FIRST_BLOCK
+                | attr::TICKET_SAFE
+        );
+        assert_eq!(get_u32(&img, seq::OBJECT_ATTRIBUTES), TPMA_OBJECT_NO_DA);
+        let st = seq::STATE;
+        assert_eq!(img[st + seq::HASH_TYPE], seq::TYPE_HASH);
+        assert_eq!(get_u16(&img, st + seq::HASH_ALG), 0x000C);
+        assert_eq!(get_u64(&img, st + seq::HASH_DEF), 0);
+        assert!(image_is_sequence(&img));
+        let back = sequence_from_image(&img).unwrap();
+        assert!(matches!(
+            back.sequence_type,
+            SequenceType::Hash {
+                alg: TpmiAlgHash::Sha384
+            }
+        ));
+        assert_same_sequence(&hash, &back, 1);
+
+        // HMAC with a short and with a long key (the reference keeps the key block only).
+        for key in [&b"short key"[..], &[0x42u8; 100][..]] {
+            let mut inner = StreamingHashState::new(TpmiAlgHash::Sha256);
+            let mut block = [0x36u8; 64];
+            let mut digest = [0u8; 64];
+            let key_bytes = if key.len() > 64 {
+                tpm2::crypto::hash::<TestCrypto>(TpmiAlgHash::Sha256, &[key], &mut digest).unwrap();
+                &digest[..32]
+            } else {
+                key
+            };
+            for (b, k) in block.iter_mut().zip(key_bytes) {
+                *b ^= k;
+            }
+            inner.update(&block);
+            inner.update(&data[..70]);
+            let hmac = sequence(
+                SequenceType::Hmac {
+                    hash_alg: TpmiAlgHash::Sha256,
+                    key: OwnedSensitiveData::new(key).unwrap(),
+                },
+                &[inner],
+            );
+            sequence_image::<TestCrypto>(&hmac, &mut img, |_| Err(TpmRc::FAILURE)).unwrap();
+            assert_eq!(img[st + seq::HASH_TYPE], seq::TYPE_HMAC);
+            assert_eq!(get_u16(&img, st + seq::HMAC_KEY), 64);
+            let back = sequence_from_image(&img).unwrap();
+            assert_same_sequence(&hmac, &back, 1);
+            // The restored key is the block's key (the digest of a long key).
+            let SequenceType::Hmac { key: restored, .. } = &back.sequence_type else {
+                panic!("not an HMAC sequence");
+            };
+            assert_eq!(restored.get_buffer(), key_bytes);
+        }
+
+        // Event: one state per implemented hash.
+        let mut states = [StreamingHashState::default(); ActiveSequence::EVENT_HASH_COUNT];
+        let algs = [TpmiAlgHash::Sha1, TpmiAlgHash::Sha256, TpmiAlgHash::Sha384];
+        for (i, st) in states.iter_mut().enumerate() {
+            *st = StreamingHashState::new(
+                algs.get(i)
+                    .copied()
+                    .or(crate::handler::capability::sha512())
+                    .unwrap(),
+            );
+            st.update(&data[..i * 40 + 1]);
+        }
+        let event = sequence(SequenceType::Event, &states);
+        sequence_image::<TestCrypto>(&event, &mut img, |_| Err(TpmRc::FAILURE)).unwrap();
+        for i in 0..ActiveSequence::EVENT_HASH_COUNT {
+            assert_eq!(
+                img[st + i * HASH_STATE_SIZE + seq::HASH_TYPE],
+                seq::TYPE_HASH
+            );
+        }
+        let back = sequence_from_image(&img).unwrap();
+        assert!(matches!(back.sequence_type, SequenceType::Event));
+        assert_same_sequence(&event, &back, ActiveSequence::EVENT_HASH_COUNT);
+        assert!(sequence_from_image(&img[..SEQUENCE_OBJECT_SIZE - 1]).is_none());
     }
 }

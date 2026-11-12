@@ -1,4 +1,6 @@
 use crate::Platform;
+#[cfg(feature = "reference-rng")]
+use crate::secret_sizes::{PRIMARY_SEED_SIZE, PROOF_SIZE};
 use crate::storage::IndexState;
 use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
 #[allow(unused_imports)]
@@ -328,12 +330,15 @@ impl<'b, P: Platform> CommandHandler<'b, P> {
                 self.context.crypt_random_generate(&mut nonce)?;
                 self.context.state.nv.reset.commit_nonce = nonce;
                 let mut value = [0u8; 64];
-                self.context.crypt_random_generate(&mut value)?;
+                self.context
+                    .crypt_random_generate(&mut value[..PROOF_SIZE])?;
                 self.context.state.nv.reset.null_proof = value;
-                self.context.state.nv.reset.null_proof_size = 64;
-                self.context.crypt_random_generate(&mut value)?;
+                self.context.state.nv.reset.null_proof_size = PROOF_SIZE as u16;
+                let mut value = [0u8; 64];
+                self.context
+                    .crypt_random_generate(&mut value[..PRIMARY_SEED_SIZE])?;
                 self.context.state.nv.reset.null_seed = value;
-                self.context.state.nv.reset.null_seed_size = 64;
+                self.context.state.nv.reset.null_seed_size = PRIMARY_SEED_SIZE as u16;
             }
         }
 
@@ -396,9 +401,16 @@ impl<'b, P: Platform> CommandHandler<'b, P> {
         }
         self.context.state.drtm_handle = tpm2::Handle::RH_UNASSIGNED.0;
 
-        // `NvEntityStartup`: clear the per-boot NV index attributes (not on TPM Resume).
+        // `NvEntityStartup`: reload the orderly-Index RAM from its NV copy on every startup (the
+        // orderly Indices revert to their state at the last save, e.g. the last TPM2_Shutdown),
+        // then, except on TPM Resume, clear the per-boot NV index attributes.
+        crate::storage::orderly_ram::restore(&mut self.context.state.nv.index)
+            .map_err(|_| TpmRc::FAILURE)?;
         if kind != StartupKind::Resume {
-            self.nv_entity_startup(kind == StartupKind::Reset)?;
+            self.nv_entity_startup(
+                kind == StartupKind::Reset,
+                prev_orderly_state == SU_NONE_VALUE,
+            )?;
         }
 
         // The saved TPM_SU_STATE data has been consumed (or is stale): release its NV space.
@@ -648,8 +660,13 @@ impl<'b, P: Platform> CommandHandler<'b, P> {
     /// - for non-counter indices, `TPMA_NV_WRITTEN` is cleared if `TPMA_NV_CLEAR_STCLEAR` is SET,
     ///   or if `TPMA_NV_ORDERLY` is SET and this is a TPM Reset;
     /// - `TPMA_NV_WRITELOCKED` is cleared if the index is unwritten or lacks
-    ///   `TPMA_NV_WRITEDEFINE`.
-    fn nv_entity_startup(&mut self, is_reset: bool) -> Result<(), TpmRc> {
+    ///   `TPMA_NV_WRITEDEFINE`;
+    /// - after a startup without a preceding `TPM2_Shutdown` (`unorderly`: `g_prevOrderlyState ==
+    ///   SU_NONE_VALUE`), the low `ORDERLY_BITS` of every orderly counter are set ("Set the lower
+    ///   bits in an orderly counter to 1 for a non-orderly startup"): its value was just restored
+    ///   from the NV copy, which is saved at least every `MAX_ORDERLY_COUNT + 1` increments, so
+    ///   the counter stays above every value it reported. The NV copy is not written.
+    fn nv_entity_startup(&mut self, is_reset: bool, unorderly: bool) -> Result<(), TpmRc> {
         use crate::storage::IndexState;
         use tpm2::{Marshal, TpmaNv};
         const HEADER_MAX: usize = tpm2::Tpm2bAuth::MAX_SIZE + tpm2::Tpm2bNvPublic::MAX_SIZE;
@@ -667,7 +684,7 @@ impl<'b, P: Platform> CommandHandler<'b, P> {
             {
                 continue;
             }
-            let Ok((_, nv_public, nv_auth, _)) =
+            let Ok((data_at, nv_public, nv_auth, _)) =
                 crate::handler::nv_storage::unmarshal_nv_header(&buf[..read_len])
             else {
                 continue;
@@ -684,6 +701,18 @@ impl<'b, P: Platform> CommandHandler<'b, P> {
             }
             if !attributes.contains(TpmaNv::WRITTEN) || !attributes.contains(TpmaNv::WRITEDEFINE) {
                 attributes.remove(TpmaNv::WRITELOCKED);
+            }
+            if unorderly && is_counter && attributes.contains(TpmaNv::ORDERLY) {
+                // `counter |= MAX_ORDERLY_COUNT` on the value restored from the NV copy.
+                let mut counter = [0u8; 8];
+                storage
+                    .read_item(item.handle, data_at as u16, &mut counter)
+                    .map_err(|_| TpmRc::FAILURE)?;
+                let value =
+                    u64::from_be_bytes(counter) | crate::handler::nv_storage::MAX_ORDERLY_COUNT;
+                storage
+                    .write_item(item.handle, data_at as u16, &value.to_be_bytes())
+                    .map_err(|_| TpmRc::FAILURE)?;
             }
             if attributes == original {
                 continue;

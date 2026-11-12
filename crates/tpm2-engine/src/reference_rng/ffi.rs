@@ -28,9 +28,12 @@
 //! `alloc`) for the duration of the call, where the accessors and platform functions find it. Any
 //! number of TPMs can therefore use the reference code concurrently from different threads. A call
 //! made while another is running on the same thread (an entropy source calling back into this
-//! module) fails with `TPM_RC_FAILURE` instead of disturbing the running call. The outcome of the
-//! DRBG self-test (`DRBG_SelfTest()`, which is deterministic and draws only the NIST test
-//! vectors, never platform entropy) is shared process-wide, so it runs once.
+//! module) fails with `TPM_RC_FAILURE` instead of disturbing the running call. The DRBG
+//! self-test flags (`g_cryptoSelfTestState.rng`: `TESTED` once `DRBG_SelfTest()`, which is
+//! deterministic and draws only the NIST test vectors, never platform entropy, has passed;
+//! `ENTROPY` once the entropy source has failed) are the TPM's
+//! ([`crate::self_test::SelfTestState::rng_flags`], cleared at `_TPM_Init`), loaded into the call
+//! and stored back; calls made outside a TPM share a process-wide `TESTED` flag instead.
 //!
 //! A panic in the entropy source aborts the process (it cannot unwind through C).
 
@@ -231,8 +234,11 @@ fn call<T>(rng: &mut RefRng<'_>, f: impl FnOnce(*mut sys::DRBG_STATE) -> T) -> R
     if let Some(drbg) = rng.drbg.as_deref() {
         state.go.drbgState = to_c(drbg);
     }
-    if DRBG_TESTED.load(Ordering::Relaxed) {
-        state.self_test.rng = sys::TESTED;
+    // `g_cryptoSelfTestState.rng`: the TPM's flags, or the process-wide `TESTED` flag.
+    match rng.self_test {
+        Some(self_test) => state.self_test.rng = self_test.rng_flags(),
+        None if DRBG_TESTED.load(Ordering::Relaxed) => state.self_test.rng = sys::TESTED,
+        None => {}
     }
     let state_ptr: *mut CallState = &raw mut state;
     let result = {
@@ -245,8 +251,12 @@ fn call<T>(rng: &mut RefRng<'_>, f: impl FnOnce(*mut sys::DRBG_STATE) -> T) -> R
         drop(published);
         result
     };
-    if state.self_test.rng & sys::TESTED != 0 {
-        DRBG_TESTED.store(true, Ordering::Relaxed);
+    match rng.self_test {
+        Some(self_test) => self_test.set_rng_flags(state.self_test.rng),
+        None if state.self_test.rng & sys::TESTED != 0 => {
+            DRBG_TESTED.store(true, Ordering::Relaxed);
+        }
+        None => {}
     }
     if let Some(drbg) = rng.drbg.as_deref_mut() {
         *drbg = from_c(&state.go.drbgState);
@@ -520,6 +530,15 @@ pub(super) fn instantiate(rng: &mut RefRng<'_>) -> Result<(), TpmRc> {
         sys::DRBG_Instantiate(default, 0, null_mut())
     })?;
     check_bool(ok)
+}
+
+/// `DRBG_SelfTest()`: the known-answer test of the DRBG (on the NIST test vectors, without
+/// platform entropy or the TPM's DRBG), which sets `TESTED` in the DRBG self-test flags. Returns
+/// whether it passed.
+pub(super) fn self_test(rng: &mut RefRng<'_>) -> Result<bool, TpmRc> {
+    // SAFETY: the call state is published (the test uses `g_cryptoSelfTestState`).
+    let ok = call(rng, |_| unsafe { sys::DRBG_SelfTest() })?;
+    Ok(ok != 0)
 }
 
 /// `CryptRandStartup()`.

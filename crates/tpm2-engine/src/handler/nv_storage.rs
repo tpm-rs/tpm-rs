@@ -89,7 +89,7 @@ pub(crate) const MAX_NV_INDEX_SIZE: u16 = tpm2::TPM2_MAX_NV_INDEX_SIZE;
 
 /// Mask of the counter bits that may change without forcing an NV update of an
 /// orderly counter (`MAX_ORDERLY_COUNT = (1 << ORDERLY_BITS) - 1`, `ORDERLY_BITS = 8`).
-const MAX_ORDERLY_COUNT: u64 = (1 << 8) - 1;
+pub(crate) const MAX_ORDERLY_COUNT: u64 = (1 << 8) - 1;
 
 /// The header of a defined NV Index as stored in front of its data.
 #[derive(Clone, Copy)]
@@ -408,6 +408,10 @@ impl<'b, P: Platform> CommandHandler<'b, P> {
             .index
             .undefine_space(nv_index)
             .map_err(|_| TpmRc::FAILURE)?;
+        // `NvDeleteRAM()`: the orderly-Index RAM loses an entry (`SET_NV_UPDATE(UT_ORDERLY)`).
+        if attributes.contains(TpmaNv::ORDERLY) {
+            self.context.state.update_nv |= crate::engine::UT_ORDERLY;
+        }
         if let Some(val) = counter_val {
             if val > self.context.state.nv.persistent.max_counter {
                 self.context.state.nv.persistent.max_counter = val;
@@ -527,7 +531,13 @@ impl<'b, P: Platform> CommandHandler<'b, P> {
             nv_public_struct.data_size,
             nv_public_struct.attributes.0,
             storage,
-        )
+        )?;
+        // `NvAddRAM()`: the orderly-Index RAM gains an entry, so its NV copy is saved at the end
+        // of the command (`SET_NV_UPDATE(UT_ORDERLY)`, see `storage::orderly_ram`).
+        if nv_public_struct.attributes.contains(TpmaNv::ORDERLY) {
+            self.context.state.update_nv |= crate::engine::UT_ORDERLY;
+        }
+        Ok(())
     }
 
     /// Handles the [TpmCc::NVDefineSpace2] (`0x19d`) command (the `cc-nv-define-space2`

@@ -96,7 +96,8 @@ mod reference_rng {
     ];
 
     /// The reference functions Rust calls (renamed `tpmrs_refrng_<name>`).
-    const ENTRY_POINTS: [&str; 16] = [
+    const ENTRY_POINTS: [&str; 17] = [
+        "DRBG_SelfTest",
         "DRBG_Instantiate",
         "CryptRandStartup",
         "DRBG_Reseed",

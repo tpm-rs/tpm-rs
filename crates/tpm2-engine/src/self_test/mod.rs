@@ -45,7 +45,7 @@ pub use tested::Tested;
 pub use tested::kdfa_bits;
 
 use crate::Platform;
-use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
 
 use tpm2::errors::TpmRc;
 use tpm2::{Alg, TpmiAlgHash};
@@ -66,7 +66,23 @@ pub(crate) const MAX_ALG_LIST_SIZE: usize = 64;
 
 /// `FATAL_ERROR_SELF_TEST`: the failure code of a failed self test (`TPM2_GetTestResult` in
 /// Failure mode).
-pub(crate) const FATAL_ERROR_SELF_TEST: u32 = 6;
+pub const FATAL_ERROR_SELF_TEST: u32 = 6;
+/// `FATAL_ERROR_NV_UNRECOVERABLE`: the failure code for which `TPM2_GetTestResult` in Failure
+/// mode reports `TPM_RC_NV_UNINITIALIZED` instead of `TPM_RC_FAILURE` (`TpmFailureMode()`).
+pub const FATAL_ERROR_NV_UNRECOVERABLE: u32 = 8;
+
+/// The `rng` flags of `g_cryptoSelfTestState` (`CryptRand.h`), the state of the DRBG self test
+/// and of the entropy source: `TESTING` while `DRBG_SelfTest()` runs, `ENTROPY` once the entropy
+/// source has failed, `TESTED` once `DRBG_SelfTest()` has passed.
+pub mod rng_flags {
+    /// `TESTING`: `DRBG_SelfTest()` is running (never set between commands).
+    pub const TESTING: u32 = 1 << 0;
+    /// `ENTROPY`: the entropy source has failed (`SetEntropyBad()`); the DRBG can no longer be
+    /// (re)seeded until the next `_TPM_Init`.
+    pub const ENTROPY: u32 = 1 << 1;
+    /// `TESTED`: `DRBG_SelfTest()` has passed since the last `_TPM_Init`.
+    pub const TESTED: u32 = 1 << 2;
+}
 
 /// `ALGORITHM_VECTOR`: a set of algorithm IDs (one bit per ID up to [`ALG_LAST`]).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -133,8 +149,11 @@ pub(crate) fn default_test_hash() -> TpmiAlgHash {
     crate::handler::capability::sha512().unwrap_or(TpmiAlgHash::Sha384)
 }
 
-/// The self-test state of the TPM: `g_toTest` (the algorithms that still need a test) and whether
-/// a test has failed (Failure mode, until the next `_TPM_Init`).
+/// The self-test state of the TPM: `g_toTest` (the algorithms that still need a test), whether
+/// a test has failed (Failure mode, until the next `_TPM_Init`), the failure information that
+/// `TPM2_GetTestResult` reports in Failure mode (the reference's `s_failFunction`/`s_failLine`
+/// or failure location and `s_failCode`), and the DRBG self-test flags (the `rng` flags of
+/// `g_cryptoSelfTestState`, [`rng_flags`]).
 ///
 /// It is shared by the hooked crypto backend ([`Tested`]), which runs the tests of the
 /// algorithms it is used with through a shared reference, so its fields are atomics (only loads
@@ -142,15 +161,19 @@ pub(crate) fn default_test_hash() -> TpmiAlgHash {
 pub struct SelfTestState {
     to_test: [AtomicU8; VECTOR_BYTES],
     failed: AtomicBool,
+    /// The failure location (the high and low halves of the 64-bit location of
+    /// `_plat__GetFailureLocation()`).
+    fail_location: [AtomicU32; 2],
+    /// The failure code (`s_failCode`, `_plat__GetFailureCode()`).
+    fail_code: AtomicU32,
+    /// `g_cryptoSelfTestState.rng` ([`rng_flags`]).
+    rng: AtomicU32,
 }
 
 impl Default for SelfTestState {
     /// A state initialized as at `_TPM_Init` ([`Self::initialize`]).
     fn default() -> Self {
-        let state = Self {
-            to_test: [const { AtomicU8::new(0) }; VECTOR_BYTES],
-            failed: AtomicBool::new(false),
-        };
+        let state = Self::nothing_to_test();
         state.initialize();
         state
     }
@@ -158,11 +181,8 @@ impl Default for SelfTestState {
 
 impl Clone for SelfTestState {
     fn clone(&self) -> Self {
-        let state = Self {
-            to_test: [const { AtomicU8::new(0) }; VECTOR_BYTES],
-            failed: AtomicBool::new(self.failed()),
-        };
-        state.store(&self.load());
+        let state = Self::nothing_to_test();
+        state.copy_from(self);
         state
     }
 }
@@ -172,6 +192,8 @@ impl core::fmt::Debug for SelfTestState {
         f.debug_struct("SelfTestState")
             .field("to_test", &self.load())
             .field("failed", &self.failed())
+            .field("failure", &self.failure())
+            .field("rng", &self.rng_flags())
             .finish()
     }
 }
@@ -179,20 +201,34 @@ impl core::fmt::Debug for SelfTestState {
 impl SelfTestState {
     /// A state in which every algorithm has been tested and no test has failed: a [`Tested`]
     /// with it runs no self test (for unit tests of code that takes a [`Tested`]).
-    #[cfg(test)]
     pub(crate) const fn nothing_to_test() -> Self {
         Self {
             to_test: [const { AtomicU8::new(0) }; VECTOR_BYTES],
             failed: AtomicBool::new(false),
+            fail_location: [const { AtomicU32::new(0) }; 2],
+            fail_code: AtomicU32::new(0),
+            rng: AtomicU32::new(0),
         }
     }
 
+    /// Replaces every value of this state with those of `other`.
+    pub fn copy_from(&self, other: &Self) {
+        self.store(&other.load());
+        self.failed.store(other.failed(), Ordering::Relaxed);
+        let (location, code) = other.failure();
+        self.set_failure(location, code);
+        self.set_rng_flags(other.rng_flags());
+    }
+
     /// `CryptInitializeToTest()` (`CryptInit()`, at manufacture and on every `_TPM_Init`): every
-    /// implemented algorithm that has a test needs one, and no test has failed (Failure mode
-    /// ends at `_TPM_Init`).
+    /// implemented algorithm that has a test needs one, no test has failed (Failure mode ends at
+    /// `_TPM_Init`) and the DRBG self-test flags are cleared (`memset(&g_cryptoSelfTestState, 0,
+    /// ...)`). The failure information is kept, as the reference's `s_fail*` globals (it is
+    /// reported only in Failure mode, which sets it).
     pub fn initialize(&self) {
         self.store(&AlgorithmVector::implemented());
         self.failed.store(false, Ordering::Relaxed);
+        self.rng.store(0, Ordering::Relaxed);
         // `TestAlgorithm(TPM_ALG_ERROR, &g_toTest)`: clears the algorithms that have no test.
         algorithm_tests::clear_untestable(self);
     }
@@ -244,9 +280,49 @@ impl SelfTestState {
         self.failed.load(Ordering::Relaxed)
     }
 
-    /// Records a failed self test (`SELF_TEST_FAILURE`): the TPM enters Failure mode.
+    /// Records a failed self test (`SELF_TEST_FAILURE`): the TPM enters Failure mode, with the
+    /// failure location 0 and the failure code [`FATAL_ERROR_SELF_TEST`].
     pub fn fail(&self) {
+        self.fail_with(0, FATAL_ERROR_SELF_TEST);
+    }
+
+    /// Enters Failure mode with the failure location `location` and the failure code `code`
+    /// (`TpmFail()`).
+    pub fn fail_with(&self, location: u64, code: u32) {
+        self.set_failure(location, code);
         self.failed.store(true, Ordering::Relaxed);
+    }
+
+    /// Enters or leaves Failure mode without changing the failure information (e.g. a failed
+    /// `CryptInit()` at `_TPM_Init`, which sets `g_inFailureMode` without a failure location).
+    pub fn set_failed(&self, failed: bool) {
+        self.failed.store(failed, Ordering::Relaxed);
+    }
+
+    /// The failure information of the last failure: the 64-bit failure location and the failure
+    /// code (`_plat__GetFailureLocation()`, `_plat__GetFailureCode()`), reported by
+    /// `TPM2_GetTestResult` in Failure mode.
+    pub fn failure(&self) -> (u64, u32) {
+        let high = u64::from(self.fail_location[0].load(Ordering::Relaxed));
+        let low = u64::from(self.fail_location[1].load(Ordering::Relaxed));
+        ((high << 32) | low, self.fail_code.load(Ordering::Relaxed))
+    }
+
+    /// Replaces the failure information ([`Self::failure`]).
+    pub fn set_failure(&self, location: u64, code: u32) {
+        self.fail_location[0].store((location >> 32) as u32, Ordering::Relaxed);
+        self.fail_location[1].store(location as u32, Ordering::Relaxed);
+        self.fail_code.store(code, Ordering::Relaxed);
+    }
+
+    /// `g_cryptoSelfTestState.rng` ([`rng_flags`]).
+    pub fn rng_flags(&self) -> u32 {
+        self.rng.load(Ordering::Relaxed)
+    }
+
+    /// Replaces `g_cryptoSelfTestState.rng`.
+    pub fn set_rng_flags(&self, flags: u32) {
+        self.rng.store(flags, Ordering::Relaxed);
     }
 }
 
@@ -267,6 +343,7 @@ impl<P: Platform> TpmEngine<P> {
             rng: Some(crate::reference_rng::RefRng {
                 drbg: Some(&mut self.state.nv.orderly.drbg_state),
                 entropy: Some(self.platform.rng()),
+                self_test: Some(&self.self_test),
             }),
         }
     }

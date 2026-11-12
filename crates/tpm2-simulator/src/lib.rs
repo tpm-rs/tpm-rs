@@ -19,8 +19,10 @@ pub struct Args {
 use tpm2::Connection;
 use tpm2::commands::Command;
 use tpm2::platform::SimulatedSecureChannel;
+pub use tpm2_engine::{
+    DeserializeError, NO_STREAM, PlatformConnection, SerializeError, SimulatorPlatformSignal,
+};
 use tpm2_engine::{InternalError, TpmEngine};
-pub use tpm2_engine::{NO_STREAM, PlatformConnection, SimulatorPlatformSignal};
 use tpm2_platform_linux::{
     LinuxPlatform, LinuxRng, LinuxTimer, PlatformCryptoProvider, create_linux_platform,
 };
@@ -456,7 +458,53 @@ impl<'a> Simulator<'a> {
     {
         execute::run_command(&cmd, self)
     }
+
+    /// Serializes the runtime state of the TPM (`TpmEngine::serialize_state`, in the
+    /// platform's format, `Platform::serialize`) into a buffer of
+    /// [`SERIALIZED_STATE_CAPACITY`] bytes, e.g. for a live migration. Call it while the TPM is
+    /// idle (between two commands).
+    ///
+    /// The simulator-level power and NV-availability flags are not part of
+    /// the state.
+    ///
+    /// # Errors
+    /// If the platform cannot serialize the state
+    /// ([`SerializeError::InvalidState`]) or it does not fit
+    /// [`SERIALIZED_STATE_CAPACITY`] bytes ([`SerializeError::BufferTooSmall`]).
+    ///
+    /// # Panics
+    /// If the platform does not implement `Platform::serialize`.
+    pub fn serialize_state(&self) -> Result<Vec<u8>, SerializeError> {
+        let mut out = vec![0u8; SERIALIZED_STATE_CAPACITY];
+        let len = self.context.serialize_state(&mut out)?;
+        out.truncate(len);
+        Ok(out)
+    }
+
+    /// Restores the runtime state of the TPM from `data`, written by
+    /// [`Self::serialize_state`] of this or another simulator, or by another
+    /// TPM in the platform's format (`TpmEngine::deserialize_state`, which then
+    /// syncs the NV data).
+    ///
+    /// # Errors
+    /// If `data` is not a valid serialized state
+    /// ([`DeserializeError::InvalidData`]).
+    ///
+    /// # Panics
+    /// If the platform does not implement `Platform::deserialize`.
+    pub fn deserialize_state(&mut self, data: &[u8]) -> Result<(), DeserializeError> {
+        self.context.deserialize_state(data)
+    }
+
+    /// Whether the simulated TPM is powered on (the MSSIM `PowerOn`/`PowerOff` signals); a
+    /// powered-off TPM executes no command.
+    pub fn is_power_on(&self) -> bool {
+        self.is_power_on
+    }
 }
+
+/// Capacity of the buffer of [`Simulator::serialize_state`].
+pub const SERIALIZED_STATE_CAPACITY: usize = 128 * 1024;
 
 /// Sends commands through the simulator's MSSIM command path at locality 0: while the simulator
 /// is powered off, the response is empty.

@@ -13,6 +13,7 @@
 pub mod manager;
 pub mod nv;
 pub mod nv_capacity;
+pub mod orderly_ram;
 pub mod ram_storage_mock;
 pub mod types;
 

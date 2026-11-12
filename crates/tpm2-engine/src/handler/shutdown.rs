@@ -52,6 +52,10 @@ impl<'b, P: Platform> CommandHandler<'b, P> {
         }
 
         self.context.state.nv.persistent.orderly_state = shutdown_type;
+        // `NvUpdateIndexOrderlyData()`: save the orderly-Index RAM (the data and attributes of
+        // the orderly NV Indices) to its NV copy, from which the next TPM2_Startup reloads it.
+        crate::storage::orderly_ram::save(&mut self.context.state.nv.index)
+            .map_err(|_| TpmRc::FAILURE)?;
         // `go.time = g_time;`
         self.context.state.nv.orderly.shutdown_time_ms = self.context.state.tpm_time_ms;
         self.context.state.da_used = false;

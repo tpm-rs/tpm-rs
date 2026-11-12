@@ -60,6 +60,7 @@ fn with_tester<T>(state: &SelfTestState, f: impl FnOnce(&mut SelfTester<'_, Cryp
         drbg::instantiate(&mut RefRng {
             drbg: Some(&mut drbg_state),
             entropy: Some(&mut entropy),
+            self_test: None,
         })
         .unwrap();
         let mut tester = SelfTester {
@@ -67,6 +68,7 @@ fn with_tester<T>(state: &SelfTestState, f: impl FnOnce(&mut SelfTester<'_, Cryp
             rng: Some(RefRng {
                 drbg: Some(&mut drbg_state),
                 entropy: Some(&mut entropy),
+                self_test: None,
             }),
         };
         f(&mut tester)

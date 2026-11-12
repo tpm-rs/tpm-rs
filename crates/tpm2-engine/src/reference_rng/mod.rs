@@ -47,8 +47,8 @@ use tpm2::crypto::Rng;
 
 use crate::engine::DrbgState;
 
-/// The TPM a reference RNG call is made for: its own DRBG and the entropy source that DRBG is
-/// instantiated and reseeded from.
+/// The TPM a reference RNG call is made for: its own DRBG, the entropy source that DRBG is
+/// instantiated and reseeded from, and its DRBG self-test flags.
 pub struct RefRng<'a> {
     /// The TPM's own DRBG (`drbgDefault`, persisted in NV as `go.drbgState`), or `None` if there
     /// is none (then every use of it fails with `TPM_RC_FAILURE`).
@@ -56,6 +56,12 @@ pub struct RefRng<'a> {
     /// The platform entropy source (`_plat__GetEntropy()`), or `None` for a failing one. It must
     /// not call back into this module (such calls fail with `TPM_RC_FAILURE`).
     pub entropy: Option<&'a mut dyn Rng>,
+    /// The TPM's self-test state, whose DRBG self-test flags
+    /// ([`crate::self_test::SelfTestState::rng_flags`]) the call uses as
+    /// `g_cryptoSelfTestState.rng` and updates (`DRBG_SelfTest()` runs once per `_TPM_Init`, a
+    /// failed entropy source stays failed until then). `None` outside a TPM: a process-wide
+    /// `TESTED` flag is used and the `ENTROPY` flag lasts for the call.
+    pub self_test: Option<&'a crate::self_test::SelfTestState>,
 }
 
 impl RefRng<'_> {
@@ -64,6 +70,7 @@ impl RefRng<'_> {
         RefRng {
             drbg: None,
             entropy: None,
+            self_test: None,
         }
     }
 }
