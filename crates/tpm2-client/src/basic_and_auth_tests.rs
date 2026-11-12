@@ -65,7 +65,7 @@ fn continue_session_testing(command_should_fail: bool) {
     }
 
     // Unset the bit.
-    session.session_attributes &= !TpmaSession::CONTINUE_SESSION;
+    session.clear_session_attributes(TpmaSession::CONTINUE_SESSION);
 
     let nv_read_rsp = read_nv_index(&mut simulator, &nv_public, Handle::RH_OWNER, &mut session);
     if !command_should_fail {
