@@ -1,7 +1,6 @@
-use crate::sessions::session_auth_core::{Buf, MAX_DIGEST, SessionCore, trim_trailing_zeros};
 use crate::CryptoBackend;
-use crate::sessions::{AuthError, CommandData, ResponseData, Session};
-use core::fmt;
+use crate::sessions::hmac::{Buf, MAX_DIGEST};
+use crate::sessions::{AuthError, CommandData, HmacSession, ResponseData, Session};
 use core::marker::PhantomData;
 use tpm2::crypto::{Crypto, CryptoError, HashContext, hash};
 use tpm2::{
@@ -396,15 +395,6 @@ impl<C: Crypto> PolicyDigest<C> {
     }
 }
 
-impl<C> fmt::Debug for PolicyDigest<C> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("PolicyDigest")
-            .field("alg", &self.alg)
-            .field("digest", &self.digest.as_slice())
-            .finish_non_exhaustive()
-    }
-}
-
 /// How a policy session authorizes, which depends on whether
 /// `TPM2_PolicyAuthValue` or `TPM2_PolicyPassword` was executed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -458,16 +448,16 @@ enum PolicyAuth {
 /// command would see the new `nonceTPM`, so the others would desynchronize
 /// from the TPM.
 pub struct PolicySession<C = CryptoBackend> {
-    core: SessionCore<C>,
-    // TODO: Validate these. `decrypt`, `encrypt`, and the audit attributes
-    // aren't supported yet (parameters aren't encrypted, and
-    // `nonceDecrypt`/`nonceEncrypt` aren't included in the HMAC), but nothing
-    // prevents setting them.
-    /// Session attributes sent with this session;
-    /// defaults to [`TpmaSession::CONTINUE_SESSION`].
-    pub session_attributes: TpmaSession,
-    auth_value: Buf,
+    // Tracks the nonces, session key, session attributes, and authValue.
+    core: HmacSession<C>,
     auth: PolicyAuth,
+    // TODO: This is only the policyDigest the session is expected to have:
+    // it's only correct if the caller updates it exactly when a
+    // `TPM2_Policy*` command succeeds, and a mismatch only shows up as a
+    // failed authorization later. Consider checking it (e.g. against
+    // `TPM2_PolicyGetDigest`), and marking the session invalid on a
+    // mismatch, as for a failed response check (see
+    // `HmacSession::validate_auth_response()`).
     policy: PolicyDigest<C>,
 }
 
@@ -480,9 +470,8 @@ impl<C: Crypto> PolicySession<C> {
     /// `nonce_caller` is the nonce sent in `TPM2_StartAuthSession`, and
     /// `nonce_tpm` is the nonce returned in its response.
     ///
-    /// The `continueSession` attribute is enabled by default; clear it
-    /// (e.g. `session.session_attributes.set(TpmaSession::CONTINUE_SESSION, false)`)
-    /// to request that the command terminate the session.
+    /// The `continueSession` attribute is enabled by default; see
+    /// [`PolicySession::clear_session_attributes`].
     pub fn new(
         session_handle: Handle,
         auth_hash: TpmiAlgHash,
@@ -491,9 +480,7 @@ impl<C: Crypto> PolicySession<C> {
     ) -> Self {
         PolicySession {
             policy: PolicyDigest::new(auth_hash),
-            core: SessionCore::new(session_handle, auth_hash, nonce_caller, nonce_tpm),
-            session_attributes: TpmaSession::CONTINUE_SESSION,
-            auth_value: Buf::EMPTY,
+            core: HmacSession::new(session_handle, auth_hash, nonce_caller, nonce_tpm),
             auth: PolicyAuth::Policy,
         }
     }
@@ -516,7 +503,7 @@ impl<C: Crypto> PolicySession<C> {
     ) -> Result<Self, CryptoError> {
         Ok(PolicySession {
             policy: PolicyDigest::new(auth_hash),
-            core: SessionCore::new_bound_or_salted(
+            core: HmacSession::new_bound_or_salted(
                 session_handle,
                 auth_hash,
                 nonce_caller,
@@ -524,8 +511,6 @@ impl<C: Crypto> PolicySession<C> {
                 bind_auth,
                 salt,
             )?,
-            session_attributes: TpmaSession::CONTINUE_SESSION,
-            auth_value: Buf::EMPTY,
             auth: PolicyAuth::Policy,
         })
     }
@@ -560,7 +545,7 @@ impl<C> PolicySession<C> {
     /// [`PolicySession::policy_password`], which set it too). Otherwise, the
     /// TPM ignores the entity's authValue, and so does this session.
     pub fn set_auth_value(&mut self, auth_value: Tpm2bAuth<'_>) {
-        self.auth_value = Buf::new(trim_trailing_zeros(auth_value.as_slice()));
+        self.core.set_auth_value(auth_value);
     }
 
     /// Records that the TPM reset the session's policy: the policyDigest is
@@ -585,14 +570,32 @@ impl<C> PolicySession<C> {
         &mut self.policy
     }
 
+    /// Returns the session attributes sent with this session; by default,
+    /// only `continueSession`.
+    pub const fn session_attributes(&self) -> TpmaSession {
+        self.core.session_attributes()
+    }
+
+    /// Sets the given session attributes, leaving the others unchanged. See
+    /// [`HmacSession::set_session_attributes`].
+    pub fn set_session_attributes(&mut self, attributes: TpmaSession) {
+        self.core.set_session_attributes(attributes);
+    }
+
+    /// Clears the given session attributes, leaving the others unchanged.
+    /// See [`HmacSession::clear_session_attributes`].
+    pub fn clear_session_attributes(&mut self, attributes: TpmaSession) {
+        self.core.clear_session_attributes(attributes);
+    }
+
     /// Returns the session handle this session refers to.
     pub const fn handle(&self) -> Handle {
-        self.core.session_handle
+        self.core.handle()
     }
 
     /// Returns the session's hash algorithm (`authHash`).
     pub const fn auth_hash(&self) -> TpmiAlgHash {
-        self.core.auth_hash
+        self.core.auth_hash()
     }
 
     /// Returns the most recent TPM nonce, which is needed as a parameter of
@@ -612,36 +615,31 @@ impl<C> PolicySession<C> {
     // should only be compiled with a testing feature. It panics (via a slice
     // bounds check) on the next command if `len` exceeds `MAX_DIGEST`.
     pub fn set_new_nonce_caller_length(&mut self, len: usize) {
-        self.core.nonce_caller.len = len;
-    }
-}
-
-// Manual impl, to avoid printing the session key and authValue.
-impl<C> fmt::Debug for PolicySession<C> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("PolicySession")
-            .field("session_handle", &self.core.session_handle)
-            .field("auth_hash", &self.core.auth_hash)
-            .field("session_attributes", &self.session_attributes)
-            .field("auth", &self.auth)
-            .field("policy_digest", &self.policy.digest.as_slice())
-            .field("nonce_caller", &self.core.nonce_caller.as_slice())
-            .field("nonce_tpm", &self.core.nonce_tpm.as_slice())
-            .finish_non_exhaustive()
+        self.core.set_new_nonce_caller_length(len);
     }
 }
 
 impl<C: Crypto> Session for PolicySession<C> {
     fn auth_command(&mut self, cmd: &CommandData) -> Result<TpmsAuthCommand<'_>, AuthError> {
-        match self.auth {
-            PolicyAuth::Policy => self.core.auth_command(cmd, self.session_attributes, &[]),
-            PolicyAuth::AuthValue => {
-                self.core
-                    .auth_command(cmd, self.session_attributes, self.auth_value.as_slice())
-            }
-            PolicyAuth::Password => self
-                .core
-                .password_auth_command(self.session_attributes, self.auth_value.as_slice()),
+        let nonce = self.core.fresh_nonce_caller()?;
+        if self.auth == PolicyAuth::Password {
+            // The authValue is sent in place of the command HMAC.
+            let core = &mut self.core;
+            core.nonce_caller = nonce;
+            Ok(TpmsAuthCommand {
+                session_handle: core.session_handle,
+                nonce: core.nonce_caller(),
+                session_attributes: core.session_attributes,
+                hmac: Tpm2bAuth::new(core.auth_value.as_slice()).unwrap(),
+            })
+        } else {
+            let auth_value: &[u8] = if self.auth == PolicyAuth::AuthValue {
+                self.core.auth_value.as_slice()
+            } else {
+                &[]
+            };
+            let hmac = self.core.command_hmac(cmd, nonce.as_slice(), auth_value)?;
+            Ok(self.core.finish_auth_command(nonce, hmac))
         }
     }
 
@@ -650,14 +648,22 @@ impl<C: Crypto> Session for PolicySession<C> {
         rsp: &ResponseData,
         auth: &TpmsAuthResponse,
     ) -> Result<(), AuthError> {
-        match self.auth {
-            PolicyAuth::Policy => self.core.validate_auth_response(rsp, auth, &[])?,
-            PolicyAuth::AuthValue => {
-                self.core
-                    .validate_auth_response(rsp, auth, self.auth_value.as_slice())?
+        if self.auth == PolicyAuth::Password {
+            // The response HMAC is empty.
+            if auth.nonce.as_slice().len() != self.core.nonce_tpm.len
+                || !auth.hmac.as_slice().is_empty()
+            {
+                return Err(AuthError::InvalidResponse);
             }
-            PolicyAuth::Password => self.core.validate_password_response(auth)?,
+        } else {
+            let auth_value: &[u8] = if self.auth == PolicyAuth::AuthValue {
+                self.core.auth_value.as_slice()
+            } else {
+                &[]
+            };
+            self.core.check_response_hmac(rsp, auth, auth_value)?;
         }
+        self.core.nonce_tpm = Buf::new(auth.nonce.as_slice());
         // After a successful command, the TPM resets the policy (if the
         // session continues; otherwise, the session is gone anyway).
         self.policy_restart();

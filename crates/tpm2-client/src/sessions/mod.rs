@@ -6,7 +6,6 @@ mod hmac;
 mod password;
 mod policy;
 mod session;
-mod session_auth_core;
 #[cfg(all(test, feature = "rustcrypto"))]
 mod tests;
 
