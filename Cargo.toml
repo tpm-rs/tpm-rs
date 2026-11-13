@@ -8,6 +8,7 @@ members = [
     "crates/tpm2-impl",
     "crates/tpm2-openssl",
     "crates/tpm2-rustcrypto",
+    "crates/xtask",
     "testing/crypto",
 ]
 # tpm2-boringssl requires BoringSSL to be built first (see its README), so it is
@@ -18,8 +19,10 @@ default-members = [
     "crates/tpm2-impl",
     "crates/tpm2-openssl",
     "crates/tpm2-rustcrypto",
+    "crates/xtask",
     "testing/crypto",
 ]
+exclude = ["testing/size-harness"]
 
 # Package keys that should be used by all packages.
 # We don't set: authors (deprecated), license-file, exclude, include, or publish
