@@ -7,8 +7,8 @@
 mod common;
 
 use common::{
-    FakeRng, FakeStorage, FakeTimer, RealCryptoEngine, TestCryptoProvider, execute_command,
-    password_auth, setup_real_crypto_tpm,
+    FakeStorage, FakeTimer, RealCryptoEngine, TestCryptoProvider, execute_command, password_auth,
+    setup_real_crypto_tpm,
 };
 #[allow(deprecated)]
 use tpm2::commands::Sign;
@@ -153,11 +153,10 @@ fn sign_with_policy_session(
 /// still be rejected with `TPM_RC_PCR_CHANGED` (no wrap-around bypass).
 #[test]
 fn test_policy_pcr_counter_overflow_vulnerability() {
-    let mut crypto = TestCryptoProvider;
+    let mut crypto = common::test_crypto();
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let mut rng = FakeRng::new();
-    let mut tpm = setup_real_crypto_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
+    let mut tpm = setup_real_crypto_tpm(&mut crypto, &mut storage, &mut timer);
 
     tpm.state.pcrs.update_counter = u32::MAX;
     let (key, pcr_digest) = create_pcr_gated_key(&mut tpm);
@@ -193,11 +192,10 @@ fn test_policy_pcr_counter_overflow_vulnerability() {
 /// counter mismatch alone must cause `TPM_RC_PCR_CHANGED`.
 #[test]
 fn test_policy_pcr_counter_bypass_on_max() {
-    let mut crypto = TestCryptoProvider;
+    let mut crypto = common::test_crypto();
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let mut rng = FakeRng::new();
-    let mut tpm = setup_real_crypto_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
+    let mut tpm = setup_real_crypto_tpm(&mut crypto, &mut storage, &mut timer);
 
     tpm.state.pcrs.update_counter = u32::MAX;
     let (key, pcr_digest) = create_pcr_gated_key(&mut tpm);
@@ -218,11 +216,10 @@ fn test_policy_pcr_counter_bypass_on_max() {
 /// failures above are caused by the counter check and nothing else.
 #[test]
 fn test_policy_pcr_counter_unchanged_succeeds() {
-    let mut crypto = TestCryptoProvider;
+    let mut crypto = common::test_crypto();
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let mut rng = FakeRng::new();
-    let mut tpm = setup_real_crypto_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
+    let mut tpm = setup_real_crypto_tpm(&mut crypto, &mut storage, &mut timer);
 
     tpm.state.pcrs.update_counter = u32::MAX;
     let (key, pcr_digest) = create_pcr_gated_key(&mut tpm);

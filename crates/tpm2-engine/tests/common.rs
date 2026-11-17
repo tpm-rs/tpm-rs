@@ -42,7 +42,19 @@ pub use tpm2_crypto_rust::RustCryptoProvider as TestCryptoProvider;
 pub use tpm2_crypto_crux::CruxCryptoProvider as TestCryptoProvider;
 
 #[cfg(feature = "dev_crypto_bssl")]
-pub use tpm2_crypto_bssl::BsslCryptoProvider as TestCryptoProvider;
+pub type TestCryptoProvider = tpm2_crypto_bssl::BsslCryptoProvider;
+
+/// A value of the dev crypto backend [`TestCryptoProvider`] (which [`FakePlatform`] borrows).
+pub const fn test_crypto() -> TestCryptoProvider {
+    #[cfg(feature = "dev_crypto_bssl")]
+    {
+        TestCryptoProvider::new()
+    }
+    #[cfg(not(feature = "dev_crypto_bssl"))]
+    {
+        TestCryptoProvider {}
+    }
+}
 
 #[allow(clippy::too_many_arguments)]
 pub fn make_test_session_state(
@@ -91,13 +103,9 @@ pub fn make_test_session_state(
     }
 }
 
-/// A deterministic platform RNG ([`Rng`]): fills buffers with an incrementing (wrapping) byte
-/// counter that starts at 1 and continues across calls.
-///
-/// [`FakePlatform`] borrows its RNG mutably, so pass `&mut rng`. A
-/// `FakeRng` that is reused for several engines one after the other keeps counting where the
-/// previous engine stopped. It is also the RNG of [`FakeCrypto`] (a separate instance per
-/// [`Random::from_entropy`] call).
+/// A deterministic RNG ([`Rng`]): fills buffers with an incrementing (wrapping) byte counter
+/// that starts at 1 and continues across calls. It is the RNG of [`FakeCrypto`] (a separate
+/// instance per [`Random::from_entropy`] call).
 pub struct FakeRng {
     counter: u8,
 }
@@ -280,15 +288,79 @@ pub struct FakeRsaPublic<const M: usize> {
 /// A fake RSA private key: every modulus/prime pair is accepted.
 ///
 /// * Generated keys have the modulus `0xcc..` and the prime `0xdd..`.
-/// * `TPM_ALG_NULL` and RSAES encryption copy the message, left-aligned and zero padded to the
-///   modulus size; OAEP encryption does the same, and OAEP decryption returns the first
-///   32 octets (at most) of the ciphertext, i.e. a message of up to 32 octets (a seed) round
-///   trips. The other decryptions copy the whole ciphertext.
-/// * Signatures (RSASSA, RSAPSS) are [`fake_signature`]s of the modulus size; verification
-///   accepts exactly those.
+/// * The raw operations are the identity. The dispatch functions encode OAEP, RSAES-PKCS1-v1_5
+///   and PSS themselves (`tpm2::crypto::rsa_oaep_encode` and so on, then the raw operation), so
+///   the OAEP and RSAES decryptions and the RSAPSS verification decode those standard encodings
+///   with the fake hash ([`fake_digest`]). The backend's own OAEP and RSAES encryptions copy the
+///   message, left-aligned and zero padded to the modulus size.
+/// * RSASSA signatures are [`fake_signature`]s of the modulus size; verification accepts exactly
+///   those.
 pub struct FakeRsaKey<const M: usize, const P: usize> {
     public: FakeRsaPublic<M>,
     pub p: [u8; P],
+}
+
+/// The fake hash ([`FakeHashCtx`]) of the concatenation of `parts` with `len` octets.
+pub fn fake_digest(len: usize, parts: &[&[u8]]) -> Vec<u8> {
+    let mut out = alloc::vec![0u8; len];
+    for (i, &b) in parts.iter().flat_map(|p| p.iter()).enumerate() {
+        out[i % len] ^= b;
+    }
+    out
+}
+
+/// `MGF1(seed, len)` with the fake hash of `h_len` octets.
+fn fake_mgf1(h_len: usize, seed: &[u8], len: usize) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut counter = 0u32;
+    while out.len() < len {
+        out.extend(fake_digest(h_len, &[seed, &counter.to_be_bytes()]));
+        counter += 1;
+    }
+    out.truncate(len);
+    out
+}
+
+/// EME-OAEP decoding (RFC 8017, 7.1.2 step 3) of `em` with the fake hash of `h_len` octets.
+fn fake_oaep_decode(h_len: usize, label: &[u8], em: &[u8]) -> Option<Vec<u8>> {
+    if em.len() < 2 * h_len + 2 {
+        return None;
+    }
+    let (masked_seed, masked_db) = em[1..].split_at(h_len);
+    let seed: Vec<u8> = masked_seed
+        .iter()
+        .zip(fake_mgf1(h_len, masked_db, h_len))
+        .map(|(a, b)| a ^ b)
+        .collect();
+    let db: Vec<u8> = masked_db
+        .iter()
+        .zip(fake_mgf1(h_len, &seed, masked_db.len()))
+        .map(|(a, b)| a ^ b)
+        .collect();
+    let rest = &db[h_len..];
+    let one = rest.iter().position(|&b| b != 0)?;
+    (em[0] == 0 && db[..h_len] == fake_digest(h_len, &[label])[..] && rest[one] == 1)
+        .then(|| rest[one + 1..].to_vec())
+}
+
+/// EMSA-PSS verification (RFC 8017, 9.1.2; any salt length) of `em` for `digest` with the fake
+/// hash of `h_len` octets.
+fn fake_pss_verify(h_len: usize, digest: &[u8], em: &[u8]) -> bool {
+    let m_len = em.len() - h_len - 1;
+    let (masked_db, rest) = em.split_at(m_len);
+    let (h, trailer) = rest.split_at(h_len);
+    let mut db: Vec<u8> = masked_db
+        .iter()
+        .zip(fake_mgf1(h_len, h, m_len))
+        .map(|(a, b)| a ^ b)
+        .collect();
+    db[0] &= 0x7f;
+    let Some(one) = db.iter().position(|&b| b != 0) else {
+        return false;
+    };
+    trailer == [0xbc]
+        && db[one] == 1
+        && fake_digest(h_len, &[&[0u8; 8], digest, &db[one + 1..]]) == h
 }
 
 fn fake_rsa_pad<const M: usize>(m: &[u8], out: &mut [u8; M]) -> Result<Option<()>, CryptoError> {
@@ -362,14 +434,15 @@ impl<const M: usize, const P: usize, R: Rng> RsaKey<M, P, R> for FakeRsaKey<M, P
     fn oaep_decrypt(
         &self,
         _rng: &mut R,
-        _hash: TpmiAlgHash,
-        _label: &[u8],
+        hash: TpmiAlgHash,
+        label: &[u8],
         c: &[u8; M],
         out: &mut [u8; M],
     ) -> Result<Option<usize>, CryptoError> {
-        let len = M.min(32);
-        out[..len].copy_from_slice(&c[..len]);
-        Ok(Some(len))
+        Ok(fake_oaep_decode(hash.digest_size(), label, c).map(|m| {
+            out[..m.len()].copy_from_slice(&m);
+            m.len()
+        }))
     }
     fn rsaes_encrypt(
         _public: &FakeRsaPublic<M>,
@@ -385,8 +458,16 @@ impl<const M: usize, const P: usize, R: Rng> RsaKey<M, P, R> for FakeRsaKey<M, P
         c: &[u8; M],
         out: &mut [u8; M],
     ) -> Result<Option<usize>, CryptoError> {
-        *out = *c;
-        Ok(Some(M))
+        // `00 02 PS 00 M` with at least 8 octets of padding.
+        let Some(zero) = c[2..].iter().position(|&b| b == 0).map(|i| i + 2) else {
+            return Ok(None);
+        };
+        if c[..2] != [0, 2] || zero < 10 {
+            return Ok(None);
+        }
+        let m = &c[zero + 1..];
+        out[..m.len()].copy_from_slice(m);
+        Ok(Some(m.len()))
     }
     fn rsassa_sign(
         &self,
@@ -415,11 +496,11 @@ impl<const M: usize, const P: usize, R: Rng> RsaKey<M, P, R> for FakeRsaKey<M, P
         <Self as RsaKey<M, P, R>>::rsassa_sign(self, rng, digest, out)
     }
     fn rsapss_verify(
-        public: &FakeRsaPublic<M>,
+        _public: &FakeRsaPublic<M>,
         digest: tpm2::TpmtHa<'_>,
         sig: &[u8; M],
     ) -> Result<bool, CryptoError> {
-        <Self as RsaKey<M, P, R>>::rsassa_verify(public, digest, sig)
+        Ok(fake_pss_verify(digest.digest().len(), digest.digest(), sig))
     }
 }
 
@@ -702,9 +783,8 @@ where
 
 /// A [`tpm2_engine::TpmEngine`] backed by the real test crypto backend and the
 /// fake storage/timer/RNG.
-pub type RealCryptoEngine<'a> = tpm2_engine::TpmEngine<
-    FakePlatform<'a, TestCryptoProvider, &'a mut FakeStorage, FakeTimer, FakeRng>,
->;
+pub type RealCryptoEngine<'a> =
+    tpm2_engine::TpmEngine<FakePlatform<'a, TestCryptoProvider, &'a mut FakeStorage, FakeTimer>>;
 
 /// Builds a [`RealCryptoEngine`] plus its [`tpm2_engine::State`] and runs
 /// `TPM2_Startup(TPM_SU_CLEAR)`, so white-box tests can drive real commands
@@ -713,9 +793,8 @@ pub fn setup_real_crypto_tpm<'a>(
     crypto: &'a mut TestCryptoProvider,
     storage: &'a mut FakeStorage,
     timer: &'a mut FakeTimer,
-    rng: &'a mut FakeRng,
 ) -> RealCryptoEngine<'a> {
-    let platform = FakePlatform::new(crypto, timer, rng);
+    let platform = FakePlatform::new(crypto, timer);
     let mut tpm = tpm2_engine::TpmEngine::new(platform, storage).unwrap();
     tpm.init_storage();
     tpm.state.nv_available = true;
@@ -832,7 +911,7 @@ pub fn context_integrity_hash_alg() -> tpm2::TpmiAlgHash {
 /// A [`FakePlatform`] over the fake components whose NV data structure is an owned
 /// [`FakeStorage`], for tests of a standalone [`TestState`].
 #[allow(dead_code)]
-pub type TestPlatform = FakePlatform<'static, FakeCrypto, FakeStorage, FakeTimer, FakeRng>;
+pub type TestPlatform = FakePlatform<'static, FakeCrypto, FakeStorage, FakeTimer>;
 
 /// A standalone TPM state ([`tpm2_engine::State`]) over [`TestPlatform`]; its
 /// [`Default`](tpm2_engine::State::default) has a fresh [`FakeStorage`].
@@ -845,20 +924,17 @@ pub type TestState = tpm2_engine::State<TestPlatform>;
 /// `I` is the [`tpm2_engine::Platform::IndexState`] of the TPM, which the engine owns
 /// ([`tpm2_engine::TpmEngine::new`]); typically an NV medium or a mutable reference to one.
 #[allow(dead_code)]
-pub struct FakePlatform<'a, C, I, T, R>
+pub struct FakePlatform<'a, C, I, T>
 where
     C: tpm2::crypto::Crypto,
     I: IndexState,
     T: TpmTimer,
-    R: Rng,
 {
     /// Cryptography backend ([`Crypto`]). The backend's interfaces are static (its
     /// algorithms are associated types); the reference only selects and borrows it.
     pub crypto: &'a mut C,
     /// Monotonic timer.
     pub timer: &'a mut T,
-    /// Platform random number generator ([`tpm2_engine::Platform::Rng`]).
-    pub rng: &'a mut R,
     /// Whether the platform provides the reference platform's dummy firmware secrets
     /// ([`tpm2_engine::Platform::firmware_secret`], [`tpm2_engine::Platform::firmware_svn_secret`]),
     /// enabling the firmware-limited and SVN-limited hierarchies; `false` by default
@@ -870,29 +946,39 @@ where
     /// Immutable platform information ([`tpm2_engine::Platform::info`]); [`tpm2_engine::PlatformInfo::DEFAULT`] by default
     /// ([`FakePlatform::new`]).
     pub info: tpm2_engine::PlatformInfo,
+    /// The TPM's random number generator that [`tpm2_engine::Platform::crypto_rng`] hands to the
+    /// next [`tpm2_engine::TpmEngine::new`] ([`FakePlatform::with_crypto_rng`]); `None` (the
+    /// default) is a new generator of the backend ([`tpm2::crypto::Random::from_entropy`]).
+    pub crypto_rng: Option<<C as tpm2::crypto::Random>::Rng>,
     /// The type of the TPM's NV data structure ([`tpm2_engine::Platform::IndexState`]).
     index: PhantomData<fn() -> I>,
 }
 
 #[allow(dead_code)]
-impl<'a, C, I, T, R> FakePlatform<'a, C, I, T, R>
+impl<'a, C, I, T> FakePlatform<'a, C, I, T>
 where
     C: tpm2::crypto::Crypto,
     I: IndexState,
     T: TpmTimer,
-    R: Rng,
 {
     /// Constructs a new `FakePlatform` from mutable references to hardware providers.
-    pub fn new(crypto: &'a mut C, timer: &'a mut T, rng: &'a mut R) -> Self {
+    pub fn new(crypto: &'a mut C, timer: &'a mut T) -> Self {
         Self {
             crypto,
             timer,
-            rng,
             limited_hierarchies: false,
             secure_channel: None,
             info: tpm2_engine::PlatformInfo::DEFAULT,
+            crypto_rng: None,
             index: PhantomData,
         }
+    }
+
+    /// Gives the TPM the random number generator `rng` (see
+    /// [`tpm2_engine::Platform::crypto_rng`]).
+    pub fn with_crypto_rng(mut self, rng: <C as tpm2::crypto::Random>::Rng) -> Self {
+        self.crypto_rng = Some(rng);
+        self
     }
 
     /// Gives the TPM the running firmware `firmware` with the reference platform's dummy
@@ -924,16 +1010,14 @@ where
     }
 }
 
-impl<C, I, T, R> tpm2_engine::Platform for FakePlatform<'_, C, I, T, R>
+impl<C, I, T> tpm2_engine::Platform for FakePlatform<'_, C, I, T>
 where
     C: tpm2::crypto::Crypto,
     I: IndexState,
     T: TpmTimer,
-    R: Rng + Sync,
 {
     type Crypto = C;
     type Timer = T;
-    type Rng = R;
     type IndexState = I;
 
     fn info(&self) -> &tpm2_engine::PlatformInfo {
@@ -944,8 +1028,13 @@ where
         self.timer
     }
 
-    fn rng(&mut self) -> &mut R {
-        self.rng
+    fn crypto_rng(
+        &mut self,
+    ) -> Result<<C as tpm2::crypto::Random>::Rng, tpm2::crypto::CryptoError> {
+        match self.crypto_rng.take() {
+            Some(rng) => Ok(rng),
+            None => <C as tpm2::crypto::Random>::from_entropy(),
+        }
     }
 
     fn firmware_secret(

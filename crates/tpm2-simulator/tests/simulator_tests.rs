@@ -1,15 +1,14 @@
 use std::io::Cursor;
 use tpm2_engine::storage::ram_storage_mock::RamStorageMock;
-use tpm2_platform_linux::{LinuxRng, LinuxTimer, PlatformCryptoProvider};
+use tpm2_platform_linux::{LinuxTimer, platform_crypto_provider};
 use tpm2_simulator::{PlatformConnection, Simulator, SimulatorPlatformSignal};
 
 #[test]
 fn test_invalid_platform_signal() {
-    let mut crypto = PlatformCryptoProvider;
+    let mut crypto = platform_crypto_provider();
     let mut storage = RamStorageMock::<{ tpm2_simulator::NV_STORAGE_SIZE }>::new();
     let mut timer = LinuxTimer::new();
-    let mut rng = LinuxRng::new();
-    let _sim = Simulator::new(&mut crypto, &mut storage, &mut timer, &mut rng).unwrap();
+    let _sim = Simulator::new(&mut crypto, &mut storage, &mut timer).unwrap();
 
     // 99 is not a platform signal code.
     assert!(SimulatorPlatformSignal::try_from(99).is_err());
@@ -17,11 +16,10 @@ fn test_invalid_platform_signal() {
 
 #[test]
 fn test_oversized_tpm_command() {
-    let mut crypto = PlatformCryptoProvider;
+    let mut crypto = platform_crypto_provider();
     let mut storage = RamStorageMock::<{ tpm2_simulator::NV_STORAGE_SIZE }>::new();
     let mut timer = LinuxTimer::new();
-    let mut rng = LinuxRng::new();
-    let mut sim = Simulator::new(&mut crypto, &mut storage, &mut timer, &mut rng).unwrap();
+    let mut sim = Simulator::new(&mut crypto, &mut storage, &mut timer).unwrap();
 
     // TPM_SEND_COMMAND = 8
     // Payload length = 8193 (oversized)
@@ -41,7 +39,7 @@ fn test_oversized_tpm_command() {
 
 /// Sends the MSSIM `ACT_GET_SIGNALED` platform signal for `act_handle` and returns the reply
 /// value.
-fn act_get_signaled(sim: &mut Simulator<'_>, act_handle: u32) -> u32 {
+fn act_get_signaled<C: tpm2::crypto::Crypto>(sim: &mut Simulator<'_, C>, act_handle: u32) -> u32 {
     let mut stream = Cursor::new(act_handle.to_be_bytes().to_vec());
     stream.set_position(0);
     let mut io = ReadThenWrite {
@@ -172,11 +170,13 @@ mod reference_simulator {
     fn virtual_clock_only_moves_when_advanced() {
         let mut sim = create_reference_simulator!(1, 1_000_000);
         let mut rsp = [0u8; 64];
-        let time = |sim: &mut tpm2_simulator::Simulator<'_>, rsp: &mut [u8]| {
-            let r = sim.transact(&READ_CLOCK, rsp).unwrap();
-            assert_eq!(&r[6..10], &[0, 0, 0, 0]);
-            u64::from_be_bytes(r[10..18].try_into().unwrap())
-        };
+        let time =
+            |sim: &mut tpm2_simulator::Simulator<'_, tpm2_simulator::ReferenceCryptoProvider>,
+             rsp: &mut [u8]| {
+                let r = sim.transact(&READ_CLOCK, rsp).unwrap();
+                assert_eq!(&r[6..10], &[0, 0, 0, 0]);
+                u64::from_be_bytes(r[10..18].try_into().unwrap())
+            };
         let t0 = time(&mut sim, &mut rsp);
         std::thread::sleep(std::time::Duration::from_millis(5));
         assert_eq!(time(&mut sim, &mut rsp), t0);
@@ -197,7 +197,11 @@ mod reference_simulator {
     #[test]
     fn reset_reference_repeats_a_new_simulator() {
         let mut rsp = [0u8; 64];
-        let mut run = |sim: &mut tpm2_simulator::Simulator<'_>| -> Vec<Vec<u8>> {
+        let mut run = |sim: &mut tpm2_simulator::Simulator<
+            '_,
+            tpm2_simulator::ReferenceCryptoProvider,
+        >|
+         -> Vec<Vec<u8>> {
             [
                 &GET_RANDOM_16[..],
                 &READ_CLOCK,
@@ -251,11 +255,10 @@ mod reference_simulator {
 /// `Simulator::is_power_on` follows the MSSIM `PowerOn`/`PowerOff` signals.
 #[test]
 fn is_power_on_follows_the_power_signals() {
-    let mut crypto = PlatformCryptoProvider;
+    let mut crypto = platform_crypto_provider();
     let mut storage = RamStorageMock::<{ tpm2_simulator::NV_STORAGE_SIZE }>::new();
     let mut timer = LinuxTimer::new();
-    let mut rng = LinuxRng::new();
-    let mut sim = Simulator::new(&mut crypto, &mut storage, &mut timer, &mut rng).unwrap();
+    let mut sim = Simulator::new(&mut crypto, &mut storage, &mut timer).unwrap();
     assert!(!sim.is_power_on());
     sim.signal_platform(SimulatorPlatformSignal::PowerOn, tpm2_simulator::NO_STREAM)
         .unwrap();

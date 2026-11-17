@@ -59,7 +59,7 @@ pub type BsslAes256 = BsslAes<32>;
 /// AES-128/192/256 with BoringSSL. BoringSSL is built without Camellia (`OPENSSL_NO_CAMELLIA`),
 /// so Camellia-128/192/256 fall back to the RustCrypto `camellia` crate (the cipher states of
 /// `tpm2-crypto-rust`). SM4 is not supported (`!`).
-impl Symmetric for BsslCryptoProvider {
+impl<R> Symmetric for BsslCryptoProvider<R> {
     type Aes128 = BsslAes128;
     type Aes192 = BsslAes192;
     type Aes256 = BsslAes256;

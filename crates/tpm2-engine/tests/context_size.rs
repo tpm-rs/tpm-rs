@@ -9,8 +9,7 @@
 mod common;
 
 use common::{
-    FakeRng, FakeStorage, FakeTimer, RealCryptoEngine, TestCryptoProvider, execute_command,
-    password_auth, setup_real_crypto_tpm,
+    FakeStorage, FakeTimer, RealCryptoEngine, execute_command, password_auth, setup_real_crypto_tpm,
 };
 use tpm2::commands::CreatePrimary;
 use tpm2::{
@@ -20,11 +19,10 @@ use tpm2::{
 
 macro_rules! setup {
     ($tpm:ident) => {
-        let mut crypto = TestCryptoProvider;
+        let mut crypto = common::test_crypto();
         let mut storage = FakeStorage::default();
         let mut timer = FakeTimer;
-        let mut rng = FakeRng::new();
-        let mut $tpm = setup_real_crypto_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
+        let mut $tpm = setup_real_crypto_tpm(&mut crypto, &mut storage, &mut timer);
     };
 }
 

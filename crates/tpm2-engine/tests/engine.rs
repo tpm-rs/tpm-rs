@@ -3,22 +3,17 @@ use tpm2::errors::TpmRc;
 mod common;
 
 use common::FakePlatform;
-use common::{FakeCrypto, FakeRng, FakeStorage, FakeTimer};
+use common::{FakeCrypto, FakeStorage, FakeTimer};
 use hex_literal::hex;
 use tpm2_engine::TpmEngine;
 use tpm2_engine::handler::TransientObject;
 
 #[test]
-#[cfg_attr(
-    feature = "reference-rng",
-    ignore = "checks the default random sources; `reference-rng` draws from the reference DRBG"
-)]
 fn get_random_in_place() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let mut rng = FakeRng::new();
-    let platform = FakePlatform::new(&mut crypto, &mut timer, &mut rng);
+    let platform = FakePlatform::new(&mut crypto, &mut timer);
 
     let mut tpm = TpmEngine::new(platform, &mut storage).unwrap();
     tpm.init_storage();
@@ -38,12 +33,12 @@ fn get_random_in_place() {
         "0000017B" // command code
         "000c" // requested random bytes
     );
-    // Random bytes after 384 FakeRng draws at manufacture (EPS, SPS, PPS, phProof, shProof,
-    // ehProof; 64 bytes each) and 192 + the commit nonce at Startup (null_proof, null_seed,
-    // drbg_state instantiation, plus the commit nonce of the largest digest size drawn at TPM
-    // Reset, as in C TPM_Reset -> CryptStartup/commitNonce: 64 bytes with SHA-512, 48 without);
-    // FakeRng's u8 counter is then at 0x81 (0x71 without SHA-512).
-    let drawn = 384 + 192 + tpm2::TpmiAlgHash::MAX_DIGEST_BYTES;
+    // Random bytes of the TPM's DRBG (FakeCrypto's FakeRng) after the draws at manufacture (the
+    // commit nonce of `CryptStartup()`, the largest digest size: 64 bytes with SHA-512, 48
+    // without; then EPS, SPS, PPS, phProof, shProof, ehProof, 64 bytes each) and at the TPM
+    // Reset of Startup (the commit nonce, nullProof and nullSeed, as in the reference's
+    // `CryptStartup()` and `HierarchyStartup()`).
+    let drawn = 2 * tpm2::TpmiAlgHash::MAX_DIGEST_BYTES + 384 + 128;
     let mut expected_response = hex!(
         "8001" // session
         "00000018" // size
@@ -103,89 +98,154 @@ fn test_find_empty_transient_slot_primary_vs_child_and_fallback_reuse() {
     assert_eq!(child_err, Err(TpmRc::OBJECT_MEMORY));
 }
 
+std::thread_local! {
+    /// The calls of the [`StatefulRng`] lifecycle hooks of this thread, in order.
+    static STATEFUL_RNG_CALLS: std::cell::RefCell<Vec<&'static str>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// A TPM random number generator with persistent state ([`tpm2::crypto::Rng::STATE_SIZE`] =
+/// [`tpm2_engine::DRBG_STATE_SIZE`]): its output is a byte counter, its state the counter and
+/// whether it is instantiated (as `DrbgState::reseed_counter` and `DrbgState::magic`). A startup
+/// instantiates it (counter 1) or reseeds it (counter + 100).
+#[derive(Default)]
+struct StatefulRng {
+    counter: u64,
+    instantiated: bool,
+}
+
+impl tpm2::crypto::Rng for StatefulRng {
+    fn fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), tpm2::crypto::CryptoError> {
+        for b in dest {
+            *b = self.counter as u8;
+            self.counter += 1;
+        }
+        Ok(())
+    }
+
+    fn stir_bytes(&mut self, _data: &[u8]) -> Result<(), tpm2::crypto::CryptoError> {
+        Ok(())
+    }
+
+    fn startup(&mut self) -> Result<(), tpm2::crypto::CryptoError> {
+        STATEFUL_RNG_CALLS.with_borrow_mut(|calls| calls.push("startup"));
+        if self.instantiated {
+            self.counter += 100;
+        } else {
+            (self.counter, self.instantiated) = (1, true);
+        }
+        Ok(())
+    }
+
+    const STATE_SIZE: usize = tpm2_engine::DRBG_STATE_SIZE;
+
+    fn save_state(&self, out: &mut [u8]) -> Result<(), tpm2::crypto::CryptoError> {
+        STATEFUL_RNG_CALLS.with_borrow_mut(|calls| calls.push("save_state"));
+        let state = tpm2_engine::DrbgState {
+            reseed_counter: self.counter,
+            magic: if self.instantiated {
+                tpm2_engine::DRBG_MAGIC
+            } else {
+                0
+            },
+            ..Default::default()
+        };
+        out.copy_from_slice(&state.to_bytes());
+        Ok(())
+    }
+
+    fn load_state(&mut self, state: &[u8]) -> Result<(), tpm2::crypto::CryptoError> {
+        STATEFUL_RNG_CALLS.with_borrow_mut(|calls| calls.push("load_state"));
+        let state = tpm2_engine::DrbgState::from_bytes(state.try_into().unwrap());
+        self.counter = state.reseed_counter;
+        self.instantiated = state.magic == tpm2_engine::DRBG_MAGIC;
+        Ok(())
+    }
+}
+
+/// The fake crypto backend with a [`StatefulRng`].
+struct StatefulRngCrypto;
+
+impl_fake_crypto!(common, StatefulRngCrypto, StatefulRng);
+
+/// The state of the TPM's DRBG is kept in NV like the reference's `go.drbgState`: written at
+/// manufacture and `TPM2_Shutdown` (not at `TPM2_Startup`), reloaded at `_TPM_Init` (so values
+/// drawn since the last write are drawn again after a power cycle), and reseeded or instantiated
+/// by `TPM2_Startup`.
 #[test]
-#[cfg_attr(
-    feature = "reference-rng",
-    ignore = "checks the default random sources; `reference-rng` draws from the reference DRBG"
-)]
 fn test_drbg_state_persistence_and_reseed_across_shutdown_startup() {
+    use tpm2::crypto::Rng;
     use tpm2::platform::storage::NvStorage;
 
-    let mut crypto = FakeCrypto;
+    let mut crypto = StatefulRngCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let mut rng = FakeRng::new();
-    let platform = FakePlatform::new(&mut crypto, &mut timer, &mut rng);
+    let platform = FakePlatform::new(&mut crypto, &mut timer);
 
     let mut tpm = TpmEngine::new(platform, &mut storage).unwrap();
+    STATEFUL_RNG_CALLS.with_borrow_mut(Vec::clear);
     tpm.init_storage();
     tpm.state.g_nv_ok = true;
-
-    // 1. Initial Startup (SU_CLEAR) instantiates a fresh DRBG state with magic = DRBG_MAGIC
-    let startup_clear = hex!(
-        "8001" // tag
-        "0000000c" // size
-        "00000144" // TPM2_Startup
-        "0000" // TPM_SU_CLEAR
+    // Manufacture instantiates the DRBG (from an all-zero state), draws the commit nonce and the
+    // hierarchy secrets, and writes the state to NV.
+    assert_eq!(
+        STATEFUL_RNG_CALLS.with_borrow_mut(std::mem::take),
+        ["load_state", "startup", "save_state"]
     );
+    let manufactured = 1 + tpm2::TpmiAlgHash::MAX_DIGEST_BYTES as u64 + 384;
+    type Engine<'a> =
+        TpmEngine<FakePlatform<'a, StatefulRngCrypto, &'a mut FakeStorage, FakeTimer>>;
+    let nv_state = |tpm: &Engine<'_>| {
+        let mut buf = [0u8; tpm2_engine::DRBG_STATE_SIZE];
+        tpm.state.nv.index.read_nv(36, &mut buf).unwrap();
+        tpm2_engine::DrbgState::from_bytes(&buf)
+    };
+    assert_eq!(nv_state(&tpm).reseed_counter, manufactured);
+    assert_eq!(nv_state(&tpm).magic, tpm2_engine::DRBG_MAGIC);
+    assert_eq!(tpm.state.nv.orderly.drbg_state, nv_state(&tpm));
+
+    // `_TPM_Init` reloads the state; TPM2_Startup reseeds it without writing it to NV.
+    tpm.reset();
+    let startup_clear = hex!("80010000000c000001440000");
     let mut resp = [0u8; 256];
     tpm.execute_command_separate(&startup_clear[..], &mut resp[..]);
-
-    assert_eq!(
-        tpm.state.nv.orderly.drbg_state.magic,
-        tpm2_engine::DRBG_MAGIC
-    );
-    assert_eq!(tpm.state.nv.orderly.drbg_state.reseed_counter, 1);
-    let seed_after_boot = tpm.state.nv.orderly.drbg_state.seed;
-
-    // 2. Orderly Shutdown (SU_STATE) persists the DRBG state to NV storage (offset 36..112)
-    let shutdown_state = hex!(
-        "8001" // tag
-        "0000000c" // size
-        "00000145" // TPM2_Shutdown
-        "0001" // TPM_SU_STATE
-    );
-    tpm.execute_command_separate(&shutdown_state[..], &mut resp[..]);
-
-    let mut nv_drbg_buf = [0u8; 76];
-    tpm.state.nv.index.read_nv(36, &mut nv_drbg_buf).unwrap();
-    let persisted_drbg = tpm2_engine::DrbgState::from_bytes(&nv_drbg_buf);
-    assert_eq!(persisted_drbg.magic, tpm2_engine::DRBG_MAGIC);
-    assert_eq!(persisted_drbg.seed, seed_after_boot);
-
-    // 3. Orderly Startup (SU_STATE) restores the DRBG state from NV and reseeds it (XORing fresh entropy)
-    // Simulate _TPM_Init before issuing TPM2_Startup
-    tpm.state.initialized = false;
-    let startup_state = hex!(
-        "8001" // tag
-        "0000000c" // size
-        "00000144" // TPM2_Startup
-        "0001" // TPM_SU_STATE
-    );
-    tpm.execute_command_separate(&startup_state[..], &mut resp[..]);
     assert_eq!(&resp[6..10], &[0, 0, 0, 0]);
-
     assert_eq!(
-        tpm.state.nv.orderly.drbg_state.magic,
-        tpm2_engine::DRBG_MAGIC
+        STATEFUL_RNG_CALLS.with_borrow_mut(std::mem::take),
+        ["load_state", "startup"]
     );
-    assert_eq!(tpm.state.nv.orderly.drbg_state.reseed_counter, 1);
-    assert_ne!(
-        tpm.state.nv.orderly.drbg_state.seed, seed_after_boot,
-        "Orderly startup must reseed the saved DRBG seed with fresh entropy"
-    );
+    assert_eq!(nv_state(&tpm).reseed_counter, manufactured);
+
+    // An orderly shutdown writes the state to NV.
+    let shutdown_state = hex!("80010000000c000001450001");
+    tpm.execute_command_separate(&shutdown_state[..], &mut resp[..]);
+    assert_eq!(&resp[6..10], &[0, 0, 0, 0]);
+    let mut saved = [0u8; tpm2_engine::DRBG_STATE_SIZE];
+    tpm.crypto_rng.save_state(&mut saved).unwrap();
+    assert_eq!(nv_state(&tpm), tpm2_engine::DrbgState::from_bytes(&saved));
+
+    // Values drawn after the write are drawn again after a power cycle.
+    let get_random = hex!("80010000000c0000017b0008");
+    tpm.execute_command_separate(&get_random[..], &mut resp[..]);
+    let first = resp[12..20].to_vec();
+    tpm.reset();
+    let mut reloaded = [0u8; tpm2_engine::DRBG_STATE_SIZE];
+    tpm.crypto_rng.save_state(&mut reloaded).unwrap();
+    assert_eq!(reloaded, saved);
+    let mut again = [0u8; 8];
+    tpm.crypto_rng.fill_bytes(&mut again).unwrap();
+    assert_eq!(&again[..], &first[..]);
 }
 
 #[test]
-fn test_platform_construction_with_generic_rng() {
+fn test_platform_construction_before_manufacture() {
     use tpm2_engine::storage::ram_storage_mock::RamStorageMock;
     use tpm2_engine::timer::SoftwareTimer;
 
     let mut crypto = FakeCrypto;
     let mut storage = RamStorageMock::<128>::new();
     let mut timer = SoftwareTimer { tick: 0 };
-    let mut rng = FakeRng::new();
-    let platform = FakePlatform::new(&mut crypto, &mut timer, &mut rng);
+    let platform = FakePlatform::new(&mut crypto, &mut timer);
     let tpm = TpmEngine::new(platform, &mut storage).unwrap();
 
     // Before manufacture there are no Primary Seeds.
@@ -195,22 +255,22 @@ fn test_platform_construction_with_generic_rng() {
 }
 
 /// Manufacture (`init_storage`) draws the three Primary Seeds and the three hierarchy proofs as
-/// independent 64-byte values from the platform RNG, in the reference order (EPS, SPS, PPS,
+/// independent 64-byte values from the TPM's DRBG, in the reference order (EPS, SPS, PPS,
 /// phProof, shProof, ehProof), and they survive `_TPM_Init` (`reset`) through NV.
 #[test]
-#[cfg_attr(
-    feature = "reference-rng",
-    ignore = "checks the default random sources; `reference-rng` draws from the reference DRBG"
-)]
 fn manufacture_draws_independent_seeds_and_proofs() {
-    let mut crypto = common::TestCryptoProvider;
+    let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let mut rng = common::FakeRng::new();
-    let mut tpm = common::setup_real_crypto_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
+    let platform = FakePlatform::new(&mut crypto, &mut timer);
+    let mut tpm = TpmEngine::new(platform, &mut storage).unwrap();
+    tpm.init_storage();
 
-    // FakeRng yields 1, 2, 3, ... (mod 256): each value is the next 64 bytes of the stream.
-    let expected = |k: usize| -> [u8; 64] { core::array::from_fn(|i| (1 + 64 * k + i) as u8) };
+    // The TPM's DRBG (FakeCrypto's FakeRng) yields 1, 2, 3, ... (mod 256): after the commit
+    // nonce (the largest digest size), each value is the next 64 bytes of the stream.
+    let nonce = tpm2::TpmiAlgHash::MAX_DIGEST_BYTES;
+    let expected =
+        |k: usize| -> [u8; 64] { core::array::from_fn(|i| (1 + nonce + 64 * k + i) as u8) };
     assert_eq!(tpm.state.nv.persistent.ep_seed, expected(0));
     assert_eq!(tpm.state.nv.persistent.sp_seed, expected(1));
     assert_eq!(tpm.state.nv.persistent.pp_seed, expected(2));

@@ -1,9 +1,14 @@
 //! Linux Platform Implementation for TPM2
 //!
 //! Provides Linux-specific implementations of hardware abstraction layer components
-//! like `TpmTimer` using `std::time::Instant` and `Rng` using `/dev/urandom`.
+//! like `TpmTimer` using `std::time::Instant` and `Rng` using `/dev/urandom`, and, with the
+//! `reference-rng` feature, the C reference TPMs' entropy source, clock and random-number
+//! generation for differential testing (`ReferenceRng`, `ReferenceCryptoProvider`).
 
-#![forbid(unsafe_code)]
+// The opt-in `reference-rng` feature links the C reference TPM's random-number generation; its
+// FFI boundary (`reference_rng::ffi`) is the only module allowed to use `unsafe`.
+#![cfg_attr(not(feature = "reference-rng"), forbid(unsafe_code))]
+#![cfg_attr(feature = "reference-rng", deny(unsafe_code))]
 
 #[cfg(not(any(feature = "rust", feature = "crux", feature = "bssl")))]
 compile_error!(
@@ -51,19 +56,45 @@ pub use tpm2_crypto_rust::RustCryptoProvider as PlatformCryptoProvider;
 #[cfg(feature = "crux")]
 pub use tpm2_crypto_crux::CruxCryptoProvider as PlatformCryptoProvider;
 
+/// The crypto backend of the platform: BoringSSL on its own RNG
+/// ([`tpm2_crypto_bssl::BsslRng`]). (A type alias, so that the default RNG type applies in
+/// expression paths such as `PlatformCryptoProvider::rand_bytes(..)`.)
 #[cfg(feature = "bssl")]
-pub use tpm2_crypto_bssl::BsslCryptoProvider as PlatformCryptoProvider;
+pub type PlatformCryptoProvider = tpm2_crypto_bssl::BsslCryptoProvider;
+
+/// A [`PlatformCryptoProvider`] value.
+pub const fn platform_crypto_provider() -> PlatformCryptoProvider {
+    #[cfg(feature = "bssl")]
+    {
+        PlatformCryptoProvider::new()
+    }
+    #[cfg(not(feature = "bssl"))]
+    {
+        PlatformCryptoProvider {}
+    }
+}
 
 #[cfg(feature = "reference-rng")]
 mod reference;
 #[cfg(feature = "reference-rng")]
 pub use reference::{GlibcRand, ReferenceEntropy, VirtualClock};
+#[cfg(feature = "reference-rng")]
+mod reference_rng;
+#[cfg(feature = "reference-rng")]
+pub use reference_rng::ReferenceRng;
+
+/// The crypto backend of a TPM that reproduces the C reference TPMs' random-number generation
+/// (the `reference-rng` feature): BoringSSL drawing from [`ReferenceRng`], the reference's C
+/// DRBG, whose bytes `tpm2-engine` and the `tpm2::crypto` dispatch functions consume with the
+/// reference's randomized algorithms.
+#[cfg(feature = "reference-rng")]
+pub type ReferenceCryptoProvider = tpm2_crypto_bssl::BsslCryptoProvider<ReferenceRng>;
 
 /// Linux-specific monotonic timer based on `std::time::Instant`.
 ///
-/// With the `reference-rng` feature, [`LinuxTimer::new_virtual`] additionally
-/// provides a timer driven by a [`VirtualClock`], which only moves when
-/// [`LinuxTimer::advance`] is called, so that time passes exactly as for a C
+/// With the `reference-rng` feature, `LinuxTimer::new_virtual` additionally
+/// provides a timer driven by a `VirtualClock`, which only moves when
+/// `LinuxTimer::advance` is called, so that time passes exactly as for a C
 /// reference TPM driven by the same virtual clock.
 pub struct LinuxTimer {
     start: LazyLock<Instant>,
@@ -128,35 +159,12 @@ static URANDOM_FILE: OnceLock<Mutex<File>> = OnceLock::new();
 /// ([`Random::rand_bytes`], the `getrandom` syscall), falling back to
 /// `/dev/urandom`. [`Rng::stir_bytes`] is a no-op,
 /// because the OS entropy source cannot be stirred.
-///
-/// With the `reference-rng` feature, [`LinuxRng::reference`] additionally
-/// provides the entropy source of the C reference TPMs' simulator platform
-/// (`_plat__GetEntropy()`, see [`ReferenceEntropy`]), so that a TPM using it
-/// draws exactly the platform entropy a C reference TPM process with the same
-/// process ID and clock draws.
-pub struct LinuxRng {
-    /// The reference entropy source, or `None` for OS entropy.
-    #[cfg(feature = "reference-rng")]
-    reference: Option<ReferenceEntropy>,
-}
+pub struct LinuxRng {}
 
 impl LinuxRng {
     /// Creates a new `LinuxRng`.
     pub const fn new() -> Self {
-        Self {
-            #[cfg(feature = "reference-rng")]
-            reference: None,
-        }
-    }
-
-    /// Creates a `LinuxRng` that reproduces the platform entropy of a C
-    /// reference TPM process (see [`ReferenceEntropy::new`]). **Not for
-    /// production use.**
-    #[cfg(feature = "reference-rng")]
-    pub fn reference(entropy: ReferenceEntropy) -> Self {
-        Self {
-            reference: Some(entropy),
-        }
+        Self {}
     }
 
     /// Pre-opens `/dev/urandom` for fallback use in sandboxed environments where opening new files at runtime is forbidden.
@@ -171,22 +179,15 @@ impl LinuxRng {
 }
 
 impl Rng for LinuxRng {
-    /// Fills `dest` with random bytes from the OS entropy source (or from the
-    /// reference entropy source of a [`LinuxRng::reference`] generator).
+    /// Fills `dest` with random bytes from the OS entropy source.
     ///
     /// # Errors
     /// * [`CryptoError::Internal`] - Neither the `getrandom` syscall nor
-    ///   `/dev/urandom` produced `dest.len()` bytes, or the reference entropy
-    ///   source failed its continuous test.
+    ///   `/dev/urandom` produced `dest.len()` bytes.
     fn fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), CryptoError> {
-        #[cfg(feature = "reference-rng")]
-        if let Some(entropy) = &mut self.reference {
-            return entropy.fill(dest);
-        }
-
         // 1. Try PlatformCryptoProvider (getrandom syscall) in a loop to handle EINTR.
         for _ in 0..10_000 {
-            if PlatformCryptoProvider::rand_bytes(dest).is_ok() {
+            if <PlatformCryptoProvider as Random>::rand_bytes(dest).is_ok() {
                 return Ok(());
             }
         }
@@ -258,16 +259,6 @@ impl Rng for LinuxRng {
     fn stir_bytes(&mut self, _data: &[u8]) -> Result<(), CryptoError> {
         Ok(())
     }
-
-    /// (Re)seeds the reference entropy source (`_plat__GetEntropy(NULL, 0)`);
-    /// nothing for OS entropy.
-    fn init(&mut self) -> Result<(), CryptoError> {
-        #[cfg(feature = "reference-rng")]
-        if let Some(entropy) = &mut self.reference {
-            entropy.init();
-        }
-        Ok(())
-    }
 }
 
 /// The firmware of a new Linux platform: that of the TCG reference platform (hash
@@ -287,10 +278,9 @@ pub const DEFAULT_INFO: PlatformInfo = PlatformInfo {
     ..PlatformInfo::DEFAULT
 };
 
-/// The Linux [`Platform`]: the TPM's crypto backend `C`, the Linux timer and platform RNG
-/// ([`LinuxTimer`], [`LinuxRng`]), an optional secure transport layer and the platform
-/// [`PlatformInfo`], including the firmware identity ([`PlatformInfo::firmware`]). It borrows
-/// its components.
+/// The Linux [`Platform`]: the TPM's crypto backend `C`, the Linux timer ([`LinuxTimer`]), an
+/// optional secure transport layer and the platform [`PlatformInfo`], including the firmware
+/// identity ([`PlatformInfo::firmware`]). It borrows its components.
 ///
 /// Its Firmware Secret and Firmware SVN Secrets are the *insecure* dummies of the TCG reference
 /// platform ([`reference_firmware_secret`], [`reference_firmware_svn_secret`]), derived from
@@ -307,8 +297,6 @@ pub struct LinuxPlatform<'a, C: Crypto, I: IndexState> {
     pub crypto: &'a mut C,
     /// The monotonic timer.
     pub timer: &'a mut LinuxTimer,
-    /// The platform random number generator.
-    pub rng: &'a mut LinuxRng,
     /// The secure transport layer ([`Platform::secure_channel`]); `None` by default.
     pub secure_channel: Option<&'a (dyn SecureChannel + Sync)>,
     /// The platform information ([`Platform::info`]); [`DEFAULT_INFO`] by
@@ -318,27 +306,26 @@ pub struct LinuxPlatform<'a, C: Crypto, I: IndexState> {
     /// RAM only, kept across `_TPM_Init`.
     #[cfg(feature = "ntc2-vendor-commands")]
     pub ntc2: ntc2::Ntc2State,
+    /// The TPM's random number generator that the next [`Platform::crypto_rng`] returns
+    /// ([`LinuxPlatform::set_crypto_rng`]); `None` (by default) for a new one of the backend
+    /// ([`Random::from_entropy`]).
+    crypto_rng: Option<<C as Random>::Rng>,
     /// The type of the TPM's NV data structure.
     index: PhantomData<fn() -> I>,
 }
 
 impl<'a, C: Crypto, I: IndexState> LinuxPlatform<'a, C, I> {
-    /// A Linux platform with the crypto backend `crypto`, the timer `timer` and the platform
-    /// RNG `platform_rng`, without a secure transport layer and with
-    /// [`DEFAULT_INFO`].
-    pub fn new(
-        crypto: &'a mut C,
-        timer: &'a mut LinuxTimer,
-        platform_rng: &'a mut LinuxRng,
-    ) -> Self {
+    /// A Linux platform with the crypto backend `crypto` and the timer `timer`, without a
+    /// secure transport layer and with [`DEFAULT_INFO`].
+    pub fn new(crypto: &'a mut C, timer: &'a mut LinuxTimer) -> Self {
         Self {
             crypto,
             timer,
-            rng: platform_rng,
             secure_channel: None,
             info: DEFAULT_INFO,
             #[cfg(feature = "ntc2-vendor-commands")]
             ntc2: ntc2::Ntc2State::default(),
+            crypto_rng: None,
             index: PhantomData,
         }
     }
@@ -377,12 +364,26 @@ impl<'a, C: Crypto, I: IndexState> LinuxPlatform<'a, C, I> {
         self.info = info;
         self
     }
+
+    /// Gives the TPM the random number generator `rng` (see [`LinuxPlatform::set_crypto_rng`]).
+    pub fn with_crypto_rng(mut self, rng: <C as Random>::Rng) -> Self {
+        self.set_crypto_rng(rng);
+        self
+    }
+
+    /// Makes `rng` the random number generator that the next [`Platform::crypto_rng`] returns
+    /// (the TPM's DRBG, which [`tpm2_engine::TpmEngine::new`] asks for; e.g. a `ReferenceRng`
+    /// of `ReferenceCryptoProvider`, the `reference-rng` feature, that reproduces a C reference
+    /// TPM process). Later calls of [`Platform::crypto_rng`] return new generators of the
+    /// backend ([`Random::from_entropy`]) again.
+    pub fn set_crypto_rng(&mut self, rng: <C as Random>::Rng) {
+        self.crypto_rng = Some(rng);
+    }
 }
 
 impl<C: Crypto, I: IndexState> Platform for LinuxPlatform<'_, C, I> {
     type Crypto = C;
     type Timer = LinuxTimer;
-    type Rng = LinuxRng;
     type IndexState = I;
 
     fn info(&self) -> &PlatformInfo {
@@ -393,8 +394,13 @@ impl<C: Crypto, I: IndexState> Platform for LinuxPlatform<'_, C, I> {
         self.timer
     }
 
-    fn rng(&mut self) -> &mut LinuxRng {
-        self.rng
+    /// The generator given to [`LinuxPlatform::set_crypto_rng`] (once), or a new one of the
+    /// backend ([`Random::from_entropy`]).
+    fn crypto_rng(&mut self) -> Result<<C as Random>::Rng, CryptoError> {
+        match self.crypto_rng.take() {
+            Some(rng) => Ok(rng),
+            None => C::from_entropy(),
+        }
     }
 
     fn firmware_secret(&self, out: &mut [u8]) -> Result<usize, FirmwareSecretUnavailable> {
@@ -443,13 +449,12 @@ impl<C: Crypto, I: IndexState> Platform for LinuxPlatform<'_, C, I> {
 pub fn create_linux_platform<'a, C, I>(
     crypto: &'a mut C,
     timer: &'a mut LinuxTimer,
-    platform_rng: &'a mut LinuxRng,
 ) -> LinuxPlatform<'a, C, I>
 where
     C: Crypto,
     I: IndexState,
 {
-    LinuxPlatform::new(crypto, timer, platform_rng)
+    LinuxPlatform::new(crypto, timer)
 }
 
 impl Default for LinuxTimer {

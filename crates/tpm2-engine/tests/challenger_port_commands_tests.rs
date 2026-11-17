@@ -7,7 +7,7 @@ extern crate alloc;
 mod common;
 
 use common::FakePlatform;
-use common::{FakeRng, FakeStorage, FakeTimer};
+use common::{FakeStorage, FakeTimer};
 use tpm2::commands::{Command, Message, UnmarshalMessage};
 use tpm2::{
     AlgSym, PublicParmsAndId, Tpm2bAuth, Tpm2bData, Tpm2bDigest, Tpm2bName, Tpm2bPrivate,
@@ -29,9 +29,8 @@ fn setup_tpm<'a>(
     crypto: &'a mut StressTestCrypto,
     storage: &'a mut FakeStorage,
     timer: &'a mut FakeTimer,
-    rng: &'a mut FakeRng,
-) -> TpmEngine<FakePlatform<'a, StressTestCrypto, &'a mut FakeStorage, FakeTimer, FakeRng>> {
-    let platform = FakePlatform::new(crypto, timer, rng);
+) -> TpmEngine<FakePlatform<'a, StressTestCrypto, &'a mut FakeStorage, FakeTimer>> {
+    let platform = FakePlatform::new(crypto, timer);
     let mut tpm = TpmEngine::new(platform, storage).unwrap();
     tpm.init_storage();
     tpm.state.nv_available = true;
@@ -46,9 +45,7 @@ fn setup_tpm<'a>(
 }
 
 fn execute_tpm_command_with_auths<C: Command>(
-    tpm: &mut TpmEngine<
-        FakePlatform<'_, StressTestCrypto, &'_ mut FakeStorage, FakeTimer, FakeRng>,
-    >,
+    tpm: &mut TpmEngine<FakePlatform<'_, StressTestCrypto, &'_ mut FakeStorage, FakeTimer>>,
     cmd: &C,
     auths: &[TpmsAuthCommand],
 ) -> Result<C::Response<'static>, u32>
@@ -61,9 +58,7 @@ where
 /// Like [`execute_tpm_command_with_auths`], but `patch` may modify the marshaled parameter area
 /// before the command is sent (e.g. to send a value the `tpm2` types cannot represent).
 fn execute_tpm_command_with_patched_parameters<C: Command>(
-    tpm: &mut TpmEngine<
-        FakePlatform<'_, StressTestCrypto, &'_ mut FakeStorage, FakeTimer, FakeRng>,
-    >,
+    tpm: &mut TpmEngine<FakePlatform<'_, StressTestCrypto, &'_ mut FakeStorage, FakeTimer>>,
     cmd: &C,
     auths: &[TpmsAuthCommand],
     patch: impl FnOnce(&mut [u8]),
@@ -175,16 +170,11 @@ fn dup_policy_auth<P: tpm2_engine::Platform>(
 }
 
 #[test]
-#[cfg_attr(
-    feature = "reference-rng",
-    ignore = "checks the default random sources; `reference-rng` draws from the reference DRBG"
-)]
 fn test_duplicate_import_load_roundtrip() {
     let mut crypto = StressTestCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let mut rng = FakeRng::new();
-    let mut tpm = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
+    let mut tpm = setup_tpm(&mut crypto, &mut storage, &mut timer);
 
     // 1. Setup target object (the key to duplicate)
     let target_handle = 0x80000001;

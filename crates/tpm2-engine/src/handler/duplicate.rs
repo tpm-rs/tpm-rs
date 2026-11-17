@@ -1,11 +1,9 @@
-use super::encrypt_decrypt::crypto_len;
 use crate::Platform;
 use crate::handle_checks::{Tpmi, check};
 use crate::handler::CommandHandler;
 use crate::owned::OwnedPublicParmsAndId;
 use crate::req_resp::RequestThenResponse;
 use crate::self_test::kdfa_bits;
-use tpm2::Alg;
 use tpm2::Handle;
 use tpm2::Marshal;
 #[allow(unused_imports)]
@@ -127,12 +125,6 @@ impl<'b, P: Platform> CommandHandler<'b, P> {
         }
 
         // 3. Resolve the new parent key public key modulus/parameters
-        let mut parent_pub_modulus = [0u8; 512];
-        let mut parent_pub_modulus_len = 0;
-        let mut parent_rsa_parms = None;
-        let mut parent_ecc_curve = None;
-        let mut parent_ecc_pub_point = [0u8; 256];
-        let mut parent_ecc_px_len = 0;
         let mut parent_name_alg = TpmiAlgHash::Sha256;
 
         let mut parent_obj = None;
@@ -156,17 +148,12 @@ impl<'b, P: Platform> CommandHandler<'b, P> {
 
             // Parent must be an asymmetric key
             match &obj.public.parms_and_id {
-                OwnedPublicParmsAndId::Rsa(parms, unique) => {
-                    parent_rsa_parms = Some(*parms);
-                    parent_pub_modulus_len = unique.get_size() as usize;
-                    parent_pub_modulus[..parent_pub_modulus_len]
-                        .copy_from_slice(unique.get_buffer());
+                OwnedPublicParmsAndId::Rsa(..) => {
                     parent_name_alg = obj.public.name_alg.ok_or(TpmRc::HASH.to_rc())?;
                 }
                 OwnedPublicParmsAndId::Ecc(parms, unique) => {
                     parent_name_alg = obj.public.name_alg.ok_or(TpmRc::HASH.to_rc())?;
                     let curve = parms.curve_id;
-                    parent_ecc_curve = Some(curve);
                     let param_size = match crate::ecc_curves::param_size(curve) {
                         Some(size) => size,
                         None => return Err(TpmRc::VALUE.to_rc()),
@@ -177,11 +164,6 @@ impl<'b, P: Platform> CommandHandler<'b, P> {
                     if px_buf.len() > param_size || py_buf.len() > param_size {
                         return Err(TpmRc::VALUE.to_rc());
                     }
-                    parent_ecc_px_len = px_buf.len();
-                    parent_ecc_pub_point[param_size - px_buf.len()..param_size]
-                        .copy_from_slice(px_buf);
-                    parent_ecc_pub_point[param_size * 2 - py_buf.len()..param_size * 2]
-                        .copy_from_slice(py_buf);
                 }
                 // The seed of an ML-KEM parent is encapsulated below (`precomputed_seed`).
                 OwnedPublicParmsAndId::Mlkem(_, _) => {
@@ -266,35 +248,28 @@ impl<'b, P: Platform> CommandHandler<'b, P> {
             return Err(TpmRc::SIZE.with(Position::parameter(1)));
         }
 
-        // With `reference-rng` (and always for an ML-KEM parent), the seed of the outer wrapper
-        // is generated and encrypted to the new parent first (`CryptSecretEncrypt()`), and only
-        // then the inner wrapper key, as in the reference `Duplicate.c`.
-        let precompute_seed = cfg!(feature = "reference-rng")
-            || matches!(
-                parent_obj.as_ref().map(|p| &p.public.parms_and_id),
-                Some(OwnedPublicParmsAndId::Mlkem(_, _))
-            );
-        let mut precomputed_seed = if precompute_seed
-            && new_parent_handle != Handle::RH_NULL.0
-            && !parent_symmetric_is_null
-        {
-            let parent = parent_obj.as_ref().ok_or(TpmRc::FAILURE)?;
-            let mut seed = [0u8; 64];
-            let mut secret = [0u8; tpm2::Tpm2bEncryptedSecret::CAP];
-            // An unusable parent point is `TPM_RC_FAILURE` here, as in the default path.
-            let (seed_len, secret_len) = self
-                .crypt_secret_encrypt(parent, b"DUPLICATE", &mut seed, &mut secret)
-                .map_err(|e| {
-                    if e == TpmRc::KEY.to_rc() {
-                        TpmRc::FAILURE
-                    } else {
-                        e
-                    }
-                })?;
-            Some((seed, seed_len, secret, secret_len))
-        } else {
-            None
-        };
+        // The seed of the outer wrapper is generated and encrypted to the new parent first
+        // (`CryptSecretEncrypt()`), and only then the inner wrapper key, as in the reference
+        // `Duplicate.c`.
+        let mut precomputed_seed =
+            if new_parent_handle != Handle::RH_NULL.0 && !parent_symmetric_is_null {
+                let parent = parent_obj.as_ref().ok_or(TpmRc::FAILURE)?;
+                let mut seed = [0u8; 64];
+                let mut secret = [0u8; tpm2::Tpm2bEncryptedSecret::CAP];
+                // An unusable parent point is `TPM_RC_FAILURE` here, as in the default path.
+                let (seed_len, secret_len) = self
+                    .crypt_secret_encrypt(parent, b"DUPLICATE", &mut seed, &mut secret)
+                    .map_err(|e| {
+                        if e == TpmRc::KEY.to_rc() {
+                            TpmRc::FAILURE
+                        } else {
+                            e
+                        }
+                    })?;
+                Some((seed, seed_len, secret, secret_len))
+            } else {
+                None
+            };
 
         // 4. Inner wrapper encryption
         let mut inner_blob = [0u8; 2048];
@@ -308,7 +283,8 @@ impl<'b, P: Platform> CommandHandler<'b, P> {
                 sym_key[..sym_key_len].copy_from_slice(cmd.encryption_key_in.get_buffer());
             } else {
                 // Generate a random key
-                self.context.random_crypto(&mut sym_key[..sym_key_len])?;
+                self.context
+                    .crypt_random_generate(&mut sym_key[..sym_key_len])?;
                 encryption_key_out = Tpm2bData::from_bytes(&sym_key[..sym_key_len]).unwrap();
             }
 
@@ -363,113 +339,16 @@ impl<'b, P: Platform> CommandHandler<'b, P> {
 
         // 5. Outer wrapper encryption
         let mut duplicate_buf = [0u8; 2048];
-        let mut out_sym_seed_buf = [0u8; tpm2::TpmsEccPoint::MAX_SIZE];
         let mut encrypted_seed = [0u8; tpm2::Tpm2bEncryptedSecret::CAP];
         let mut out_sym_seed = Tpm2bEncryptedSecret::default();
 
         let duplicate_len = if new_parent_handle != Handle::RH_NULL.0 && !parent_symmetric_is_null {
-            // Generate seed
-            let mut seed = [0u8; 64];
-            let seed_len;
-
-            let precomputed = precomputed_seed.take();
-            if let Some((pre_seed, pre_seed_len, secret, secret_len)) = precomputed {
-                seed = pre_seed;
-                seed_len = pre_seed_len;
-                encrypted_seed[..secret_len].copy_from_slice(&secret[..secret_len]);
-                out_sym_seed = Tpm2bEncryptedSecret::from_bytes(&encrypted_seed[..secret_len])
-                    .map_err(|_| TpmRc::FAILURE)?;
-            } else if let Some(curve) = parent_ecc_curve {
-                let param_size = match crate::ecc_curves::param_size(curve) {
-                    Some(size) => size,
-                    None => return Err(TpmRc::VALUE.to_rc()),
-                };
-                // ECC seed encryption (ECDH point multiply and KDFe)
-                // 1. Generate ephemeral ECC key pair (`CryptEccNewKeyPair()` tests ECDH first)
-                self.do_self_test(Alg::ECDH)?;
-                let mut eph_pub = [0u8; 256];
-                let mut eph_priv = [0u8; 128];
-                let priv_len = self.new_ecc_key_pair(curve, &mut eph_priv, &mut eph_pub)?;
-
-                // 2. Perform ECDH point multiplication
-                let mut ecdh_point = [0u8; 256];
-                crypto_len(
-                    self.crypto().point_multiply(
-                        curve,
-                        &eph_priv[..priv_len],
-                        &parent_ecc_pub_point[..param_size * 2],
-                        &mut ecdh_point,
-                    ),
-                    TpmRc::FAILURE,
-                )?;
-
-                // 3. Reconstruct ephemeral public point as TpmsEccPoint
-                let mut ex = [0u8; 128];
-                ex[..param_size].copy_from_slice(&eph_pub[0..param_size]);
-                let mut ey = [0u8; 128];
-                ey[..param_size].copy_from_slice(&eph_pub[param_size..param_size * 2]);
-
-                let eph_point = tpm2::TpmsEccPoint {
-                    x: Tpm2bEccParameter::from_bytes(&ex[..param_size]).unwrap(),
-                    y: Tpm2bEccParameter::from_bytes(&ey[..param_size]).unwrap(),
-                };
-
-                // Marshal ephemeral point as out_sym_seed
-                let out_sym_seed_len = eph_point.marshal(&mut out_sym_seed_buf);
-                out_sym_seed =
-                    Tpm2bEncryptedSecret::from_bytes(&out_sym_seed_buf[..out_sym_seed_len])
-                        .unwrap();
-
-                // 4. KDFe to recover seed
-                let digest_size = parent_name_alg.digest_size();
-                let total_bits = (digest_size * 8) as u32;
-
-                self.crypto()
-                    .kdfe_bits(
-                        parent_name_alg,
-                        &ecdh_point[..param_size],
-                        b"DUPLICATE",
-                        (
-                            &eph_pub[..param_size],
-                            &parent_ecc_pub_point[param_size - parent_ecc_px_len..param_size],
-                        ),
-                        total_bits,
-                        &mut seed,
-                    )
-                    .map_err(|_| TpmRc::FAILURE)?;
-                seed_len = digest_size;
-            } else {
-                // Generate a random seed of the parent's nameAlg digest size
-                // (`CryptSecretEncrypt`).
-                let digest_size = parent_name_alg.digest_size();
-                self.context.random_crypto(&mut seed[..digest_size])?;
-                // `CryptRsaEncrypt()` tests OAEP before it encodes the seed.
-                self.do_self_test(Alg::OAEP)?;
-
-                // RSA seed encryption
-                let encrypted = match crate::handler::rsa_public_key::<P::Crypto>(
-                    &parent_rsa_parms.ok_or(TpmRc::FAILURE)?,
-                    &parent_pub_modulus[..parent_pub_modulus_len],
-                ) {
-                    Ok(Some(key)) => crate::rsa::rsa_encrypt::<P::Crypto>(
-                        &mut self.context.crypto_rng,
-                        &key,
-                        Alg::OAEP,
-                        Alg::from(parent_name_alg),
-                        b"DUPLICATE\0",
-                        &seed[..digest_size],
-                        &mut encrypted_seed,
-                    ),
-                    other => other.map(|_| None),
-                };
-                let encrypted_seed_len = crypto_len(encrypted, TpmRc::FAILURE)?;
-                // `OaepEncode()` hashes the label with the nameAlg.
-                self.do_self_test(Alg::from(parent_name_alg))?;
-                out_sym_seed =
-                    Tpm2bEncryptedSecret::from_bytes(&encrypted_seed[..encrypted_seed_len])
-                        .unwrap();
-                seed_len = digest_size;
-            }
+            // The seed, generated and encrypted to the new parent before the inner wrapper.
+            let (seed, seed_len, secret, secret_len) =
+                precomputed_seed.take().ok_or(TpmRc::FAILURE)?;
+            encrypted_seed[..secret_len].copy_from_slice(&secret[..secret_len]);
+            out_sym_seed = Tpm2bEncryptedSecret::from_bytes(&encrypted_seed[..secret_len])
+                .map_err(|_| TpmRc::FAILURE)?;
 
             let outer_sym_alg = crate::handler::protection_sym_alg(
                 &parent_obj.as_ref().unwrap().public.parms_and_id,

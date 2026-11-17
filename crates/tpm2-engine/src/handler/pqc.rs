@@ -344,7 +344,7 @@ impl<'b, P: Platform> CommandHandler<'b, P> {
     ) -> Result<usize, TpmRc> {
         self.do_self_test(Alg::MLKEM)?;
         let mut entropy = [0u8; MLKEM_ENTROPY_SIZE];
-        self.context.random_crypto(&mut entropy)?;
+        self.context.crypt_random_generate(&mut entropy)?;
         mlkem_encapsulate_with::<P::Crypto>(
             param_set,
             public_key,
@@ -455,7 +455,7 @@ impl<'b, P: Platform> CommandHandler<'b, P> {
         self.do_self_test(Alg::MLDSA)?;
         let seed: [u8; MLDSA_SEED_SIZE] = seed_of(key)?;
         let mut rnd = [0u8; MLDSA_RND_SIZE];
-        self.context.random_crypto(&mut rnd)?;
+        self.context.crypt_random_generate(&mut rnd)?;
         mldsa_sign_mu_with::<P::Crypto>(param_set, &seed, mu, &rnd, signature_out)
     }
 

@@ -61,11 +61,11 @@ impl<'b, P: Platform> CommandHandler<'b, P> {
 
         // The reference order (`Clear.c`): the new SPS, then shProof, then ehProof.
         self.context
-            .random_platform(&mut new_sp_seed[..PRIMARY_SEED_SIZE])?;
+            .crypt_random_generate(&mut new_sp_seed[..PRIMARY_SEED_SIZE])?;
         self.context
-            .random_platform(&mut new_sh_proof[..PROOF_SIZE])?;
+            .crypt_random_generate(&mut new_sh_proof[..PROOF_SIZE])?;
         self.context
-            .random_platform(&mut new_eh_proof[..PROOF_SIZE])?;
+            .crypt_random_generate(&mut new_eh_proof[..PROOF_SIZE])?;
 
         // All random generated successfully, now mutate state
         self.context.state.nv.clear.sh_enable = true;
@@ -148,8 +148,7 @@ impl<'b, P: Platform> CommandHandler<'b, P> {
 
         self.context.save_hierarchy_auths();
         // `NvWrite(NV_ORDERLY_DATA, ...)` of `Clear.c` also persists the DRBG state.
-        #[cfg(feature = "reference-rng")]
-        self.context.save_drbg_state();
+        let _ = self.context.save_drbg_state();
 
         // Only report success once every state and NV update has been performed.
         let response = request.into_response();

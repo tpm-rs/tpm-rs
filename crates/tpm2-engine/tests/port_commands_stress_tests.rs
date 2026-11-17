@@ -5,7 +5,7 @@ mod common;
 
 use common::FakePlatform;
 use common::TestCryptoProvider;
-use common::{FakeRng, FakeStorage, FakeTimer};
+use common::{FakeStorage, FakeTimer};
 use hex_literal::hex;
 use tpm2::commands::{Command, Message, UnmarshalMessage};
 use tpm2::crypto::{
@@ -30,9 +30,8 @@ fn setup_tpm<'a>(
     crypto: &'a mut TestCryptoProvider,
     storage: &'a mut FakeStorage,
     timer: &'a mut FakeTimer,
-    rng: &'a mut FakeRng,
-) -> TpmEngine<FakePlatform<'a, TestCryptoProvider, &'a mut FakeStorage, FakeTimer, FakeRng>> {
-    let platform = FakePlatform::new(crypto, timer, rng);
+) -> TpmEngine<FakePlatform<'a, TestCryptoProvider, &'a mut FakeStorage, FakeTimer>> {
+    let platform = FakePlatform::new(crypto, timer);
     let mut tpm = TpmEngine::new(platform, storage).unwrap();
     tpm.init_storage();
     tpm.state.nv_available = true;
@@ -58,9 +57,7 @@ const DUP_POLICY_DIGEST: [u8; 32] =
 /// This is a separate, non-generic function so that the generic bounds of
 /// [`execute_tpm_command`] do not interfere with resolving the bounds for these commands.
 fn start_duplicate_policy_session(
-    tpm: &mut TpmEngine<
-        FakePlatform<'_, TestCryptoProvider, &'_ mut FakeStorage, FakeTimer, FakeRng>,
-    >,
+    tpm: &mut TpmEngine<FakePlatform<'_, TestCryptoProvider, &'_ mut FakeStorage, FakeTimer>>,
     auth_hash: TpmiAlgHash,
 ) -> Result<TpmsAuthCommand<'static>, u32> {
     use tpm2::commands::{PolicyCommandCode, StartAuthSession};
@@ -98,9 +95,7 @@ fn start_duplicate_policy_session(
 /// `TPM_RC_AUTH_MISSING` otherwise): empty password sessions for USER/ADMIN handles, and for
 /// `TPM2_Duplicate` a policy session that satisfied `PolicyCommandCode(TPM_CC_Duplicate)`.
 fn execute_tpm_command<C: Command>(
-    tpm: &mut TpmEngine<
-        FakePlatform<'_, TestCryptoProvider, &'_ mut FakeStorage, FakeTimer, FakeRng>,
-    >,
+    tpm: &mut TpmEngine<FakePlatform<'_, TestCryptoProvider, &'_ mut FakeStorage, FakeTimer>>,
     cmd: &C,
     auths: &[TpmsAuthCommand],
 ) -> Result<C::Response<'static>, u32>
@@ -140,9 +135,7 @@ where
 }
 
 fn execute_tpm_command_raw<C: Command>(
-    tpm: &mut TpmEngine<
-        FakePlatform<'_, TestCryptoProvider, &'_ mut FakeStorage, FakeTimer, FakeRng>,
-    >,
+    tpm: &mut TpmEngine<FakePlatform<'_, TestCryptoProvider, &'_ mut FakeStorage, FakeTimer>>,
     cmd: &C,
     auths: &[TpmsAuthCommand],
 ) -> Result<C::Response<'static>, u32>
@@ -344,11 +337,10 @@ fn create_transient_ecc_key(
 
 #[test]
 fn test_duplicate_unsupported_curve() {
-    let mut crypto = TestCryptoProvider;
+    let mut crypto = common::test_crypto();
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let mut rng = FakeRng::new();
-    let mut tpm = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
+    let mut tpm = setup_tpm(&mut crypto, &mut storage, &mut timer);
 
     // 1. Create parent key with an unsupported curve (e.g. 999)
     let mut parent = create_transient_ecc_key(
@@ -389,11 +381,10 @@ fn test_duplicate_unsupported_curve() {
 
 #[test]
 fn test_make_credential_panic_vulnerability_oversized_ecc_point() {
-    let mut crypto = TestCryptoProvider;
+    let mut crypto = common::test_crypto();
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let mut rng = FakeRng::new();
-    let mut tpm = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
+    let mut tpm = setup_tpm(&mut crypto, &mut storage, &mut timer);
 
     // 1. Create a protector ECC key at 0x80000001
     let mut protector = create_transient_ecc_key(
@@ -435,11 +426,10 @@ fn test_make_credential_panic_vulnerability_oversized_ecc_point() {
 #[test]
 fn test_cpc_2_14_01_01_create_sym_under_null_parent() {
     use tpm2::TpmsSensitiveCreate;
-    let mut crypto = TestCryptoProvider;
+    let mut crypto = common::test_crypto();
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let mut rng = FakeRng::new();
-    let mut tpm = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
+    let mut tpm = setup_tpm(&mut crypto, &mut storage, &mut timer);
 
     // 1. Create parent RSA key with symmetric: Null
     let mut parent = create_transient_key(

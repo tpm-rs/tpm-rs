@@ -7,7 +7,7 @@
 mod common;
 
 use common::FakePlatform;
-use common::{FakeCrypto, FakeRng, FakeTimer};
+use common::{FakeCrypto, FakeTimer};
 use tpm2::{TpmCap, TpmPt};
 use tpm2_engine::storage::IndexState;
 use tpm2_engine::storage::ram_storage_mock::RamStorageMock;
@@ -24,7 +24,6 @@ type Ram = RamStorageMock<NV_SIZE>;
 /// writes back (like a platform that keeps NV in RAM and syncs it to a file).
 struct CountingPlatform {
     timer: FakeTimer,
-    rng: FakeRng,
     info: PlatformInfo,
     loads: usize,
     stores: usize,
@@ -35,7 +34,6 @@ impl CountingPlatform {
     fn new(info: PlatformInfo) -> Self {
         Self {
             timer: FakeTimer,
-            rng: FakeRng::new(),
             info,
             loads: 0,
             stores: 0,
@@ -47,7 +45,6 @@ impl CountingPlatform {
 impl Platform for CountingPlatform {
     type Crypto = FakeCrypto;
     type Timer = FakeTimer;
-    type Rng = FakeRng;
     type IndexState = Ram;
 
     fn info(&self) -> &PlatformInfo {
@@ -56,10 +53,6 @@ impl Platform for CountingPlatform {
 
     fn timer(&self) -> &FakeTimer {
         &self.timer
-    }
-
-    fn rng(&mut self) -> &mut FakeRng {
-        &mut self.rng
     }
 
     fn load_nv(&mut self, nv: &mut Nv<Self>) {
@@ -144,9 +137,9 @@ fn default_platform_reports_default_info() {
     );
     assert_eq!(PlatformInfo::DEFAULT.firmware.attest_version(), 1 << 32);
 
-    let (mut crypto, mut timer, mut rng) = (FakeCrypto, FakeTimer, FakeRng::new());
+    let (mut crypto, mut timer) = (FakeCrypto, FakeTimer);
     let mut storage = Box::new(Ram::new());
-    let platform = FakePlatform::new(&mut crypto, &mut timer, &mut rng);
+    let platform = FakePlatform::new(&mut crypto, &mut timer);
     let mut tpm = Box::new(TpmEngine::new(platform, &mut *storage).unwrap());
     tpm.init_storage();
     power_on_start_up(&mut *tpm);

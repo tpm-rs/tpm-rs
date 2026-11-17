@@ -17,17 +17,21 @@
 //! is not exposed: `tpm-rs` derives those objects itself.
 
 use tpm2::errors::TpmRc;
+use tpm2_engine::DrbgState;
 
 use super::{RefRng, ffi};
-use crate::engine::DrbgState;
 
-/// Size of a DRBG seed (`DRBG_SEED`): an AES-256 key followed by a counter block.
+/// The size of a DRBG seed (`DRBG_SEED`: the AES-256 key and the block, 48 bytes).
+#[cfg(test)]
 pub const DRBG_SEED_SIZE: usize = 48;
-/// `CTR_DRBG_MAX_REQUESTS_PER_RESEED`: the TPM's DRBG reseeds itself after this many requests,
-/// a seeded DRBG fails.
+
+/// The number of requests after which the reference's DRBG must be reseeded
+/// (`CTR_DRBG_MAX_REQUESTS_PER_RESEED`).
+#[cfg(test)]
 pub const CTR_DRBG_MAX_REQUESTS_PER_RESEED: u64 = 1 << 20;
 
 /// A DRBG seed (`DRBG_SEED`).
+#[cfg(test)]
 pub type DrbgSeed = [u8; DRBG_SEED_SIZE];
 
 /// `DRBG_Instantiate(&drbgDefault, 0, NULL)`: instantiates the TPM's DRBG from fresh platform
@@ -37,7 +41,7 @@ pub fn instantiate(rng: &mut RefRng<'_>) -> Result<(), TpmRc> {
 }
 
 /// `DRBG_SelfTest()`: runs the DRBG's known-answer test (part of `CryptRandInit()` at
-/// `_TPM_Init`), recording `TESTED` in the flags of `rng` ([`RefRng::self_test`]). Returns
+/// `_TPM_Init`), recording `TESTED` in the flags of `rng` ([`RefRng::flags`]). Returns
 /// whether the test passed.
 pub fn self_test(rng: &mut RefRng<'_>) -> Result<bool, TpmRc> {
     ffi::self_test(rng)
@@ -51,6 +55,7 @@ pub fn startup(rng: &mut RefRng<'_>) -> Result<(), TpmRc> {
 
 /// `DRBG_Reseed()`: reseeds `rand` (`None`: the TPM's DRBG) with `provided_entropy` (or fresh
 /// platform entropy if `None`) XORed with `additional`.
+#[cfg(test)]
 pub fn reseed(
     rng: &mut RefRng<'_>,
     rand: Option<&mut DrbgState>,
@@ -114,12 +119,11 @@ pub fn additional_data(state: &mut DrbgState, data: &[u8]) -> Result<(), TpmRc> 
 }
 
 #[cfg(test)]
-pub(crate) mod tests {
-    extern crate std;
-
+pub(super) mod tests {
+    use super::super::EntropySource;
     use super::*;
-    use crate::engine::DRBG_MAGIC;
-    use tpm2::crypto::{CryptoError, Rng};
+    use tpm2::crypto::CryptoError;
+    use tpm2_engine::DRBG_MAGIC;
 
     /// The NIST CTR_DRBG AES-256 test vector (no derivation function, no prediction
     /// resistance, COUNT = 0) used by the reference code's `DRBG_SelfTest()`
@@ -139,18 +143,14 @@ pub(crate) mod tests {
     const NIST_GENERATED: [u8; 16] = hex_literal::hex!("946f5182d54510b9461248f571ca06c9");
 
     /// An entropy source replaying fixed bytes (cycling), counting the bytes drawn.
-    pub(crate) struct FixedEntropy(pub &'static [u8], pub usize);
+    pub(in super::super) struct FixedEntropy(pub &'static [u8], pub usize);
 
-    impl Rng for FixedEntropy {
-        fn fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), CryptoError> {
+    impl EntropySource for FixedEntropy {
+        fn fill(&mut self, dest: &mut [u8]) -> Result<(), CryptoError> {
             for d in dest.iter_mut() {
                 *d = self.0[self.1 % self.0.len()];
                 self.1 += 1;
             }
-            Ok(())
-        }
-
-        fn stir_bytes(&mut self, _: &[u8]) -> Result<(), CryptoError> {
             Ok(())
         }
     }
@@ -158,22 +158,18 @@ pub(crate) mod tests {
     /// An entropy source that always fails.
     struct FailingEntropy;
 
-    impl Rng for FailingEntropy {
-        fn fill_bytes(&mut self, _: &mut [u8]) -> Result<(), CryptoError> {
+    impl EntropySource for FailingEntropy {
+        fn fill(&mut self, _: &mut [u8]) -> Result<(), CryptoError> {
             Err(CryptoError::Internal)
-        }
-
-        fn stir_bytes(&mut self, _: &[u8]) -> Result<(), CryptoError> {
-            Ok(())
         }
     }
 
     /// The TPM's DRBG `state` with the entropy source `entropy`.
-    fn tpm<'a>(state: &'a mut DrbgState, entropy: &'a mut dyn Rng) -> RefRng<'a> {
+    fn tpm<'a>(state: &'a mut DrbgState, entropy: &'a mut dyn EntropySource) -> RefRng<'a> {
         RefRng {
             drbg: Some(state),
             entropy: Some(entropy),
-            self_test: None,
+            flags: None,
         }
     }
 
@@ -277,7 +273,7 @@ pub(crate) mod tests {
         let mut no_entropy = RefRng {
             drbg: Some(&mut state),
             entropy: None,
-            self_test: None,
+            flags: None,
         };
         assert_eq!(instantiate(&mut no_entropy), Err(TpmRc::FAILURE));
         // A working source after a failure works again (failure mode lasts one call).
@@ -347,14 +343,10 @@ pub(crate) mod tests {
     /// An entropy source that calls back into the reference RNG, which must be rejected.
     struct ReentrantEntropy(Option<Result<DrbgState, TpmRc>>);
 
-    impl Rng for ReentrantEntropy {
-        fn fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), CryptoError> {
+    impl EntropySource for ReentrantEntropy {
+        fn fill(&mut self, dest: &mut [u8]) -> Result<(), CryptoError> {
             self.0 = Some(instantiate_seeded(b"seed", b"", b"", b""));
             dest.fill(0x5a);
-            Ok(())
-        }
-
-        fn stir_bytes(&mut self, _: &[u8]) -> Result<(), CryptoError> {
             Ok(())
         }
     }

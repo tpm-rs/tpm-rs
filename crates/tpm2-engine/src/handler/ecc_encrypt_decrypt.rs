@@ -102,22 +102,8 @@ impl<'b, P: Platform> CommandHandler<'b, P> {
         // 1-2. A random k (1 <= k <= n - 1) and C1 := (x1, y1) := [k]G.
         let mut k = [0u8; MAX_COORDINATE_SIZE];
         let mut c1 = [0u8; 2 * MAX_COORDINATE_SIZE];
-        // `TpmEcc_GenerateKeyPair()`: with `reference-rng`, from the TPM's DRBG as in the
-        // reference.
-        #[cfg(feature = "reference-rng")]
-        let k_len = self.reference_ecc_new_key_pair(curve, &mut k, &mut c1)?;
-        #[cfg(not(feature = "reference-rng"))]
-        let k_len = {
-            self.do_self_test(tpm2::Alg::ECDH)?;
-            super::ecdh::generate_ecc_key_pair::<P::Crypto>(
-                &mut self.context.crypto_rng,
-                curve,
-                &mut k,
-                &mut c1,
-            )
-            .map_err(|_| TpmRc::NO_RESULT)?
-            .1
-        };
+        // `TpmEcc_GenerateKeyPair()`: from the TPM's DRBG (after the ECDH self test).
+        let k_len = self.ecc_new_key_pair(curve, &mut k, &mut c1)?;
 
         // 3. P2 := (x2, y2) := [k]P_B.
         let mut pb = [0u8; 2 * MAX_COORDINATE_SIZE];

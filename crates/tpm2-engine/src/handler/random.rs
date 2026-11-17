@@ -5,13 +5,12 @@ use tpm2::commands::StirRandom;
 use tpm2::errors::{Position, TpmRc};
 
 use crate::{InternalError, handler::CommandHandler, req_resp::RequestThenResponse};
-#[cfg(not(feature = "reference-rng"))]
 use tpm2::crypto::Rng;
 
 impl<'b, P: Platform> CommandHandler<'b, P> {
     fn try_get_random(&mut self, buffer: &mut [u8]) -> Result<(), InternalError> {
         self.context
-            .random_platform(buffer)
+            .crypt_random_generate(buffer)
             .map_err(|_| InternalError::HardwareError)
     }
 
@@ -84,27 +83,13 @@ impl<'b, P: Platform> CommandHandler<'b, P> {
             return Err(TpmRc::SIZE.with(Position::parameter(1)));
         }
 
-        // With `reference-rng`, `CryptRandomStir()`: the DRBG is reseeded with fresh platform
-        // entropy and the derivation of `inData`.
-        #[cfg(feature = "reference-rng")]
-        {
-            crate::reference_rng::drbg::stir(
-                &mut self.context.ref_rng(),
-                cmd.in_data.get_buffer(),
-            )?;
-        }
-        #[cfg(not(feature = "reference-rng"))]
-        {
-            self.context
-                .crypto_rng
-                .stir_bytes(cmd.in_data.get_buffer())
-                .map_err(|_| TpmRc::FAILURE)?;
-            let _ = self
-                .context
-                .platform
-                .rng()
-                .stir_bytes(cmd.in_data.get_buffer());
-        }
+        // `CryptRandomStir()`: the DRBG mixes in `inData` (the reference's DRBG reseeds with
+        // fresh entropy and the derivation of `inData`). Like the reference
+        // (`DRBG_Reseed()` failing), a failure is `TPM_RC_NO_RESULT`.
+        self.context
+            .crypto_rng
+            .stir_bytes(cmd.in_data.get_buffer())
+            .map_err(|_| TpmRc::NO_RESULT)?;
 
         let _response = request.into_response();
         Ok(())

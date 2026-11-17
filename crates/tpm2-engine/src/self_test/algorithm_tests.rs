@@ -7,15 +7,14 @@
 //! tested, and that the RSA and ECC signature tests clear `TPM_ALG_NULL`/`TPM_ALG_ECDH` without
 //! testing them), is that of the reference, because it is visible in the `toDoList` of
 //! `TPM2_IncrementalSelfTest`. The tests that draw random values draw exactly the values the
-//! reference draws: with the `reference-rng` feature, the RSAES/OAEP/PSS encodings and the ECDSA
-//! signature are computed by the reference's own code on the TPM's DRBG.
+//! reference draws, from the TPM's DRBG ([`crate::TpmEngine::crypto_rng`]; the RSAES/OAEP/PSS
+//! encodings of the dispatch functions, and the ECDSA and EC-Schnorr signatures of
+//! [`crate::asymmetric`]).
 //!
 //! A vector is either `g_toTest` itself ([`Vector::Global`], a test of an algorithm on its first
 //! use) or a local copy of the algorithms a command asked to test ([`Vector::Local`]); the
 //! reference's `CLEAR_BOTH`/`SET_BOTH`/`TEST_BOTH` macros update/test both.
 
-#[cfg(not(feature = "reference-rng"))]
-use tpm2::crypto::EccPrivateKey;
 use tpm2::crypto::{
     CipherInput, Crypto, CryptoError, Direction, RsaPrivateKey, RsaPublicKey, SignatureBuffer,
     SymmetricKey,
@@ -26,9 +25,6 @@ use tpm2::{
     TpmiAlgCipherMode, TpmiAlgHash, TpmiRsaKeyBits, TpmsSignatureEcc, TpmsSignatureRsa,
     TpmtSigScheme, TpmtSignature,
 };
-
-#[cfg(feature = "reference-rng")]
-use crate::reference_rng::{RefRng, ecc, rsa};
 
 use super::vectors::*;
 use super::{ALG_FIRST, ALG_LAST, AlgorithmVector, SelfTestState, Tested, default_test_hash};
@@ -244,14 +240,13 @@ fn test_bit(state: &SelfTestState, v: &Vector<'_>, alg: u16) -> bool {
 }
 
 /// Runs the algorithm self tests: the crypto backend (hooked, so that the algorithms the tests
-/// use are tested first, as the reference's nested `TPM_DO_SELF_TEST()` calls do) and, with the
-/// `reference-rng` feature, the TPM's DRBG for the tests that draw random values.
+/// use are tested first, as the reference's nested `TPM_DO_SELF_TEST()` calls do) and the TPM's
+/// DRBG for the tests that draw random values.
 pub(crate) struct SelfTester<'a, C: Crypto> {
     pub(crate) crypto: Tested<'a, C>,
     /// The TPM's DRBG, or `None` in the hooked crypto backend, which only runs tests that draw
     /// no random values.
-    #[cfg(feature = "reference-rng")]
-    pub(crate) rng: Option<RefRng<'a>>,
+    pub(crate) rng: Option<&'a mut C::Rng>,
 }
 
 type TestResult = Result<(), TpmRc>;
@@ -521,31 +516,16 @@ impl<'a, C: Crypto> SelfTester<'a, C> {
         message: &[u8],
         out: &mut [u8; RSA_TEST_KEY_SIZE],
     ) -> TestResult {
-        #[cfg(feature = "reference-rng")]
-        {
-            let Some(rng) = self.rng.as_mut() else {
-                // Only the engine's self tester has the DRBG these tests draw from.
-                self.crypto.state.fail();
-                return Err(TpmRc::FAILURE);
-            };
-            let mut padded = [0u8; RSA_TEST_KEY_SIZE];
-            let encoded = match hash {
-                Some(hash) => rsa::oaep_encode(rng, hash, OAEP_TEST_LABEL, message, &mut padded),
-                None => rsa::rsaes_pkcs1v15_encode(rng, message, &mut padded),
-            };
-            self.check(encoded.is_ok())?;
-            let encrypted = rsa_test_encrypt::<C>(Alg::NULL, Alg::NULL, &padded, &mut out[..]);
-            self.check_crypto(&encrypted, |len| *len == Some(RSA_TEST_KEY_SIZE))
-        }
-        #[cfg(not(feature = "reference-rng"))]
-        {
-            let (scheme, hash_alg) = match hash {
-                Some(hash) => (Alg::OAEP, Alg::from(hash)),
-                None => (Alg::RSAES, Alg::NULL),
-            };
-            let encrypted = rsa_test_encrypt::<C>(scheme, hash_alg, message, &mut out[..]);
-            self.check_crypto(&encrypted, |len| *len == Some(RSA_TEST_KEY_SIZE))
-        }
+        let (scheme, hash_alg) = match hash {
+            Some(hash) => (Alg::OAEP, Alg::from(hash)),
+            None => (Alg::RSAES, Alg::NULL),
+        };
+        let Some(rng) = self.rng.as_deref_mut() else {
+            // Only the engine's self tester has the DRBG these tests draw from.
+            return Err(self.failure());
+        };
+        let encrypted = rsa_test_encrypt::<C>(Some(rng), scheme, hash_alg, message, &mut out[..]);
+        self.check_crypto(&encrypted, |len| *len == Some(RSA_TEST_KEY_SIZE))
     }
 
     /// `TestRsaEncryptDecrypt()`: raw RSA (`TPM_ALG_NULL`) with known values, or RSAES/OAEP
@@ -560,7 +540,7 @@ impl<'a, C: Crypto> SelfTester<'a, C> {
         let mut output = [0u8; RSA_TEST_KEY_SIZE];
         if scheme == id(Alg::NULL) {
             let encrypted =
-                rsa_test_encrypt::<C>(Alg::NULL, Alg::NULL, &RSA_TEST_VALUE, &mut output);
+                rsa_test_encrypt::<C>(None, Alg::NULL, Alg::NULL, &RSA_TEST_VALUE, &mut output);
             self.check_crypto(&encrypted, |len| {
                 *len == Some(RSA_TEST_KEY_SIZE) && output == RSAEP_KVT
             })?;
@@ -618,6 +598,7 @@ impl<'a, C: Crypto> SelfTester<'a, C> {
         let mut signature = [0u8; RSA_TEST_KEY_SIZE];
         if scheme == id(Alg::RSASSA) {
             let signed = rsa_test_sign(
+                None,
                 &private_key,
                 TpmtSigScheme::Rsassa(hash),
                 digest,
@@ -651,25 +632,18 @@ impl<'a, C: Crypto> SelfTester<'a, C> {
         digest: &[u8],
         out: &mut [u8; RSA_TEST_KEY_SIZE],
     ) -> TestResult {
-        #[cfg(feature = "reference-rng")]
-        {
-            let Some(rng) = self.rng.as_mut() else {
-                // Only the engine's self tester has the DRBG these tests draw from.
-                self.crypto.state.fail();
-                return Err(TpmRc::FAILURE);
-            };
-            let mut encoded = [0u8; RSA_TEST_KEY_SIZE];
-            let pss = rsa::pss_encode(rng, hash, digest, &mut encoded);
-            self.check(pss.is_ok())?;
-            let signed =
-                rsa_test_decrypt(private_key, Alg::NULL, Alg::NULL, &encoded, &mut out[..]);
-            self.check_crypto(&signed, |len| *len == Some(RSA_TEST_KEY_SIZE))
-        }
-        #[cfg(not(feature = "reference-rng"))]
-        {
-            let signed = rsa_test_sign(private_key, TpmtSigScheme::Rsapss(hash), digest, out);
-            self.check_crypto(&signed, |len| *len == Some(RSA_TEST_KEY_SIZE))
-        }
+        let Some(rng) = self.rng.as_deref_mut() else {
+            // Only the engine's self tester has the DRBG these tests draw from.
+            return Err(self.failure());
+        };
+        let signed = rsa_test_sign(
+            Some(rng),
+            private_key,
+            TpmtSigScheme::Rsapss(hash),
+            digest,
+            out,
+        );
+        self.check_crypto(&signed, |len| *len == Some(RSA_TEST_KEY_SIZE))
     }
 
     /// `TestRsa()`.
@@ -784,61 +758,32 @@ impl<'a, C: Crypto> SelfTester<'a, C> {
         digest: &[u8],
         out: &mut [u8; 64],
     ) -> TestResult {
-        #[cfg(feature = "reference-rng")]
-        {
-            let Some(rng) = self.rng.as_mut() else {
-                // Only the engine's self tester has the DRBG these tests draw from.
-                self.crypto.state.fail();
-                return Err(TpmRc::FAILURE);
-            };
-            let (r, s) = out.split_at_mut(32);
-            let signed = ecc::sign(
-                rng,
-                None,
-                Alg::ECSCHNORR,
-                hash,
-                TEST_CURVE,
-                &EC_TEST_KEY_DS,
-                digest,
-                r,
-                s,
-            );
-            self.check(signed == Ok(32))
-        }
-        #[cfg(not(feature = "reference-rng"))]
-        {
-            let signed = crate::ecc_schemes::schnorr_sign(
-                &self.crypto,
-                TEST_CURVE,
-                hash,
-                &EC_TEST_KEY_DS,
-                digest,
-                |buf: &mut [u8]| C::rand_bytes(buf),
-                &mut out[..],
-            );
-            self.check_crypto(&signed, |len| *len == Some(64))
-        }
+        let crypto = self.crypto;
+        let Some(rng) = self.rng.as_deref_mut() else {
+            // Only the engine's self tester has the DRBG these tests draw from.
+            return Err(self.failure());
+        };
+        let signed = crate::ecc_schemes::schnorr_sign(
+            &crypto,
+            TEST_CURVE,
+            hash,
+            &EC_TEST_KEY_DS,
+            digest,
+            rng,
+            &mut out[..],
+        );
+        self.check_crypto(&signed, |len| *len == Some(64))
     }
 
     /// An ECDSA signature (`r || s`) of `digest` with the test key, drawing the nonce from the
     /// TPM's DRBG as the reference's `CryptEccSign()` does.
     fn ecdsa_sign(&mut self, digest: &[u8], out: &mut [u8; 64]) -> TestResult {
-        #[cfg(feature = "reference-rng")]
-        {
-            let Some(rng) = self.rng.as_mut() else {
-                // Only the engine's self tester has the DRBG these tests draw from.
-                self.crypto.state.fail();
-                return Err(TpmRc::FAILURE);
-            };
-            let (r, s) = out.split_at_mut(32);
-            let signed = ecc::sign_ecdsa(rng, None, TEST_CURVE, &EC_TEST_KEY_DS, digest, r, s);
-            self.check(signed == Ok(32))
-        }
-        #[cfg(not(feature = "reference-rng"))]
-        {
-            let signed = ecdsa_test_sign::<C>(default_test_hash(), digest, out);
-            self.check_crypto(&signed, |len| *len == Some(64))
-        }
+        let Some(rng) = self.rng.as_deref_mut() else {
+            // Only the engine's self tester has the DRBG these tests draw from.
+            return Err(self.failure());
+        };
+        let signed = ecdsa_test_sign::<C>(rng, default_test_hash(), digest, out);
+        self.check_crypto(&signed, |len| *len == Some(64))
     }
 
     /// `TestEcc()`.
@@ -901,19 +846,12 @@ impl<'a, C: Crypto> SelfTester<'a, C> {
     /// encapsulation and the ML-DSA signature of the tests draw them.
     #[cfg(any(feature = "mlkem", feature = "mldsa"))]
     fn draw_random(&mut self, out: &mut [u8]) -> TestResult {
-        #[cfg(feature = "reference-rng")]
-        {
-            let Some(rng) = self.rng.as_mut() else {
-                // Only the engine's self tester has the DRBG these tests draw from.
-                self.crypto.state.fail();
-                return Err(TpmRc::FAILURE);
-            };
-            crate::reference_rng::drbg::fill(rng, None, out)
-        }
-        #[cfg(not(feature = "reference-rng"))]
-        {
-            C::rand_bytes(out).map_err(|_| self.failure())
-        }
+        let drawn = match self.rng.as_deref_mut() {
+            Some(rng) => tpm2::crypto::Rng::fill_bytes(rng, out).is_ok(),
+            // Only the engine's self tester has the DRBG these tests draw from.
+            None => false,
+        };
+        if drawn { Ok(()) } else { Err(self.failure()) }
     }
 
     /// `TestMlkem()`: a known-answer decapsulation, then an encapsulation (with randomness from
@@ -1025,8 +963,10 @@ fn rsa_test_public_key<C: Crypto>() -> Result<Option<RsaPublicKey<C>>, CryptoErr
 }
 
 /// The encryption of `message` with the public test RSA key and `scheme`/`hash`
-/// ([`crate::rsa::rsa_encrypt`], with the test label), with randomness from the backend.
+/// ([`crate::rsa::rsa_encrypt`], with the test label), with randomness from `rng` (the TPM's
+/// DRBG), or for a raw encryption, which draws nothing, `None`.
 fn rsa_test_encrypt<C: Crypto>(
+    rng: Option<&mut C::Rng>,
     scheme: Alg,
     hash: Alg,
     message: &[u8],
@@ -1035,16 +975,21 @@ fn rsa_test_encrypt<C: Crypto>(
     let Some(public) = rsa_test_public_key::<C>()? else {
         return Ok(None);
     };
-    let mut rng = C::from_entropy()?;
-    crate::rsa::rsa_encrypt::<C>(
-        &mut rng,
-        &public,
-        scheme,
-        hash,
-        OAEP_TEST_LABEL,
-        message,
-        out,
-    )
+    with_rng::<C, _>(rng, |rng| {
+        crate::rsa::rsa_encrypt::<C>(rng, &public, scheme, hash, OAEP_TEST_LABEL, message, out)
+    })
+}
+
+/// Runs `f` with `rng`, or with a new generator from the backend's entropy source for the
+/// operations that draw no random values (`None`).
+fn with_rng<C: Crypto, T>(
+    rng: Option<&mut C::Rng>,
+    f: impl FnOnce(&mut C::Rng) -> Result<T, CryptoError>,
+) -> Result<T, CryptoError> {
+    match rng {
+        Some(rng) => f(rng),
+        None => f(&mut C::from_entropy()?),
+    }
 }
 
 /// The decryption of `ciphertext` with the private test RSA key `key` and `scheme`/`hash`
@@ -1069,18 +1014,18 @@ fn rsa_test_decrypt<C: Crypto>(
     )
 }
 
-/// Signs `digest` with the private test RSA key `key` and `scheme` (RSASSA or RSASSA-PSS, salt
-/// from the backend) and writes the signature to `out`; returns its length (`Ok(None)` for a
-/// signature of another size).
+/// Signs `digest` with the private test RSA key `key` and `scheme` (RSASSA, or RSASSA-PSS with
+/// the salt drawn from `rng`, the TPM's DRBG) and writes the signature to `out`; returns its
+/// length (`Ok(None)` for a signature of another size).
 fn rsa_test_sign<C: Crypto>(
+    rng: Option<&mut C::Rng>,
     key: &RsaPrivateKey<C>,
     scheme: TpmtSigScheme,
     digest: &[u8],
     out: &mut [u8; RSA_TEST_KEY_SIZE],
 ) -> Result<Option<usize>, CryptoError> {
-    let mut rng = C::from_entropy()?;
     let mut buf = [0u8; core::mem::size_of::<SignatureBuffer>()];
-    let sig = match key.sign(&mut rng, scheme, digest, &mut buf)? {
+    let sig = match with_rng::<C, _>(rng, |rng| key.sign(rng, scheme, digest, &mut buf))? {
         TpmtSignature::Rsassa(sig) | TpmtSignature::Rsapss(sig) => sig.sig,
         _ => return Err(CryptoError::Internal),
     };
@@ -1136,35 +1081,17 @@ fn ecdsa_test_verify<C: Crypto>(
 }
 
 /// An ECDSA signature `r || s` (each component padded to 32 octets) of `digest` with the hash
-/// `hash` with the private test ECC key, with the nonce from the backend. Returns its length
-/// (`Ok(None)`: the backend rejects the key, or a component does not fit).
-#[cfg(not(feature = "reference-rng"))]
+/// `hash` with the private test ECC key, with the nonce drawn from `rng` (the TPM's DRBG) as
+/// `CryptEccSign()` draws it ([`crate::asymmetric::sign_ecdsa`]: the backend's ECDSA for the
+/// backend's system RNG). Returns its length (`Ok(None)`: the backend rejects the key).
 fn ecdsa_test_sign<C: Crypto>(
+    rng: &mut C::Rng,
     hash: TpmiAlgHash,
     digest: &[u8],
     out: &mut [u8; 64],
 ) -> Result<Option<usize>, CryptoError> {
-    let Some(key) = EccPrivateKey::<C>::from_scalar(TEST_CURVE, &EC_TEST_KEY_DS)? else {
-        return Ok(None);
-    };
-    let mut rng = C::from_entropy()?;
-    let mut buf = [0u8; core::mem::size_of::<SignatureBuffer>()];
-    let TpmtSignature::Ecdsa(sig) =
-        key.sign(&mut rng, TpmtSigScheme::Ecdsa(hash), digest, &mut buf)?
-    else {
-        return Err(CryptoError::Internal);
-    };
-    out.fill(0);
-    for (half, component) in out
-        .chunks_mut(32)
-        .zip([sig.signature_r.as_slice(), sig.signature_s.as_slice()])
-    {
-        let Some(offset) = 32usize.checked_sub(component.len()) else {
-            return Ok(None);
-        };
-        half[offset..].copy_from_slice(component);
-    }
-    Ok(Some(64))
+    let digest = tpm2::TpmtHa::new(hash, digest).ok_or(CryptoError::Internal)?;
+    crate::asymmetric::sign_ecdsa::<C>(rng, TEST_CURVE, &EC_TEST_KEY_DS, digest, out)
 }
 
 /// `MakeIv()`: the IV of the symmetric tests (none for ECB; for CTR the block size bytes ending

@@ -1,7 +1,7 @@
 mod common;
 
 use common::FakePlatform;
-use common::{FakeRng, FakeStorage, FakeTimer};
+use common::{FakeStorage, FakeTimer};
 use hex_literal::hex;
 use tpm2_engine::TpmEngine;
 
@@ -17,8 +17,7 @@ fn test_get_command_audit_digest_with_zeroed_audit_hash_alg() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let mut rng = FakeRng::new();
-    let platform = FakePlatform::new(&mut crypto, &mut timer, &mut rng);
+    let platform = FakePlatform::new(&mut crypto, &mut timer);
 
     let mut tpm = TpmEngine::new(platform, &mut storage).unwrap();
     tpm.state.init_zeroed();
@@ -116,9 +115,7 @@ fn set_command_code_audit_status_cmd(
 
 /// Executes `request` and returns the response code.
 fn execute_rc(
-    tpm: &mut TpmEngine<
-        FakePlatform<'_, common::FakeCrypto, &'_ mut FakeStorage, FakeTimer, FakeRng>,
-    >,
+    tpm: &mut TpmEngine<FakePlatform<'_, common::FakeCrypto, &'_ mut FakeStorage, FakeTimer>>,
     request: &[u8],
 ) -> u32 {
     let mut response = [0u8; 4096];
@@ -143,8 +140,7 @@ fn command_audit_state_persists_across_tpm_init() {
     let mut crypto = common::FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let mut rng = FakeRng::new();
-    let platform = FakePlatform::new(&mut crypto, &mut timer, &mut rng);
+    let platform = FakePlatform::new(&mut crypto, &mut timer);
     let mut tpm = TpmEngine::new(platform, &mut storage).unwrap();
     tpm.state.init_zeroed();
     tpm.init_storage();
@@ -223,8 +219,7 @@ fn rejected_commands_leave_command_audit_state_unchanged() {
     let mut crypto = common::FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let mut rng = FakeRng::new();
-    let platform = FakePlatform::new(&mut crypto, &mut timer, &mut rng);
+    let platform = FakePlatform::new(&mut crypto, &mut timer);
     let mut tpm = TpmEngine::new(platform, &mut storage).unwrap();
     tpm.state.init_zeroed();
     tpm.init_storage();

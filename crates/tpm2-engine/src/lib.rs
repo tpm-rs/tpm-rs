@@ -47,10 +47,7 @@
 //! - **Key Migration & Importing**: [duplicate.rs](handler/duplicate.rs) (encrypts objects for duplicate migration), [import.rs](handler/import.rs) (decrypts imported objects).
 
 #![no_std]
-// The opt-in `reference-rng` feature links the C reference TPM's random-number generation; its
-// FFI boundary (`reference_rng::ffi`) is the only module allowed to use `unsafe`.
-#![cfg_attr(not(feature = "reference-rng"), forbid(unsafe_code))]
-#![cfg_attr(feature = "reference-rng", deny(unsafe_code))]
+#![forbid(unsafe_code)]
 
 #[cfg(test)]
 extern crate alloc;
@@ -59,6 +56,8 @@ extern crate alloc;
 extern crate std;
 
 pub mod act;
+pub mod asymmetric;
+mod bignum;
 pub mod cmac;
 pub mod command_audit;
 mod ecc_curves;
@@ -76,8 +75,6 @@ pub mod physical_presence;
 pub mod platform;
 pub mod platform_connection;
 mod read_only;
-#[cfg(feature = "reference-rng")]
-pub mod reference_rng;
 pub mod self_test;
 #[cfg_attr(not(feature = "mldsa"), allow(dead_code))]
 pub(crate) mod shake256;
@@ -93,14 +90,15 @@ pub use state::{ClearState, Nv, OrderlyState, PersistentState, ResetState, State
 mod req_resp;
 mod rng;
 mod rsa;
+mod rsa_keygen;
 #[cfg(feature = "sec-channel")]
 mod sec_channel;
 mod secret_sizes;
 pub use engine::{
-    ActiveSequence, DRBG_MAGIC, DrbgState, ImplementedCommands, MAX_ACTIVE_SEQUENCES,
-    MAX_COMMAND_SIZE, MAX_LOADED_OBJECTS, MAX_LOADED_SESSIONS, MAX_RESPONSE_SIZE,
-    ResponseBufferTooSmall, SequenceType, SignatureSequence, TpmEngine, command_handles_count,
-    command_returns_handle, get_command_attribute, handle_requires_auth,
+    ActiveSequence, DRBG_MAGIC, DRBG_STATE_SIZE, DrbgState, ImplementedCommands,
+    MAX_ACTIVE_SEQUENCES, MAX_COMMAND_SIZE, MAX_LOADED_OBJECTS, MAX_LOADED_SESSIONS,
+    MAX_RESPONSE_SIZE, ResponseBufferTooSmall, SequenceType, SignatureSequence, TpmEngine,
+    command_handles_count, command_returns_handle, get_command_attribute, handle_requires_auth,
 };
 pub use error::InternalError;
 pub use hash_state::StreamingHashState;

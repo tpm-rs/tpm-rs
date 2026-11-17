@@ -52,7 +52,6 @@ impl<'a, C: Crypto> Tested<'a, C> {
         }
         let mut tester = SelfTester {
             crypto: *self,
-            #[cfg(feature = "reference-rng")]
             rng: None,
         };
         tester

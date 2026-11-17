@@ -6,7 +6,7 @@
 mod common;
 
 use common::{
-    FakeRng, FakeStorage, FakeTimer, TestCryptoProvider, execute_command, password_auth,
+    FakeStorage, FakeTimer, TestCryptoProvider, execute_command, password_auth,
     setup_real_crypto_tpm,
 };
 use tpm2::commands::{CreatePrimary, GetCapability, Hash};
@@ -151,13 +151,9 @@ fn firmware_svn_properties(tpm: &mut common::RealCryptoEngine<'_>) -> (u32, u32)
 /// base hierarchy keeps its own proof.
 #[test]
 fn limited_proofs_are_derived_from_the_base_proofs() {
-    let (mut crypto, mut storage, mut timer, mut rng) = (
-        TestCryptoProvider,
-        FakeStorage::default(),
-        FakeTimer,
-        FakeRng::new(),
-    );
-    let mut tpm = setup_real_crypto_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
+    let (mut crypto, mut storage, mut timer) =
+        (common::test_crypto(), FakeStorage::default(), FakeTimer);
+    let mut tpm = setup_real_crypto_tpm(&mut crypto, &mut storage, &mut timer);
     tpm.platform.set_firmware(Firmware {
         hash: 0x1122_3344,
         svn: 10,
@@ -203,13 +199,9 @@ fn limited_proofs_are_derived_from_the_base_proofs() {
 /// proof), they are not listed by `TPM_CAP_HANDLES`, and the firmware SVN properties are 0.
 #[test]
 fn limited_hierarchies_need_a_platform_firmware() {
-    let (mut crypto, mut storage, mut timer, mut rng) = (
-        TestCryptoProvider,
-        FakeStorage::default(),
-        FakeTimer,
-        FakeRng::new(),
-    );
-    let mut tpm = setup_real_crypto_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
+    let (mut crypto, mut storage, mut timer) =
+        (common::test_crypto(), FakeStorage::default(), FakeTimer);
+    let mut tpm = setup_real_crypto_tpm(&mut crypto, &mut storage, &mut timer);
     assert!(!tpm.platform.limited_hierarchies);
 
     assert_eq!(
@@ -241,13 +233,9 @@ fn limited_hierarchies_need_a_platform_firmware() {
 /// that limit.
 #[test]
 fn svn_limit_follows_the_platform_firmware() {
-    let (mut crypto, mut storage, mut timer, mut rng) = (
-        TestCryptoProvider,
-        FakeStorage::default(),
-        FakeTimer,
-        FakeRng::new(),
-    );
-    let mut tpm = setup_real_crypto_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
+    let (mut crypto, mut storage, mut timer) =
+        (common::test_crypto(), FakeStorage::default(), FakeTimer);
+    let mut tpm = setup_real_crypto_tpm(&mut crypto, &mut storage, &mut timer);
     tpm.platform.set_firmware(Firmware {
         svn: REFERENCE_FIRMWARE_SVN,
         max_svn: REFERENCE_FIRMWARE_MAX_SVN,

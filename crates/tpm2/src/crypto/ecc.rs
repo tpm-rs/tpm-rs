@@ -436,7 +436,8 @@ impl<E: Ecc> EccPrivateKey<E> {
         })
     }
 
-    /// Generates a new ECC keypair for `(curve, scheme)` from `rng`.
+    /// Generates a new ECC keypair for `(curve, scheme)` from `rng` with the
+    /// backend's key generation.
     pub fn generate(
         rng: &mut E::Rng,
         curve: TpmEccCurve,

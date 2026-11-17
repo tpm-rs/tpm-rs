@@ -53,7 +53,7 @@ aes_cmac_state!(
 /// AES-CMAC with BoringSSL. BoringSSL is built without Camellia (`OPENSSL_NO_CAMELLIA`), so
 /// Camellia-CMAC falls back to the RustCrypto `cmac` and `camellia` crates (the CMAC states
 /// of `tpm2-crypto-rust`). SM4 is not supported (`!`).
-impl Cmac for BsslCryptoProvider {
+impl<R> Cmac for BsslCryptoProvider<R> {
     type Aes128 = BsslCmacAes128;
     type Aes192 = BsslCmacAes192;
     type Aes256 = BsslCmacAes256;

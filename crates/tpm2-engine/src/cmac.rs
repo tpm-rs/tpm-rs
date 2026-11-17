@@ -191,7 +191,7 @@ mod tests {
     use hex_literal::hex;
 
     #[cfg(feature = "dev_crypto_bssl")]
-    use tpm2_crypto_bssl::BsslCryptoProvider as Provider;
+    type Provider = tpm2_crypto_bssl::BsslCryptoProvider;
     #[cfg(all(feature = "dev_crypto_crux", not(feature = "dev_crypto_bssl")))]
     use tpm2_crypto_crux::CruxCryptoProvider as Provider;
     #[cfg(all(

@@ -1,5 +1,4 @@
 use crate::Platform;
-#[cfg(feature = "reference-rng")]
 use crate::secret_sizes::{PRIMARY_SEED_SIZE, PROOF_SIZE};
 use crate::storage::IndexState;
 use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
@@ -152,37 +151,6 @@ impl<'b, P: Platform> CommandHandler<'b, P> {
         Ok(())
     }
 
-    /// Persists the internal SP800-90A CTR_DRBG state (`go.drbgState`, 76 bytes at offset 36) to non-volatile storage.
-    pub(crate) fn nv_sync_persistent_drbg_state(&mut self) -> Result<(), TpmRc> {
-        self.context
-            .state
-            .nv
-            .index
-            .write_reserved(
-                crate::storage::nv::NvHeader::DRBG_OFFSET,
-                &self.context.state.nv.orderly.drbg_state.to_bytes(),
-            )
-            .map_err(|_| TpmRc::FAILURE)?;
-        Ok(())
-    }
-
-    /// Loads the internal SP800-90A CTR_DRBG state (`go.drbgState`, 76 bytes at offset 36) from non-volatile storage.
-    #[cfg(not(feature = "reference-rng"))]
-    pub(crate) fn nv_load_persistent_drbg_state(&mut self) -> Result<(), TpmRc> {
-        let mut buf = [0u8; 76];
-        if self
-            .context
-            .state
-            .nv
-            .index
-            .read_reserved(crate::storage::nv::NvHeader::DRBG_OFFSET, &mut buf)
-            .is_ok()
-        {
-            self.context.state.nv.orderly.drbg_state = crate::engine::DrbgState::from_bytes(&buf);
-        }
-        Ok(())
-    }
-
     /// Persists the dictionary attack recovery timers (`go.selfHealTimer`, `go.lockoutTimer`, 16 bytes at offset 112) to non-volatile storage.
     pub(crate) fn nv_sync_persistent_da_timers(&mut self) -> Result<(), TpmRc> {
         let mut buf = [0u8; 16];
@@ -293,36 +261,10 @@ impl<'b, P: Platform> CommandHandler<'b, P> {
         // 2. Perform state updates on reset/restart counters
         self.perform_startup_state_transition(kind, prev_orderly_state)?;
 
-        // 3. Restore and reseed or instantiate DRBG state (`CryptRandStartup`)
-        #[cfg(not(feature = "reference-rng"))]
-        {
-            if is_orderly(prev_orderly_state) {
-                self.nv_load_persistent_drbg_state()?;
-            }
-            if is_orderly(prev_orderly_state)
-                && self.context.state.nv.orderly.drbg_state.magic == crate::engine::DRBG_MAGIC
-            {
-                self.context
-                    .state
-                    .nv
-                    .orderly
-                    .drbg_state
-                    .reseed(self.context.platform.rng())?;
-            } else {
-                self.context
-                    .state
-                    .nv
-                    .orderly
-                    .drbg_state
-                    .instantiate(self.context.platform.rng())?;
-            }
-            self.nv_sync_persistent_drbg_state()?;
-        }
-        // With `reference-rng`, as in the reference code: `CryptStartup()` reseeds the DRBG
-        // restored from NV at `_TPM_Init` (whatever the shutdown was) and, on TPM Reset, draws a
-        // new commit nonce; `HierarchyStartup()` then draws nullProof and nullSeed. The DRBG
-        // state is not written to NV here.
-        #[cfg(feature = "reference-rng")]
+        // 3. As in the reference code: `CryptStartup()` reseeds the DRBG restored from NV at
+        // `_TPM_Init` (whatever the shutdown was) or instantiates it (`CryptRandStartup()`) and,
+        // on TPM Reset, draws a new commit nonce; `HierarchyStartup()` then draws nullProof and
+        // nullSeed. The DRBG state is not written to NV here.
         {
             self.context.crypt_rand_startup()?;
             if kind == StartupKind::Reset {
@@ -569,24 +511,9 @@ impl<'b, P: Platform> CommandHandler<'b, P> {
                 // `HierarchyStartup`: nullProof and nullSeed are regenerated on every TPM Reset.
                 // `CryptStartup(SU_RESET)`: a new secret commit nonce is generated and all
                 // outstanding commitments are dropped, so commit values (`r`) are
-                // unpredictable and never repeat across TPM Resets. With `reference-rng`,
-                // these values are drawn after `CryptRandStartup()` instead, in the order of
-                // the reference code (see `Self::startup`).
-                #[cfg(not(feature = "reference-rng"))]
-                {
-                    let mut value = [0u8; 64];
-                    self.context.random_platform(&mut value)?;
-                    self.context.state.nv.reset.null_seed = value;
-                    self.context.state.nv.reset.null_seed_size = 64;
-
-                    self.context.random_platform(&mut value)?;
-                    self.context.state.nv.reset.null_proof = value;
-                    self.context.state.nv.reset.null_proof_size = 64;
-
-                    let mut nonce = [0u8; crate::engine::COMMIT_NONCE_SIZE];
-                    self.context.random_platform(&mut nonce)?;
-                    self.context.state.nv.reset.commit_nonce = nonce;
-                }
+                // unpredictable and never repeat across TPM Resets. These values are drawn
+                // after `CryptRandStartup()`, in the order of the reference code (see
+                // `Self::startup`).
                 self.context.state.nv.reset.commit_counter = 0;
                 self.context.state.nv.reset.commit_array = [0u8; 16];
 

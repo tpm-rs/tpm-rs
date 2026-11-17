@@ -4,13 +4,13 @@
 //!
 //! - state that must be reloaded from NV storage by `_TPM_Init` (a fresh `State` over the
 //!   same NV models a real reboot where RAM is lost), and
-//! - a failing platform RNG (`TPM2_GetRandom` must not panic).
+//! - a failing TPM random number generator (`TPM2_GetRandom` must not panic).
 
 mod common;
 
 use common::FakePlatform;
 use common::{FakeCrypto, FakeRng, FakeStorage, FakeTimer};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::cell::Cell;
 use tpm2::crypto::{CryptoError, Rng};
 use tpm2_engine::TpmEngine;
 
@@ -49,8 +49,8 @@ fn plain_command(cc: u32, params: &[u8]) -> Vec<u8> {
 }
 
 /// Executes `cmd` and returns the response code.
-fn run<R: Rng + Sync>(
-    tpm: &mut TpmEngine<FakePlatform<'_, FakeCrypto, &'_ mut FakeStorage, FakeTimer, R>>,
+fn run<C: tpm2::crypto::Crypto>(
+    tpm: &mut TpmEngine<FakePlatform<'_, C, &'_ mut FakeStorage, FakeTimer>>,
     cmd: &[u8],
 ) -> u32 {
     let mut rsp = [0u8; 4096];
@@ -68,8 +68,8 @@ const TPM_RH_LOCKOUT: u32 = 0x4000_000A;
 const TPM_RH_PLATFORM: u32 = 0x4000_000C;
 
 /// Powers on (`_TPM_Init`) with `gs` and runs `TPM2_Startup(CLEAR)`.
-fn power_on_startup<R: Rng + Sync>(
-    tpm: &mut TpmEngine<FakePlatform<'_, FakeCrypto, &'_ mut FakeStorage, FakeTimer, R>>,
+fn power_on_startup<C: tpm2::crypto::Crypto>(
+    tpm: &mut TpmEngine<FakePlatform<'_, C, &'_ mut FakeStorage, FakeTimer>>,
 ) {
     tpm.reset();
     assert_eq!(run(tpm, &plain_command(TPM_CC_STARTUP, &[0, 0])), 0);
@@ -84,8 +84,7 @@ fn tpm2_startup_missing_nv_loads_for_orderly_counters_and_lockout() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer::new();
-    let mut rng = FakeRng::new();
-    let platform = FakePlatform::new(&mut crypto, &mut timer, &mut rng);
+    let platform = FakePlatform::new(&mut crypto, &mut timer);
     let mut tpm = TpmEngine::new(platform, &mut storage).unwrap();
 
     tpm.init_storage();
@@ -139,18 +138,21 @@ fn tpm2_startup_missing_nv_loads_for_orderly_counters_and_lockout() {
     assert_eq!(tpm.state.nv.persistent.reset_count, reset_count + 1);
 }
 
-/// A platform RNG that can be switched into a failing state.
-///
-/// The switch is shared (`fail`), because the engine borrows the RNG mutably while the test
-/// toggles it.
-struct FlakyRng<'f> {
-    inner: FakeRng,
-    fail: &'f AtomicBool,
+std::thread_local! {
+    /// Whether the [`FlakyRng`]s of this thread fail.
+    static RNG_FAILS: Cell<bool> = const { Cell::new(false) };
 }
 
-impl Rng for FlakyRng<'_> {
+/// A TPM random number generator ([`FakeRng`]) that fails while [`RNG_FAILS`] is set (by the
+/// test, while the engine owns the generator).
+#[derive(Default)]
+struct FlakyRng {
+    inner: FakeRng,
+}
+
+impl Rng for FlakyRng {
     fn fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), CryptoError> {
-        if self.fail.load(Ordering::SeqCst) {
+        if RNG_FAILS.get() {
             return Err(CryptoError::Internal);
         }
         self.inner.fill_bytes(dest)
@@ -162,51 +164,44 @@ impl Rng for FlakyRng<'_> {
     }
 }
 
+/// The fake crypto backend with a [`FlakyRng`].
+struct FlakyCrypto;
+
+impl_fake_crypto!(common, FlakyCrypto, FlakyRng);
+
 /// `TPM2_GetRandom` fails with `TPM_RC_FAILURE` (instead of panicking via `todo!()`) when the
-/// platform RNG fails (findings tpm2-getrandom-stirrandom-unmarshal-panic-and-size-bugs and
+/// TPM's random number generator fails (findings tpm2-getrandom-stirrandom-unmarshal-panic-and-size-bugs and
 /// get-random-and-stir-random-parameter-validation-and-failure-mode-bugs).
 #[test]
-#[cfg_attr(
-    feature = "reference-rng",
-    ignore = "checks the default random sources; `reference-rng` draws from the reference DRBG"
-)]
 fn tpm2_getrandom_stirrandom_unmarshal_panic_and_size_bugs() {
-    let mut crypto = FakeCrypto;
+    let mut crypto = FlakyCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer::new();
-    let fail = AtomicBool::new(false);
-    let mut rng = FlakyRng {
-        inner: FakeRng::new(),
-        fail: &fail,
-    };
-    let platform = FakePlatform::new(&mut crypto, &mut timer, &mut rng);
+    RNG_FAILS.set(false);
+    let platform = FakePlatform::new(&mut crypto, &mut timer);
     let mut tpm = TpmEngine::new(platform, &mut storage).unwrap();
     tpm.init_storage();
     power_on_startup(&mut tpm);
 
     let get_random = plain_command(TPM_CC_GET_RANDOM, &16u16.to_be_bytes());
     assert_eq!(run(&mut tpm, &get_random), 0);
-    fail.store(true, Ordering::SeqCst);
+    RNG_FAILS.set(true);
     assert_eq!(run(&mut tpm, &get_random), 0x101); // TPM_RC_FAILURE
-    fail.store(false, Ordering::SeqCst);
+    RNG_FAILS.set(false);
     assert_eq!(run(&mut tpm, &get_random), 0);
 }
 
-/// Primary Seeds and hierarchy proofs the platform RNG cannot produce at manufacture stay
+/// Primary Seeds and hierarchy proofs the TPM's random number generator cannot produce at manufacture stay
 /// unprovisioned (size 0) and are never used as key material: `TPM2_CreatePrimary` under the
 /// owner, endorsement and platform hierarchies then fails with `TPM_RC_FAILURE`, while the
 /// null hierarchy (whose seed is drawn at TPM Reset) is unaffected.
 #[test]
 fn rng_failure_at_manufacture_leaves_seeds_and_proofs_unprovisioned() {
-    let mut crypto = FakeCrypto;
+    let mut crypto = FlakyCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer::new();
-    let fail = AtomicBool::new(true);
-    let mut rng = FlakyRng {
-        inner: FakeRng::new(),
-        fail: &fail,
-    };
-    let platform = FakePlatform::new(&mut crypto, &mut timer, &mut rng);
+    RNG_FAILS.set(true);
+    let platform = FakePlatform::new(&mut crypto, &mut timer);
     let mut tpm = TpmEngine::new(platform, &mut storage).unwrap();
     tpm.init_storage();
     for size in [
@@ -231,7 +226,7 @@ fn rng_failure_at_manufacture_leaves_seeds_and_proofs_unprovisioned() {
         [[0u8; 64]; 6]
     );
 
-    fail.store(false, Ordering::SeqCst);
+    RNG_FAILS.set(false);
     power_on_startup(&mut tpm);
 
     // inSensitive (empty) and a KEYEDHASH HMAC-SHA256 signing template.

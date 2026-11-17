@@ -13,12 +13,6 @@ categories.workspace = true
 [dependencies]
 tpm2 = { workspace = true }
 anyhow = { version = "1.0.102", optional = true }
-# `reference-rng`: thread-local storage (`pthread_*`) for the linked C code's state.
-libc = { version = "0.2", default-features = false, optional = true }
-
-[build-dependencies]
-# `reference-rng`: Rust types and prototypes of the linked C reference code.
-bindgen = { version = "0.72", optional = true }
 
 [dev-dependencies]
 hex-literal = { workspace = true }
@@ -38,13 +32,6 @@ dev_crypto_bssl = []
 # Enables `PlatformConnection`, which uses `std::io` and `anyhow`. The engine itself stays
 # `no_std` without it.
 std = ["dep:anyhow"]
-# Reproduce the random-number generation of the C reference TPMs (`tcgtpm`,
-# `ibmswtpm2`) exactly by linking their original, unmodified C code: their CTR-DRBG
-# and every algorithm that consumes its output (see `src/reference_rng/mod.rs`).
-# `build.rs` clones and compiles `tcgtpm` and generates its bindings (needs git, a
-# C compiler, binutils, libclang and OpenSSL's `libcrypto.a`); the crate then uses
-# `unsafe` (confined to `reference_rng::ffi`) and libc. For differential testing.
-reference-rng = ["dep:libc", "dep:bindgen"]
 
 # Algorithms and ECC curves beyond the default set of `tpm2` (all disabled by
 # default), each forwarding to the `tpm2` feature of the same name; enabled e.g.

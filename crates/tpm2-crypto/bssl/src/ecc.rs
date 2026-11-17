@@ -8,9 +8,9 @@ use crate::bssl::{
     BsslError, EcGroup, cleanse, ec_generate_key, ec_point_multiply, ec_point_multiply_generator,
     ec_validate_point, ecdsa_sign, ecdsa_verify,
 };
-use crate::{BsslCryptoProvider, BsslRng, output, verified};
-use tpm2::crypto::CryptoError;
+use crate::{BsslCryptoProvider, BsslRng, output, verified, with_rand_core};
 use tpm2::crypto::backend::{Ecc, EccCurve, PrivateKey};
+use tpm2::crypto::{CryptoError, Random, Rng};
 
 /// A curve of BoringSSL ([`EcGroup`]), selecting the curve of [`BsslEcc`] and
 /// [`BsslEccPublicKey`].
@@ -61,19 +61,21 @@ impl<G, const POINT: usize> BsslEccPublicKey<G, POINT> {
 }
 
 /// A validated private key of the BoringSSL curve `G` with `COORD`-byte scalars and coordinates
-/// (`POINT = 2 * COORD`), for `BsslCryptoProvider`. The secret scalar is cleansed on drop.
-pub struct BsslEcc<G, const COORD: usize, const POINT: usize> {
+/// (`POINT = 2 * COORD`), for `BsslCryptoProvider<R>` (key generation draws from the RNG `R`).
+/// The secret scalar is cleansed on drop.
+pub struct BsslEcc<G, const COORD: usize, const POINT: usize, R = BsslRng> {
     d: [u8; COORD],
     public: BsslEccPublicKey<G, POINT>,
+    rng: PhantomData<fn() -> R>,
 }
 
-impl<G, const COORD: usize, const POINT: usize> Drop for BsslEcc<G, COORD, POINT> {
+impl<G, const COORD: usize, const POINT: usize, R> Drop for BsslEcc<G, COORD, POINT, R> {
     fn drop(&mut self) {
         cleanse(&mut self.d);
     }
 }
 
-impl<G: BsslCurve, const COORD: usize, const POINT: usize> BsslEcc<G, COORD, POINT> {
+impl<G: BsslCurve, const COORD: usize, const POINT: usize, R> BsslEcc<G, COORD, POINT, R> {
     /// Computes `[k]G` as an encoded point, or `Ok(None)` if `k` is not in `[1, n - 1]`.
     fn mul_base(k: &[u8; COORD]) -> Result<Option<[u8; POINT]>, CryptoError> {
         let mut point = [0u8; POINT];
@@ -82,22 +84,25 @@ impl<G: BsslCurve, const COORD: usize, const POINT: usize> BsslEcc<G, COORD, POI
     }
 }
 
-impl<G: BsslCurve, const COORD: usize, const POINT: usize> PrivateKey<POINT, COORD, BsslRng>
-    for BsslEcc<G, COORD, POINT>
+impl<G: BsslCurve, const COORD: usize, const POINT: usize, R: Rng> PrivateKey<POINT, COORD, R>
+    for BsslEcc<G, COORD, POINT, R>
 {
     type PublicKey = BsslEccPublicKey<G, POINT>;
 
     /// Draws the secret scalar from `rng` (by rejection sampling), so that the key is
-    /// deterministic for the RNG of `from_seed`.
-    fn generate(rng: &mut BsslRng, _: ()) -> Result<Self, CryptoError> {
+    /// deterministic for a deterministic RNG (e.g. the RNG of `from_seed`).
+    fn generate(rng: &mut R, _: ()) -> Result<Self, CryptoError> {
         let mut key = Self {
             d: [0u8; COORD],
             public: BsslEccPublicKey {
                 point: [0u8; POINT],
                 curve: PhantomData,
             },
+            rng: PhantomData,
         };
-        ec_generate_key(G::GROUP, rng, &mut key.public.point, &mut key.d)?;
+        with_rand_core(rng, |rng| {
+            ec_generate_key(G::GROUP, rng, &mut key.public.point, &mut key.d)
+        })?;
         Ok(key)
     }
 
@@ -106,6 +111,7 @@ impl<G: BsslCurve, const COORD: usize, const POINT: usize> PrivateKey<POINT, COO
             Some(point) if point == public.point => Ok(Some(Self {
                 d: *private,
                 public,
+                rng: PhantomData,
             })),
             _ => Ok(None),
         }
@@ -140,8 +146,8 @@ impl<G: BsslCurve, const COORD: usize, const POINT: usize> PrivateKey<POINT, COO
 /// ECDSA, ECDH and point multiplications with BoringSSL. SM2 signatures are not supported
 /// (the defaults, `Err(CryptoError::Unsupported)`). The ECDSA nonce comes from BoringSSL's RNG
 /// (the `rng` argument is unused).
-impl<G: BsslCurve, const COORD: usize, const POINT: usize> EccCurve<COORD, POINT, BsslRng>
-    for BsslEcc<G, COORD, POINT>
+impl<G: BsslCurve, const COORD: usize, const POINT: usize, R: Rng> EccCurve<COORD, POINT, R>
+    for BsslEcc<G, COORD, POINT, R>
 {
     /// The cofactor of every BoringSSL curve is 1, so `Z = [d]Q`.
     fn ecdh(
@@ -156,7 +162,7 @@ impl<G: BsslCurve, const COORD: usize, const POINT: usize> EccCurve<COORD, POINT
 
     fn sign(
         &self,
-        _rng: &mut BsslRng,
+        _rng: &mut R,
         digest: &[u8],
         out_r: &mut [u8; COORD],
         out_s: &mut [u8; COORD],
@@ -205,22 +211,22 @@ impl<G: BsslCurve, const COORD: usize, const POINT: usize> EccCurve<COORD, POINT
 }
 
 /// NIST P-224 keys for `BsslCryptoProvider`.
-pub type BsslEccNistP224 = BsslEcc<NistP224Group, 28, 56>;
+pub type BsslEccNistP224<R = BsslRng> = BsslEcc<NistP224Group, 28, 56, R>;
 /// NIST P-256 keys for `BsslCryptoProvider`.
-pub type BsslEccNistP256 = BsslEcc<NistP256Group, 32, 64>;
+pub type BsslEccNistP256<R = BsslRng> = BsslEcc<NistP256Group, 32, 64, R>;
 /// NIST P-384 keys for `BsslCryptoProvider`.
-pub type BsslEccNistP384 = BsslEcc<NistP384Group, 48, 96>;
+pub type BsslEccNistP384<R = BsslRng> = BsslEcc<NistP384Group, 48, 96, R>;
 /// NIST P-521 keys for `BsslCryptoProvider`.
-pub type BsslEccNistP521 = BsslEcc<NistP521Group, 66, 132>;
+pub type BsslEccNistP521<R = BsslRng> = BsslEcc<NistP521Group, 66, 132, R>;
 /// BN P-256 keys for `BsslCryptoProvider`.
-pub type BsslEccBnP256 = BsslEcc<BnP256Group, 32, 64>;
+pub type BsslEccBnP256<R = BsslRng> = BsslEcc<BnP256Group, 32, 64, R>;
 
-impl Ecc for BsslCryptoProvider {
-    type NistP224 = BsslEccNistP224;
-    type NistP256 = BsslEccNistP256;
-    type NistP384 = BsslEccNistP384;
-    type NistP521 = BsslEccNistP521;
-    type BNP256 = BsslEccBnP256;
+impl<R: Rng + Random<Rng = R>> Ecc for BsslCryptoProvider<R> {
+    type NistP224 = BsslEccNistP224<R>;
+    type NistP256 = BsslEccNistP256<R>;
+    type NistP384 = BsslEccNistP384<R>;
+    type NistP521 = BsslEccNistP521<R>;
+    type BNP256 = BsslEccBnP256<R>;
     // NIST P-192, BN P-638 and SM2 P-256: the generic constant-time short-Weierstrass
     // arithmetic of `tpm2-crypto-weierstrass` (which also implements SM2 signatures).
     type NistP192 = tpm2_crypto_weierstrass::NistP192;

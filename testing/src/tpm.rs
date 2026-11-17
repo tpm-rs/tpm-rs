@@ -56,7 +56,9 @@ use std::time::Duration;
 
 use tpm2::Connection;
 use tpm2::commands::Command;
-use tpm2_simulator::{NO_STREAM, PlatformConnection, Simulator, create_reference_simulator};
+use tpm2_simulator::{
+    NO_STREAM, PlatformConnection, ReferenceCryptoProvider, Simulator, create_reference_simulator,
+};
 
 pub use tpm2_simulator::{ExecuteError, SimulatorPlatformSignal};
 
@@ -128,7 +130,7 @@ pub fn sleep(duration: Duration) {
 /// clock is per thread).
 pub struct Tpm {
     /// The `tpm-rs` simulator, whose responses the tests see.
-    sim: Simulator<'static>,
+    sim: Simulator<'static, ReferenceCryptoProvider>,
     /// The seed `sim` and the references were built from.
     seed: ReferenceSeed,
     /// The value of this thread's [`sleep`] clock last applied to the TPMs.

@@ -1,5 +1,3 @@
-#[cfg(not(feature = "reference-rng"))]
-use super::KeyDerivationArgs;
 use super::rsa_sensitive::RSA_PRIVATE_SIZE;
 use super::{ParentSchemeInfo, ResolvedParentInfo, TransientObject};
 use crate::Platform;
@@ -120,29 +118,37 @@ impl<'b, P: Platform> CommandHandler<'b, P> {
                 &mut obj_seed,
             )?;
             // The FIPS pairwise test of a signing ECC key draws from the TPM's DRBG.
-            #[cfg(feature = "reference-rng")]
-            if let crate::owned::OwnedPublicParmsAndId::Ecc(parms, _) =
-                in_public_struct.parms_and_id
+            if let crate::owned::OwnedPublicParmsAndId::Ecc(parms, point) =
+                &in_public_struct.parms_and_id
                 && in_public_struct
                     .object_attributes
                     .contains(TpmaObject::SIGN_ENCRYPT)
             {
-                self.reference_ecc_pairwise_test(parms.curve_id, &actual_private_key[..lens.1])?;
+                let curve = parms.curve_id;
+                let size = curve.key_bytes();
+                let mut q = [0u8; 2 * tpm2::TpmEccCurve::MAX_ECC_KEY_BYTES];
+                for (half, coordinate) in q[..2 * size]
+                    .chunks_mut(size)
+                    .zip([point.x.get_buffer(), point.y.get_buffer()])
+                {
+                    let offset = size.checked_sub(coordinate.len()).ok_or(TpmRc::FAILURE)?;
+                    half[offset..].copy_from_slice(coordinate);
+                }
+                self.ecc_pairwise_test(curve, &actual_private_key[..lens.1], &q[..2 * size])?;
             }
             lens
         } else {
-            // 4-5. With `reference-rng`, as the reference's `CryptCreateObject()`: from the TPM's
-            // DRBG, or for a Primary Object from the DRBG seeded with the hierarchy's seed.
-            #[cfg(feature = "reference-rng")]
+            // 4-5. As the reference's `CryptCreateObject()`: from the TPM's DRBG, or for a
+            // Primary Object from the DRBG seeded with the hierarchy's seed.
             {
                 let template = in_public_struct;
-                let primary = is_primary.then(|| super::reference_ops::PrimaryCreation {
+                let primary = is_primary.then(|| super::random_ops::PrimaryCreation {
                     seed: &parent_seed_val[..parent_info.seed_len],
                     // C `HierarchyNormalizeHandle(in->parentHandle) == TPM_RH_ENDORSEMENT`.
                     endorsement: crate::hierarchy::normalize(parent_handle)
                         == Handle::RH_ENDORSEMENT.0,
                 });
-                self.reference_create_object(
+                self.create_object(
                     primary,
                     &template.as_tpmt(),
                     in_sensitive_struct.data.get_buffer(),
@@ -150,52 +156,6 @@ impl<'b, P: Platform> CommandHandler<'b, P> {
                     &mut actual_private_key,
                     &mut obj_seed,
                 )?
-            }
-            #[cfg(not(feature = "reference-rng"))]
-            {
-                // 4. Derive/Generate the new object seed
-                let obj_seed_len = self.derive_create_loaded_seed(
-                    is_primary,
-                    is_derived,
-                    &parent_seed_val[..parent_info.seed_len],
-                    parent_info.seed_len,
-                    &in_public_struct.as_tpmt(),
-                    &in_sensitive_struct,
-                    template_derive,
-                    parent_info.name_alg,
-                    &mut obj_seed,
-                )?;
-
-                let gen_seed_arg = if is_primary {
-                    Some(&obj_seed[..obj_seed_len])
-                } else {
-                    None
-                };
-
-                // 5. Generate/Derive the key pairs and the unique identifier
-                let get_random_fallback = !is_primary
-                    && (in_public_struct.object_attributes.0 & TpmaObject::SENSITIVE_DATA_ORIGIN.0)
-                        != 0;
-                let fallback_sensitive_data = if (in_public_struct.object_attributes.0
-                    & TpmaObject::SENSITIVE_DATA_ORIGIN.0)
-                    == 0
-                {
-                    Some(in_sensitive_struct.data.get_buffer())
-                } else {
-                    None
-                };
-                let actual_private_key_len = self.generate_key_and_unique(
-                    name_alg,
-                    &mut in_public_struct.parms_and_id,
-                    KeyDerivationArgs {
-                        gen_seed: gen_seed_arg,
-                        obj_seed: &obj_seed[..obj_seed_len],
-                        get_random_fallback,
-                        fallback_sensitive_data,
-                    },
-                    &mut actual_private_key,
-                )?;
-                (obj_seed_len, actual_private_key_len)
             }
         };
 
@@ -438,107 +398,6 @@ impl<'b, P: Platform> CommandHandler<'b, P> {
             _ => {}
         }
         Ok((seed_len, key_len))
-    }
-
-    /// Helper function to derive or generate the random seed for the newly created object.
-    #[allow(clippy::too_many_arguments)]
-    #[cfg(not(feature = "reference-rng"))]
-    pub(crate) fn derive_create_loaded_seed(
-        &self,
-        is_primary: bool,
-        is_derived: bool,
-        parent_seed_val: &[u8],
-        parent_seed_len: usize,
-        in_public_struct: &TpmtPublic,
-        in_sensitive_struct: &TpmsSensitiveCreate,
-        template_derive: Option<TpmsDerive>,
-        parent_name_alg: TpmiAlgHash,
-        obj_seed: &mut [u8; 64],
-    ) -> Result<usize, TpmRc> {
-        // The object's seedValue is sized to the object's own nameAlg (C `CryptCreateObject`);
-        // the parent's nameAlg (or the derivation parent's XOR hash) only keys the KDF.
-        let digest_size = in_public_struct
-            .name_alg
-            .ok_or(TpmRc::HASH.with(Position::parameter(2)))?
-            .digest_size();
-        let total_bits = (digest_size * 8) as u32;
-
-        if is_primary {
-            self.derive_primary_object_seed(
-                &parent_seed_val[..parent_seed_len],
-                in_public_struct,
-                in_sensitive_struct.data.get_buffer(),
-                obj_seed,
-            )
-        } else if is_derived {
-            let mut label_context = template_derive.ok_or(TpmRc::FAILURE)?;
-            let data_buf = in_sensitive_struct.data.get_buffer();
-            if !data_buf.is_empty() {
-                let mut slice = data_buf;
-                let sensitive_derive = TpmsDerive::unmarshal(&mut slice).map_err(|e| e.to_rc())?;
-                if label_context.label.get_size() == 0 {
-                    label_context.label = sensitive_derive.label;
-                }
-                if label_context.context.get_size() == 0 {
-                    label_context.context = sensitive_derive.context;
-                }
-            }
-            kdfa_bits(
-                &self.crypto(),
-                parent_name_alg,
-                &parent_seed_val[..parent_seed_len],
-                label_context.label.get_buffer(),
-                label_context.context.get_buffer(),
-                &[],
-                total_bits,
-                obj_seed,
-            )
-            .map_err(|_| TpmRc::FAILURE)?;
-            Ok(digest_size)
-        } else {
-            let seed_len = digest_size;
-            <P::Crypto as tpm2::crypto::Random>::rand_bytes(&mut obj_seed[..digest_size])
-                .map_err(|_| TpmRc::FAILURE)?;
-            Ok(seed_len)
-        }
-    }
-
-    /// Derives the seed from which a Primary Object's key material and `seedValue` are
-    /// generated.
-    ///
-    /// Mirrors C `CreatePrimary.c` / `CreateLoaded.c`, which seed the creation DRBG with the
-    /// hierarchy primary seed, the label `"Primary Object Creation"`, the Name of the input
-    /// template (`PublicMarshalAndComputeName(publicArea)`, binding nameAlg, attributes,
-    /// authPolicy, parameters and unique) and `inSensitive.data`. Two templates that differ in
-    /// any field therefore yield unrelated keys. Returns the seed length (the nameAlg digest
-    /// size).
-    #[cfg(not(feature = "reference-rng"))]
-    pub(crate) fn derive_primary_object_seed(
-        &self,
-        primary_seed: &[u8],
-        template: &TpmtPublic,
-        sensitive_data: &[u8],
-        obj_seed: &mut [u8; 64],
-    ) -> Result<usize, TpmRc> {
-        let name_alg = template
-            .name_alg
-            .ok_or(TpmRc::HASH.with(Position::parameter(2)))?;
-        let mut pub_buf = [0u8; TpmtPublic::MAX_SIZE];
-        let pub_len = template.marshal(&mut pub_buf);
-        let template_name = self.compute_name(Some(name_alg), &pub_buf[..pub_len])?;
-        let digest_size = name_alg.digest_size();
-        kdfa_bits(
-            &self.crypto(),
-            name_alg,
-            primary_seed,
-            b"Primary Object Creation",
-            template_name.get_buffer(),
-            sensitive_data,
-            (digest_size * 8) as u32,
-            obj_seed,
-        )
-        .map_err(|_| TpmRc::FAILURE)?;
-        Ok(digest_size)
     }
 
     /// Returns the `seedValue` that is kept in an object's sensitive area.
@@ -1273,7 +1132,7 @@ impl<'b, P: Platform> CommandHandler<'b, P> {
     /// Encrypts the sensitive area of the target object using storage seed and CFB mode,
     /// computes inner/outer integrity MAC hashes, and formats the output private buffer.
     ///
-    /// Takes `&mut self` because the IV comes from the platform RNG ([`Rng::fill_bytes`]).
+    /// Takes `&mut self` because the IV comes from the TPM's DRBG.
     pub(crate) fn encrypt_sensitive_area(
         &mut self,
         tpmt_sensitive: &TpmtSensitive<'_>,
@@ -1319,7 +1178,7 @@ impl<'b, P: Platform> CommandHandler<'b, P> {
         .map_err(|_| TpmRc::FAILURE)?;
 
         let mut iv = [0u8; 16];
-        self.context.random_platform(&mut iv)?;
+        self.context.crypt_random_generate(&mut iv)?;
         let orig_iv = iv;
 
         let sym_alg = crate::handler::protection_cfb(sym_alg);
@@ -1375,7 +1234,7 @@ impl<'b, P: Platform> CommandHandler<'b, P> {
     /// Helper function to build the sensitive struct and encrypt it into out_private.
     ///
     /// Takes `&mut self` because [`Self::encrypt_sensitive_area`] draws the IV from the
-    /// platform RNG.
+    /// TPM's DRBG.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn create_and_encrypt_private_area<'c>(
         &mut self,

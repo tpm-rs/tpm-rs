@@ -5,7 +5,7 @@ extern crate alloc;
 mod common;
 
 use common::FakePlatform;
-use common::{FakeRng, FakeStorage, FakeTimer};
+use common::{FakeStorage, FakeTimer};
 use tpm2::commands::{Command, FlushContext};
 use tpm2::{Handle, Marshal};
 use tpm2::{TpmiAlgHash, TpmsAuthCommand};
@@ -21,9 +21,8 @@ fn setup_tpm<'a>(
     crypto: &'a mut StressTestCrypto,
     storage: &'a mut FakeStorage,
     timer: &'a mut FakeTimer,
-    rng: &'a mut FakeRng,
-) -> TpmEngine<FakePlatform<'a, StressTestCrypto, &'a mut FakeStorage, FakeTimer, FakeRng>> {
-    let platform = FakePlatform::new(crypto, timer, rng);
+) -> TpmEngine<FakePlatform<'a, StressTestCrypto, &'a mut FakeStorage, FakeTimer>> {
+    let platform = FakePlatform::new(crypto, timer);
     let mut tpm = TpmEngine::new(platform, storage).unwrap();
     tpm.init_storage();
     tpm.state.nv_available = true;
@@ -38,9 +37,7 @@ fn setup_tpm<'a>(
 }
 
 fn execute_tpm_command_with_auths<C: Command>(
-    tpm: &mut TpmEngine<
-        FakePlatform<'_, StressTestCrypto, &'_ mut FakeStorage, FakeTimer, FakeRng>,
-    >,
+    tpm: &mut TpmEngine<FakePlatform<'_, StressTestCrypto, &'_ mut FakeStorage, FakeTimer>>,
     cmd: &C,
     auths: &[TpmsAuthCommand],
 ) -> Result<(), u32>
@@ -103,8 +100,7 @@ fn test_flush_exclusive_audit_session_clears_exclusivity() {
     let mut crypto = StressTestCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let mut rng = FakeRng::new();
-    let mut tpm = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
+    let mut tpm = setup_tpm(&mut crypto, &mut storage, &mut timer);
 
     let session_handle = 0x02000001;
 

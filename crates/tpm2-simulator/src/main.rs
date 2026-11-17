@@ -9,8 +9,6 @@ use std::sync::Mutex;
 use std::thread;
 use tpm2_simulator::{Args, PlatformConnection, Simulator, SimulatorPlatformSignal};
 
-use tpm2_platform_linux::LinuxRng;
-
 /// Process a single command server client connection.
 pub fn handle_client(simulator: &Mutex<Simulator>, mut stream: TcpStream) {
     loop {
@@ -105,15 +103,13 @@ fn main() {
     println!("TPM Command Server listening on port {}", tpm_port);
     println!("Platform Server listening on port {}", plat_port);
 
-    let mut plat_rng: LinuxRng = LinuxRng::new();
     let mut crypto: ::tpm2_platform_linux::PlatformCryptoProvider =
-        ::tpm2_platform_linux::PlatformCryptoProvider;
+        ::tpm2_platform_linux::platform_crypto_provider();
     let mut storage: ::tpm2_engine::storage::ram_storage_mock::RamStorageMock<
         { ::tpm2_simulator::NV_STORAGE_SIZE },
     > = ::tpm2_engine::storage::ram_storage_mock::RamStorageMock::new();
     let mut timer: ::tpm2_platform_linux::LinuxTimer = ::tpm2_platform_linux::LinuxTimer::new();
-    let sim =
-        Mutex::new(Simulator::new(&mut crypto, &mut storage, &mut timer, &mut plat_rng).unwrap());
+    let sim = Mutex::new(Simulator::new(&mut crypto, &mut storage, &mut timer).unwrap());
 
     thread::scope(|s| {
         s.spawn(|| {

@@ -125,7 +125,7 @@ impl<'b, P: Platform> CommandHandler<'b, P> {
         }
         let mut nonce_tpm_bytes = [0u8; 64];
         self.context
-            .random_platform(&mut nonce_tpm_bytes[..nonce_caller_len])?;
+            .crypt_random_generate(&mut nonce_tpm_bytes[..nonce_caller_len])?;
         let nonce_tpm = Tpm2bNonce::from_bytes(&nonce_tpm_bytes[..nonce_caller_len])
             .map_err(|_| TpmRc::FAILURE)?;
 

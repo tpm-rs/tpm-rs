@@ -5,8 +5,6 @@ use crate::{handler::CommandHandler, owned::OwnedPublicParmsAndId, req_resp::Req
 use tpm2::TpmCc;
 use tpm2::commands::ECDHKeyGen;
 use tpm2::commands::responses;
-#[cfg(not(feature = "reference-rng"))]
-use tpm2::crypto::Crypto;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{Tpm2bEccParameter, TpmsEccPoint};
 
@@ -74,23 +72,11 @@ impl<'b, P: Platform> CommandHandler<'b, P> {
 
         let mut de_buf = [0u8; 128];
         let mut qe_buf = [0u8; 256];
-        // `CryptEccNewKeyPair()`: with `reference-rng`, from the TPM's DRBG as in the reference.
-        #[cfg(feature = "reference-rng")]
+        // `CryptEccNewKeyPair()`: from the TPM's DRBG (after the ECDH self test).
         let (pub_len, priv_len) = {
-            let len = self.reference_ecc_new_key_pair(curve, &mut de_buf, &mut qe_buf)?;
+            let len = self.ecc_new_key_pair(curve, &mut de_buf, &mut qe_buf)?;
             (2 * len, len)
         };
-        // (`CryptEccNewKeyPair()` tests ECDH before it generates the key.)
-        #[cfg(not(feature = "reference-rng"))]
-        self.do_self_test(tpm2::Alg::ECDH)?;
-        #[cfg(not(feature = "reference-rng"))]
-        let (pub_len, priv_len) = generate_ecc_key_pair::<P::Crypto>(
-            &mut self.context.crypto_rng,
-            curve,
-            &mut de_buf,
-            &mut qe_buf,
-        )
-        .map_err(|_| TpmRc::FAILURE)?;
 
         if qs_unusable {
             return Err(TpmRc::KEY.with(Position::handle(1)));
@@ -129,31 +115,4 @@ impl<'b, P: Platform> CommandHandler<'b, P> {
         self.write_response_message(response, &rsp, &session_responses[..num_sessions])?;
         Ok(())
     }
-}
-
-/// Generates an ECC key pair on `curve` with the crypto backend ([`EccPrivateKey::generate`]),
-/// writing the private scalar `d` (the curve size) to `d_out` and the public point `x || y` (each
-/// coordinate padded to the curve size) to `q_out`. Returns `(q length, d length)`.
-#[cfg(not(feature = "reference-rng"))]
-pub(crate) fn generate_ecc_key_pair<C: Crypto>(
-    rng: &mut C::Rng,
-    curve: tpm2::TpmEccCurve,
-    d_out: &mut [u8],
-    q_out: &mut [u8],
-) -> Result<(usize, usize), tpm2::crypto::CryptoError> {
-    use tpm2::crypto::{CryptoError, EccPrivateKey, MAX_ECC_COORD_BYTES};
-    let key = EccPrivateKey::<C>::generate(rng, curve, None)?;
-    let size = curve.key_bytes();
-    let (mut x, mut y) = ([0u8; MAX_ECC_COORD_BYTES], [0u8; MAX_ECC_COORD_BYTES]);
-    let q = key.point(&mut x, &mut y)?;
-    let q_out = q_out.get_mut(..2 * size).ok_or(CryptoError::Internal)?;
-    q_out.fill(0);
-    for (half, coordinate) in q_out.chunks_mut(size).zip([q.x.as_slice(), q.y.as_slice()]) {
-        let offset = size
-            .checked_sub(coordinate.len())
-            .ok_or(CryptoError::Internal)?;
-        half[offset..].copy_from_slice(coordinate);
-    }
-    let d_len = key.scalar(d_out)?.as_slice().len();
-    Ok((2 * size, d_len))
 }

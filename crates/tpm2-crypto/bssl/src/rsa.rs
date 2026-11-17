@@ -1,28 +1,33 @@
 //! RSA 1024-4096 with BoringSSL: key generation and import, RSASSA-PKCS1-v1_5, RSASSA-PSS,
 //! RSAES-PKCS1-v1_5, RSAES-OAEP and raw RSA (`TPM_ALG_NULL`).
 
+use core::marker::PhantomData;
+
 use crate::bssl::{BsslError, RsaPrivate, RsaPublic};
-use crate::{BsslCryptoProvider, BsslRng, output, verified};
+use crate::{BsslCryptoProvider, BsslRng, output, verified, with_rand_core};
 use tpm2::TpmiAlgHash;
 use tpm2::TpmtHa;
-use tpm2::crypto::CryptoError;
 use tpm2::crypto::backend::{PrivateKey, Rsa, RsaKey};
+use tpm2::crypto::{CryptoError, Random, Rng};
 
 /// A validated RSA public key with a `MOD`-byte modulus for `BsslCryptoProvider`.
 pub struct BsslRsaPublicKey<const MOD: usize>(RsaPublic);
 
 /// A validated RSA private key with a `MOD`-byte modulus and `PRIME`-byte prime factors for
-/// `BsslCryptoProvider` (a BoringSSL `RSA` with all its CRT components).
-pub struct BsslRsa<const MOD: usize, const PRIME: usize> {
+/// `BsslCryptoProvider<R>` (a BoringSSL `RSA` with all its CRT components), whose randomness
+/// comes from the RNG `R`.
+pub struct BsslRsa<const MOD: usize, const PRIME: usize, R = BsslRng> {
     public: BsslRsaPublicKey<MOD>,
     private: RsaPrivate,
+    rng: PhantomData<fn() -> R>,
 }
 
-impl<const MOD: usize, const PRIME: usize> BsslRsa<MOD, PRIME> {
+impl<const MOD: usize, const PRIME: usize, R> BsslRsa<MOD, PRIME, R> {
     fn new(private: RsaPrivate) -> Result<Self, CryptoError> {
         Ok(Self {
             public: BsslRsaPublicKey(private.public()?),
             private,
+            rng: PhantomData,
         })
     }
 }
@@ -34,20 +39,23 @@ fn internal(err: BsslError) -> CryptoError {
     err.into()
 }
 
-impl<const MOD: usize, const PRIME: usize> PrivateKey<MOD, PRIME, BsslRng, u32>
-    for BsslRsa<MOD, PRIME>
+impl<const MOD: usize, const PRIME: usize, R: Rng> PrivateKey<MOD, PRIME, R, u32>
+    for BsslRsa<MOD, PRIME, R>
 {
     type PublicKey = BsslRsaPublicKey<MOD>;
 
-    /// With the RNG of `from_entropy`, generates the key with BoringSSL's
-    /// `RSA_generate_key_ex`; with the deterministic RNG of `from_seed`, draws the prime
-    /// candidates from it, so that the key is deterministic.
-    fn generate(rng: &mut BsslRng, exponent: u32) -> Result<Self, CryptoError> {
-        let private = if rng.is_seeded() {
-            RsaPrivate::generate_from_rng(MOD * 8, exponent, rng)
+    /// With the backend's system RNG ([`Rng::is_system_rng`], the RNG of
+    /// [`BsslRng`]'s `from_entropy`), generates the key with BoringSSL's
+    /// `RSA_generate_key_ex`; with any other RNG (e.g. the deterministic RNG of `from_seed`),
+    /// draws the prime candidates from it, so that the key depends only on its output.
+    fn generate(rng: &mut R, exponent: u32) -> Result<Self, CryptoError> {
+        let private = if rng.is_system_rng() {
+            RsaPrivate::generate(MOD * 8, exponent)?
         } else {
-            RsaPrivate::generate(MOD * 8, exponent)
-        }?;
+            with_rand_core(rng, |rng| {
+                RsaPrivate::generate_from_rng(MOD * 8, exponent, rng)
+            })?
+        };
         Self::new(private)
     }
 
@@ -62,7 +70,11 @@ impl<const MOD: usize, const PRIME: usize> PrivateKey<MOD, PRIME, BsslRng, u32>
         else {
             return Ok(None);
         };
-        Ok(Some(Self { public, private }))
+        Ok(Some(Self {
+            public,
+            private,
+            rng: PhantomData,
+        }))
     }
 
     fn store(&self, out: &mut [u8; PRIME]) -> Result<(), CryptoError> {
@@ -97,7 +109,9 @@ fn pss_salt_len(mod_len: usize, digest_len: usize) -> usize {
 
 /// RSA with BoringSSL. The `rng` arguments are unused: BoringSSL blinds private key operations
 /// and draws padding randomness from its own RNG.
-impl<const MOD: usize, const PRIME: usize> RsaKey<MOD, PRIME, BsslRng> for BsslRsa<MOD, PRIME> {
+impl<const MOD: usize, const PRIME: usize, R: Rng> RsaKey<MOD, PRIME, R>
+    for BsslRsa<MOD, PRIME, R>
+{
     fn exponent(public: &Self::PublicKey) -> u32 {
         public.0.exponent()
     }
@@ -112,7 +126,7 @@ impl<const MOD: usize, const PRIME: usize> RsaKey<MOD, PRIME, BsslRng> for BsslR
 
     fn raw_decrypt(
         &self,
-        _rng: &mut BsslRng,
+        _rng: &mut R,
         c: &[u8; MOD],
         out: &mut [u8; MOD],
     ) -> Result<Option<()>, CryptoError> {
@@ -121,7 +135,7 @@ impl<const MOD: usize, const PRIME: usize> RsaKey<MOD, PRIME, BsslRng> for BsslR
 
     fn oaep_encrypt(
         public: &Self::PublicKey,
-        _rng: &mut BsslRng,
+        _rng: &mut R,
         hash: TpmiAlgHash,
         label: &[u8],
         m: &[u8],
@@ -132,7 +146,7 @@ impl<const MOD: usize, const PRIME: usize> RsaKey<MOD, PRIME, BsslRng> for BsslR
 
     fn oaep_decrypt(
         &self,
-        _rng: &mut BsslRng,
+        _rng: &mut R,
         hash: TpmiAlgHash,
         label: &[u8],
         c: &[u8; MOD],
@@ -143,7 +157,7 @@ impl<const MOD: usize, const PRIME: usize> RsaKey<MOD, PRIME, BsslRng> for BsslR
 
     fn rsaes_encrypt(
         public: &Self::PublicKey,
-        _rng: &mut BsslRng,
+        _rng: &mut R,
         m: &[u8],
         out: &mut [u8; MOD],
     ) -> Result<Option<()>, CryptoError> {
@@ -152,7 +166,7 @@ impl<const MOD: usize, const PRIME: usize> RsaKey<MOD, PRIME, BsslRng> for BsslR
 
     fn rsaes_decrypt(
         &self,
-        _rng: &mut BsslRng,
+        _rng: &mut R,
         c: &[u8; MOD],
         out: &mut [u8; MOD],
     ) -> Result<Option<usize>, CryptoError> {
@@ -161,7 +175,7 @@ impl<const MOD: usize, const PRIME: usize> RsaKey<MOD, PRIME, BsslRng> for BsslR
 
     fn rsassa_sign(
         &self,
-        _rng: &mut BsslRng,
+        _rng: &mut R,
         digest: TpmtHa<'_>,
         out: &mut [u8; MOD],
     ) -> Result<(), CryptoError> {
@@ -184,7 +198,7 @@ impl<const MOD: usize, const PRIME: usize> RsaKey<MOD, PRIME, BsslRng> for BsslR
 
     fn rsapss_sign(
         &self,
-        _rng: &mut BsslRng,
+        _rng: &mut R,
         digest: TpmtHa<'_>,
         out: &mut [u8; MOD],
     ) -> Result<(), CryptoError> {
@@ -208,17 +222,17 @@ impl<const MOD: usize, const PRIME: usize> RsaKey<MOD, PRIME, BsslRng> for BsslR
 }
 
 /// RSA-1024 key for `BsslCryptoProvider`.
-pub type BsslRsa1024 = BsslRsa<128, 64>;
+pub type BsslRsa1024<R = BsslRng> = BsslRsa<128, 64, R>;
 /// RSA-2048 key for `BsslCryptoProvider`.
-pub type BsslRsa2048 = BsslRsa<256, 128>;
+pub type BsslRsa2048<R = BsslRng> = BsslRsa<256, 128, R>;
 /// RSA-3072 key for `BsslCryptoProvider`.
-pub type BsslRsa3072 = BsslRsa<384, 192>;
+pub type BsslRsa3072<R = BsslRng> = BsslRsa<384, 192, R>;
 /// RSA-4096 key for `BsslCryptoProvider`.
-pub type BsslRsa4096 = BsslRsa<512, 256>;
+pub type BsslRsa4096<R = BsslRng> = BsslRsa<512, 256, R>;
 
-impl Rsa for BsslCryptoProvider {
-    type Rsa1024 = BsslRsa1024;
-    type Rsa2048 = BsslRsa2048;
-    type Rsa3072 = BsslRsa3072;
-    type Rsa4096 = BsslRsa4096;
+impl<R: Rng + Random<Rng = R>> Rsa for BsslCryptoProvider<R> {
+    type Rsa1024 = BsslRsa1024<R>;
+    type Rsa2048 = BsslRsa2048<R>;
+    type Rsa3072 = BsslRsa3072<R>;
+    type Rsa4096 = BsslRsa4096<R>;
 }

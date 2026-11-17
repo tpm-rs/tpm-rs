@@ -213,7 +213,6 @@ pub(crate) fn mul_mod(a: &[u8], b: &[u8], m: &[u8], out: &mut [u8]) {
 /// Writes the inverse `a^-1 mod p` into `out` for a prime modulus `p` (a curve's group order)
 /// and `0 < a < p`, all of length `p.len()`, as `a^(p - 2) mod p` (Fermat) with [`mul_mod`]: the
 /// running time depends only on `p`, so `a` may be secret. Returns `false` if `a` is zero.
-#[cfg(any(test, not(feature = "reference-rng")))]
 pub(crate) fn inv_mod_prime(a: &[u8], p: &[u8], out: &mut [u8]) -> bool {
     let len = p.len();
     if is_zero(a) {
@@ -266,6 +265,26 @@ pub(crate) fn ecc_scalar_from_extra_bits(c: &[u8], n: &[u8], d: &mut [u8]) {
         if !overflow {
             break;
         }
+    }
+}
+
+/// Clears the bits of the big-endian `value` (an integer drawn as the octet size of `bits`) that
+/// the C reference's `TpmMath_GetRandomInteger(n, bits)` clears with `ExtMath_MaskBits(n, bits)`
+/// (TpmBigNum's `BnMaskBits()` on 64-bit words): in the most significant 64-bit word of a
+/// `bits`-bit number, only the low `64 - bits % 64` bits are kept (the mask is
+/// `~0 >> (bits % 64)`, and nothing is cleared when `bits` is a multiple of 64). This is not a
+/// mask to `bits` bits: e.g. it clears nothing of a 66-octet value for `bits` 521, and clears the
+/// bits from 578 up for `bits` 638.
+pub(crate) fn reference_mask_bits(value: &mut [u8], bits: usize) {
+    let excess = bits % 64;
+    if excess == 0 {
+        return;
+    }
+    // The first bit (from the least significant, 0) that the mask clears.
+    let first_cleared = 64 * (bits.div_ceil(64) - 1) + 64 - excess;
+    let len = value.len();
+    for position in first_cleared..8 * len {
+        value[len - 1 - position / 8] &= !(1 << (position % 8));
     }
 }
 
@@ -352,6 +371,28 @@ mod tests {
                 assert_eq!(prod[..len], one[..len], "{curve:?}");
             }
         }
+    }
+
+    /// The reference's `BnMaskBits()` keeps the low `64 - bits % 64` bits of the top word.
+    #[test]
+    fn reference_mask_keeps_the_low_bits_of_the_top_word() {
+        // Multiples of 64 and values below the mask are unchanged (P-521: 66 octets, 528 bits,
+        // below bit 567).
+        for (len, bits) in [(32, 256), (28, 224), (66, 521), (48, 384)] {
+            let mut value = [0xffu8; 80];
+            reference_mask_bits(&mut value[..len], bits);
+            assert!(value[..len].iter().all(|&b| b == 0xff), "{bits}");
+        }
+        // BN P-638: 80 octets; bits 578 and up (the top 62 bits) are cleared.
+        let mut value = [0xffu8; 80];
+        reference_mask_bits(&mut value, 638);
+        assert!(value[..7].iter().all(|&b| b == 0));
+        assert_eq!(value[7], 0b0000_0011);
+        assert!(value[8..].iter().all(|&b| b == 0xff));
+        // 9 bits in 2 octets: the mask keeps 55 bits of the word, i.e. everything.
+        let mut value = [0xff, 0xff];
+        reference_mask_bits(&mut value, 9);
+        assert_eq!(value, [0xff, 0xff]);
     }
 
     #[test]

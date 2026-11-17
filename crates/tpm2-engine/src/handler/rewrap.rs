@@ -11,7 +11,7 @@ use tpm2::Marshal;
 use tpm2::TpmCc;
 use tpm2::Unmarshal;
 use tpm2::commands::{Rewrap, responses};
-use tpm2::crypto::{Direction, EccPrivateKey};
+use tpm2::crypto::Direction;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::{
     Alg, Tpm2bEccParameter, Tpm2bEncryptedSecret, Tpm2bPrivate, TpmEccCurve, TpmaObject,
@@ -482,28 +482,14 @@ impl<'b, P: Platform> CommandHandler<'b, P> {
         let digest_size = name_alg.digest_size();
         match &parent.public.parms_and_id {
             OwnedPublicParmsAndId::Rsa(parms, unique) => {
-                self.context.random_crypto(&mut seed[..digest_size])?;
+                self.context
+                    .crypt_random_generate(&mut seed[..digest_size])?;
                 // `CryptRsaEncrypt()` tests OAEP (drawing from the TPM's DRBG) after the seed
                 // was drawn and before it is encoded.
                 self.do_self_test(Alg::OAEP)?;
                 let mut label_buf = [0u8; 32];
                 let label_len = oaep_label(label, &mut label_buf);
-                // With `reference-rng`, the OAEP seed is drawn from the TPM's DRBG as in the
-                // reference (`OaepEncode()`).
-                #[cfg(feature = "reference-rng")]
-                let encrypted = {
-                    let n_len = unique.get_size() as usize;
-                    self.reference_rsa_encrypt(
-                        Some(name_alg),
-                        unique.get_buffer(),
-                        parms.exponent,
-                        &label_buf[..label_len],
-                        &seed[..digest_size],
-                        &mut secret_out[..n_len],
-                    )
-                    .map_err(|_| tpm2::crypto::CryptoError::Internal)
-                };
-                #[cfg(not(feature = "reference-rng"))]
+                // The OAEP seed is drawn from the TPM's DRBG (`OaepEncode()`).
                 let encrypted =
                     match crate::handler::rsa_public_key::<P::Crypto>(parms, unique.get_buffer()) {
                         Ok(Some(key)) => crate::rsa::rsa_encrypt::<P::Crypto>(
@@ -540,16 +526,8 @@ impl<'b, P: Platform> CommandHandler<'b, P> {
                 .map_err(|_| TpmRc::KEY.to_rc())?;
                 let mut eph_pub = [0u8; 256];
                 let mut eph_priv = [0u8; 128];
-                // `CryptEccNewKeyPair()` tests ECDH (no random values) before it generates the
-                // key.
-                #[cfg(not(feature = "reference-rng"))]
-                self.do_self_test(Alg::ECDH)?;
-                // `CryptEccNewKeyPair()`: with `reference-rng`, from the TPM's DRBG.
-                #[cfg(feature = "reference-rng")]
-                let priv_len =
-                    self.reference_ecc_new_key_pair(curve, &mut eph_priv, &mut eph_pub)?;
-                #[cfg(not(feature = "reference-rng"))]
-                let priv_len = self.new_ecc_key_pair(curve, &mut eph_priv, &mut eph_pub)?;
+                // `CryptEccNewKeyPair()`: from the TPM's DRBG (after the ECDH self test).
+                let priv_len = self.ecc_new_key_pair(curve, &mut eph_priv, &mut eph_pub)?;
                 let mut z = [0u8; 256];
                 crypto_len(
                     self.crypto().point_multiply(
@@ -586,36 +564,5 @@ impl<'b, P: Platform> CommandHandler<'b, P> {
             }
             _ => Err(TpmRc::TYPE.to_rc()),
         }
-    }
-
-    /// `CryptEccNewKeyPair()` without `reference-rng`: generates an ephemeral key pair on `curve`
-    /// with the crypto backend (from the engine's RNG), writing the private scalar `de` (the
-    /// curve size) to `eph_priv` and the public point `Qe` as `x || y` (each coordinate padded to
-    /// the curve size) to `eph_pub`. Returns the length of `de`. (The caller runs the ECDH self
-    /// test first.)
-    pub(crate) fn new_ecc_key_pair(
-        &mut self,
-        curve: TpmEccCurve,
-        eph_priv: &mut [u8],
-        eph_pub: &mut [u8],
-    ) -> Result<usize, TpmRc> {
-        let param_size = ecc_param_size(curve).ok_or(TpmRc::CURVE.to_rc())?;
-        let key = EccPrivateKey::<P::Crypto>::generate(&mut self.context.crypto_rng, curve, None)
-            .map_err(|_| TpmRc::FAILURE)?;
-        let priv_len = key
-            .scalar(eph_priv)
-            .map_err(|_| TpmRc::FAILURE)?
-            .as_slice()
-            .len();
-        let (mut x, mut y) = (
-            [0u8; TpmEccCurve::MAX_ECC_KEY_BYTES],
-            [0u8; TpmEccCurve::MAX_ECC_KEY_BYTES],
-        );
-        let q = key.point(&mut x, &mut y).map_err(|_| TpmRc::FAILURE)?;
-        let eph_pub = eph_pub.get_mut(..2 * param_size).ok_or(TpmRc::FAILURE)?;
-        let (eph_x, eph_y) = eph_pub.split_at_mut(param_size);
-        pad_coordinate(q.x.as_slice(), param_size, eph_x).map_err(|_| TpmRc::FAILURE)?;
-        pad_coordinate(q.y.as_slice(), param_size, eph_y).map_err(|_| TpmRc::FAILURE)?;
-        Ok(priv_len)
     }
 }

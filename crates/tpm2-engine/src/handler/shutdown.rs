@@ -75,7 +75,7 @@ impl<'b, P: Platform> CommandHandler<'b, P> {
         }
 
         self.nv_sync_persistent_orderly_state()?;
-        self.nv_sync_persistent_drbg_state()?;
+        self.context.save_drbg_state()?;
         self.nv_sync_persistent_da_timers()?;
         self.context.save_hierarchy_auths();
 

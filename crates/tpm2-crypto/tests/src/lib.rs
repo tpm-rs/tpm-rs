@@ -21,5 +21,7 @@ pub use tpm2_crypto_rust::RustCryptoProvider as TestProvider;
 #[cfg(feature = "crux")]
 pub use tpm2_crypto_crux::CruxCryptoProvider as TestProvider;
 
+/// BoringSSL with its own RNG (a type alias, so that the default RNG parameter also applies
+/// in expression paths such as `TestProvider::from_entropy()`).
 #[cfg(feature = "bssl")]
-pub use tpm2_crypto_bssl::BsslCryptoProvider as TestProvider;
+pub type TestProvider = tpm2_crypto_bssl::BsslCryptoProvider;

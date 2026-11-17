@@ -31,7 +31,8 @@
 //! - Random number generation: [`Rng`] (created via [`Random::from_entropy`] or
 //!   [`Random::from_seed`])
 //! - RSA: [`RsaPublicKey`] (`encrypt`, `verify`) and [`RsaPrivateKey`]
-//!   (`decrypt`, `sign`)
+//!   (`decrypt`, `sign`), with the TPM's randomized encodings
+//!   [`rsa_oaep_encode`], [`rsa_pkcs1v15_encode`] and [`rsa_pss_encode`]
 //! - ECC: [`EccPublicKey`] (`verify`, `verify_message`) and [`EccPrivateKey`]
 //!   (`ecdh`, `sign`, `sign_message`)
 //! - ML-DSA: [`MldsaPublicKey`] (`verify`, `verify_message`) and
@@ -55,6 +56,8 @@ mod mlkem;
 mod rng;
 #[cfg(feature = "rsa")]
 mod rsa;
+#[cfg(feature = "rsa")]
+mod rsa_encoding;
 #[cfg(any(feature = "rsa", feature = "ecc", feature = "mldsa"))]
 mod signing;
 mod symmetric;
@@ -71,6 +74,8 @@ pub use mldsa::*;
 pub use mlkem::*;
 #[cfg(feature = "rsa")]
 pub use rsa::*;
+#[cfg(feature = "rsa")]
+pub use rsa_encoding::*;
 #[cfg(any(feature = "rsa", feature = "ecc", feature = "mldsa"))]
 pub use signing::*;
 pub use {ecc_params::*, hash::*, hmac::*, rng::*, symmetric::*};

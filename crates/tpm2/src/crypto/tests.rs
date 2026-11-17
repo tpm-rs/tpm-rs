@@ -118,7 +118,10 @@ struct ToyRsa1024Pub {
 
 /// Toy 1024-bit RSA key implementing an exact bijection on `[0, n)` via
 /// modular addition `(x + secret) mod n` / `(y - secret) mod n`, with toy
-/// padding for every scheme (`Raw`, `RSAES`, `OAEP`, `RSASSA`, `RSAPSS`).
+/// padding for its own encryptions and signatures; its decryptions and its
+/// RSASSA-PSS verification decode the standard encodings of RFC 8017, which
+/// the dispatch functions produce ([`rsa_oaep_encode`],
+/// [`rsa_pkcs1v15_encode`], [`rsa_pss_encode`]) before the raw operation.
 struct ToyRsa1024 {
     public: ToyRsa1024Pub,
     prime_p: [u8; 64],
@@ -244,28 +247,6 @@ impl ToyRsa1024 {
         };
         *out = ct;
         Ok(Some(()))
-    }
-
-    fn toy_pad_decrypt(
-        &self,
-        rng: &mut TestRng,
-        mut header: [u8; 11],
-        ciphertext: &[u8; 128],
-        out: &mut [u8; 128],
-    ) -> Result<Option<usize>, CryptoError> {
-        // Exercise `rng` blinding path to ensure callers pass a live RNG.
-        let mut blind = [0u8; 4];
-        rng.fill_bytes(&mut blind)?;
-        let Some(em) = Self::toy_private(&self.public, ciphertext) else {
-            return Ok(None);
-        };
-        let len = usize::from(em[2]);
-        header[2] = em[2];
-        if em[..11] != header || len > 117 {
-            return Ok(None);
-        }
-        out[..len].copy_from_slice(&em[11..11 + len]);
-        Ok(Some(len))
     }
 
     /// Toy signature encoding `0x00 || 0x01 || tag || hash_alg || digest`
@@ -402,12 +383,19 @@ impl RsaKey<128, 64, TestRng> for ToyRsa1024 {
     fn oaep_decrypt(
         &self,
         rng: &mut TestRng,
-        _: TpmiAlgHash,
+        hash: TpmiAlgHash,
         label: &[u8],
         c: &[u8; 128],
         out: &mut [u8; 128],
     ) -> Result<Option<usize>, CryptoError> {
-        self.toy_pad_decrypt(rng, Self::toy_pad_header(3, label)?, c, out)
+        let mut em = [0u8; 128];
+        if self.raw_decrypt(rng, c, &mut em)?.is_none() {
+            return Ok(None);
+        }
+        Ok(oaep_decode(hash, label, &em).map(|m| {
+            out[..m.len()].copy_from_slice(&m);
+            m.len()
+        }))
     }
 
     fn rsaes_encrypt(
@@ -425,7 +413,14 @@ impl RsaKey<128, 64, TestRng> for ToyRsa1024 {
         c: &[u8; 128],
         out: &mut [u8; 128],
     ) -> Result<Option<usize>, CryptoError> {
-        self.toy_pad_decrypt(rng, Self::toy_pad_header(2, &[])?, c, out)
+        let mut em = [0u8; 128];
+        if self.raw_decrypt(rng, c, &mut em)?.is_none() {
+            return Ok(None);
+        }
+        Ok(pkcs1v15_decode(&em).map(|m| {
+            out[..m.len()].copy_from_slice(m);
+            m.len()
+        }))
     }
 
     fn rsassa_sign(
@@ -459,8 +454,80 @@ impl RsaKey<128, 64, TestRng> for ToyRsa1024 {
         digest: TpmtHa<'_>,
         sig: &[u8; 128],
     ) -> Result<bool, CryptoError> {
-        Self::toy_verify(public, 2, digest, sig)
+        Ok(Self::toy_public(public, sig)
+            .is_some_and(|em| pss_verify(digest.hash_alg(), digest.digest(), &em)))
     }
+}
+
+/// `MGF1(seed, len)` with the toy hash `alg`.
+fn toy_mgf1(alg: TpmiAlgHash, seed: &[u8], len: usize) -> std::vec::Vec<u8> {
+    let mut out = std::vec::Vec::new();
+    for counter in 0u32.. {
+        if out.len() >= len {
+            break;
+        }
+        let mut buf = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
+        let d = hash::<TestBackend>(alg, &[seed, &counter.to_be_bytes()], &mut buf).unwrap();
+        out.extend_from_slice(d.digest());
+    }
+    out.truncate(len);
+    out
+}
+
+/// EME-OAEP decoding (RFC 8017, 7.1.2 step 3) of `em` with the toy hash `alg`.
+fn oaep_decode(alg: TpmiAlgHash, label: &[u8], em: &[u8]) -> Option<std::vec::Vec<u8>> {
+    let h_len = alg.digest_size();
+    let (y, rest) = em.split_first()?;
+    let (masked_seed, masked_db) = rest.split_at(h_len);
+    let seed: std::vec::Vec<u8> = masked_seed
+        .iter()
+        .zip(toy_mgf1(alg, masked_db, h_len))
+        .map(|(a, b)| a ^ b)
+        .collect();
+    let db: std::vec::Vec<u8> = masked_db
+        .iter()
+        .zip(toy_mgf1(alg, &seed, masked_db.len()))
+        .map(|(a, b)| a ^ b)
+        .collect();
+    let mut l_hash = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
+    let l_hash = hash::<TestBackend>(alg, &[label], &mut l_hash).unwrap();
+    let rest = &db[h_len..];
+    let one = rest.iter().position(|&b| b != 0)?;
+    (*y == 0 && db[..h_len] == *l_hash.digest() && rest[one] == 1).then(|| rest[one + 1..].to_vec())
+}
+
+/// RSAES-PKCS1-v1_5 decoding (RFC 8017, 7.2.2 step 3) of `em`.
+fn pkcs1v15_decode(em: &[u8]) -> Option<&[u8]> {
+    let zero = em[2..].iter().position(|&b| b == 0)? + 2;
+    (em[..2] == [0, 2] && zero >= 10).then(|| &em[zero + 1..])
+}
+
+/// EMSA-PSS verification (RFC 8017, 9.1.2) of `em` (one leading bit cleared) for the message
+/// digest `digest` with the toy hash `alg`, for any salt length.
+fn pss_verify(alg: TpmiAlgHash, digest: &[u8], em: &[u8]) -> bool {
+    let h_len = alg.digest_size();
+    let m_len = em.len() - h_len - 1;
+    let (masked_db, rest) = em.split_at(m_len);
+    let (h, trailer) = rest.split_at(h_len);
+    if trailer != [0xbc] || masked_db[0] & 0x80 != 0 {
+        return false;
+    }
+    let mut db: std::vec::Vec<u8> = masked_db
+        .iter()
+        .zip(toy_mgf1(alg, h, m_len))
+        .map(|(a, b)| a ^ b)
+        .collect();
+    db[0] &= 0x7f;
+    let Some(one) = db.iter().position(|&b| b != 0) else {
+        return false;
+    };
+    if db[one] != 1 {
+        return false;
+    }
+    let salt = &db[one + 1..];
+    let mut buf = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
+    let expected = hash::<TestBackend>(alg, &[&[0u8; 8], digest, salt], &mut buf).unwrap();
+    expected.digest() == h
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -2199,4 +2266,214 @@ fn mlkem_encapsulate_and_decapsulate() {
         MlkemPrivateKey::<TestBackend>::generate(&mut rng, TpmiMlkemParms::Mlkem512).err(),
         Some(CryptoError::Unsupported)
     );
+}
+
+/// The default [`Random::instantiate_seeded`] is deterministic and separates its inputs.
+#[test]
+fn default_instantiate_seeded_is_deterministic_and_separates_inputs() {
+    let draw = |seed: &[u8], purpose: &[u8], name: &[u8], additional: &[u8]| {
+        let mut rng = TestBackend::instantiate_seeded(seed, purpose, name, additional).unwrap();
+        let mut out = [0u8; 16];
+        rng.fill_bytes(&mut out).unwrap();
+        out
+    };
+    let a = draw(b"seed", b"purpose\0", b"name", b"data");
+    assert_eq!(a, draw(b"seed", b"purpose\0", b"name", b"data"));
+    assert_ne!(a, draw(b"seed", b"purpose\0", b"name", b"dat"));
+    assert_ne!(a, draw(b"Seed", b"purpose\0", b"name", b"data"));
+    // The inputs are not simply concatenated.
+    assert_ne!(
+        draw(b"seed", b"ab", b"c", b""),
+        draw(b"seed", b"a", b"bc", b"")
+    );
+    // The default lifecycle and state hooks.
+    let mut rng = TestBackend::from_entropy().unwrap();
+    assert_eq!(rng.init(), Ok(()));
+    assert_eq!(rng.startup(), Ok(()));
+    assert_eq!(rng.self_test(), Ok(true));
+    assert_eq!(<TestRng as Rng>::STATE_SIZE, 0);
+    assert_eq!(rng.save_state(&mut []), Err(CryptoError::Unsupported));
+    assert_eq!(rng.load_state(&[]), Err(CryptoError::Unsupported));
+    assert!(!rng.is_system_rng());
+}
+
+/// An RNG that draws only zero octets (for the zero-replacement of RSAES-PKCS1-v1_5).
+#[cfg(feature = "rsa")]
+struct ZeroRng(usize);
+
+#[cfg(feature = "rsa")]
+impl Rng for ZeroRng {
+    fn fill_bytes(&mut self, out: &mut [u8]) -> Result<(), CryptoError> {
+        out.fill(0);
+        self.0 += out.len();
+        Ok(())
+    }
+
+    fn stir_bytes(&mut self, _: &[u8]) -> Result<(), CryptoError> {
+        Ok(())
+    }
+}
+
+/// The next 16 octets of `rng` (to compare the states of two RNGs).
+#[cfg(feature = "rsa")]
+fn next_octets(rng: &mut TestRng) -> [u8; 16] {
+    let mut out = [0u8; 16];
+    rng.fill_bytes(&mut out).unwrap();
+    out
+}
+
+/// [`rsa_oaep_encode`] is RFC 8017's EME-OAEP with the label's octets, and its seed is the one
+/// digest it draws (after which the RNG is where a draw of one digest leaves it); messages that
+/// do not fit and moduli that cannot hold two digests are `Ok(None)` and draw nothing.
+#[cfg(feature = "rsa")]
+#[test]
+fn rsa_oaep_encode_draws_one_seed_and_encodes_like_rfc_8017() {
+    let alg = first_enabled_hash();
+    let h_len = alg.digest_size();
+    let (mut rng, mut twin) = (
+        TestBackend::from_seed(b"oaep").unwrap(),
+        TestBackend::from_seed(b"oaep").unwrap(),
+    );
+    let label = b"DUPLICATE\0";
+    let mut padded = [0xaau8; 256];
+    let max = 256 - 2 * h_len - 2;
+    for message in [&b""[..], b"secret", &[0x5a; 256][..max]] {
+        assert_eq!(
+            rsa_oaep_encode::<TestBackend>(&mut rng, alg, label, message, &mut padded),
+            Ok(Some(()))
+        );
+        let mut seed = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
+        twin.fill_bytes(&mut seed[..h_len]).unwrap();
+        assert_eq!(
+            oaep_decode(alg, label, &padded).as_deref(),
+            Some(message),
+            "{} octets",
+            message.len()
+        );
+        // The masked seed is the drawn seed masked with MGF1(maskedDB).
+        let mask = toy_mgf1(alg, &padded[1 + h_len..], h_len);
+        let unmasked: std::vec::Vec<u8> = padded[1..=h_len]
+            .iter()
+            .zip(mask)
+            .map(|(a, b)| a ^ b)
+            .collect();
+        assert_eq!(unmasked, seed[..h_len]);
+    }
+    assert_eq!(next_octets(&mut rng), next_octets(&mut twin));
+    // Too long, or too small a modulus: nothing is drawn.
+    let too_long = [0u8; 256];
+    assert_eq!(
+        rsa_oaep_encode::<TestBackend>(&mut rng, alg, b"", &too_long[..=max], &mut padded),
+        Ok(None)
+    );
+    assert_eq!(
+        rsa_oaep_encode::<TestBackend>(&mut rng, alg, b"", b"", &mut padded[..2 * h_len + 1]),
+        Ok(None)
+    );
+    assert_eq!(
+        rsa_oaep_encode::<TestBackend>(&mut rng, alg, b"", b"", &mut padded[..2 * h_len + 2]),
+        Ok(Some(()))
+    );
+    twin.fill_bytes(&mut [0u8; TpmiAlgHash::MAX_DIGEST_BYTES][..h_len])
+        .unwrap();
+    assert_eq!(next_octets(&mut rng), next_octets(&mut twin));
+}
+
+/// [`rsa_pkcs1v15_encode`] is `00 02 PS 00 M` with the padding string drawn in one piece and
+/// each of its zero octets replaced with `0x55`; a message longer than `k - 11` octets is
+/// `Ok(None)` and draws nothing.
+#[cfg(feature = "rsa")]
+#[test]
+fn rsa_pkcs1v15_encode_replaces_zero_padding_octets() {
+    let mut zeros = ZeroRng(0);
+    let mut padded = [0xaau8; 128];
+    assert_eq!(
+        rsa_pkcs1v15_encode(&mut zeros, &[1, 2, 3], &mut padded),
+        Ok(Some(()))
+    );
+    assert_eq!(zeros.0, 128 - 3 - 3);
+    assert_eq!(padded[..2], [0x00, 0x02]);
+    assert!(padded[2..124].iter().all(|&b| b == 0x55));
+    assert_eq!(padded[124..], [0x00, 1, 2, 3]);
+    assert_eq!(pkcs1v15_decode(&padded), Some(&[1u8, 2, 3][..]));
+
+    let (mut rng, mut twin) = (
+        TestBackend::from_seed(b"pkcs1").unwrap(),
+        TestBackend::from_seed(b"pkcs1").unwrap(),
+    );
+    assert_eq!(
+        rsa_pkcs1v15_encode(&mut rng, &[7; 117], &mut padded),
+        Ok(Some(()))
+    );
+    let mut ps = [0u8; 8];
+    twin.fill_bytes(&mut ps).unwrap();
+    for (&octet, &drawn) in padded[2..10].iter().zip(&ps) {
+        assert_eq!(octet, if drawn == 0 { 0x55 } else { drawn });
+    }
+    assert_eq!(padded[10], 0);
+    assert_eq!(padded[11..], [7; 117]);
+    assert_eq!(
+        rsa_pkcs1v15_encode(&mut rng, &[7; 118], &mut padded),
+        Ok(None)
+    );
+    assert_eq!(
+        rsa_pkcs1v15_encode(&mut rng, &[], &mut padded[..10]),
+        Ok(None)
+    );
+    assert_eq!(next_octets(&mut rng), next_octets(&mut twin));
+}
+
+/// The salt length of the TPM's PSS signatures: the largest that fits, at most the digest size.
+#[cfg(feature = "rsa")]
+#[test]
+fn rsa_pss_salt_size_is_the_largest_that_fits_up_to_the_digest_size() {
+    assert_eq!(rsa_pss_salt_size(32, 256), 32);
+    assert_eq!(rsa_pss_salt_size(64, 128), 62);
+    assert_eq!(rsa_pss_salt_size(64, 100), 34);
+    assert_eq!(rsa_pss_salt_size(20, 22), 0);
+    assert_eq!(rsa_pss_salt_size(20, 21), 0);
+    assert_eq!(rsa_pss_salt_size(20, 0), 0);
+}
+
+/// [`rsa_pss_encode`] is RFC 8017's EMSA-PSS with the salt it draws (one leading bit cleared,
+/// the `0xbc` trailer), and an output that cannot hold a digest and two octets is an internal
+/// error that draws nothing.
+#[cfg(feature = "rsa")]
+#[test]
+fn rsa_pss_encode_draws_the_salt_and_encodes_like_rfc_8017() {
+    let alg = first_enabled_hash();
+    let h_len = alg.digest_size();
+    let digest = &[0x44u8; 64][..h_len];
+    let (mut rng, mut twin) = (
+        TestBackend::from_seed(b"pss").unwrap(),
+        TestBackend::from_seed(b"pss").unwrap(),
+    );
+    for k in [128usize, 2 * h_len + 2, h_len + 3, h_len + 2] {
+        let mut out = [0xffu8; 128];
+        let out = &mut out[..k];
+        assert_eq!(
+            rsa_pss_encode::<TestBackend>(&mut rng, alg, digest, out),
+            Ok(()),
+            "{k}"
+        );
+        let salt_size = rsa_pss_salt_size(h_len, k);
+        let mut salt = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
+        twin.fill_bytes(&mut salt[..salt_size]).unwrap();
+        assert_eq!(out[0] & 0x80, 0);
+        assert_eq!(out[k - 1], 0xbc);
+        assert!(pss_verify(alg, digest, out), "{k}");
+        // The salt is the end of DB.
+        let m_len = k - h_len - 1;
+        let db: std::vec::Vec<u8> = out[..m_len]
+            .iter()
+            .zip(toy_mgf1(alg, &out[m_len..k - 1], m_len))
+            .map(|(a, b)| a ^ b)
+            .collect();
+        assert_eq!(db[m_len - salt_size..], salt[..salt_size], "{k}");
+    }
+    assert_eq!(
+        rsa_pss_encode::<TestBackend>(&mut rng, alg, digest, &mut [0; 64][..h_len + 1]),
+        Err(CryptoError::Internal)
+    );
+    assert_eq!(next_octets(&mut rng), next_octets(&mut twin));
 }

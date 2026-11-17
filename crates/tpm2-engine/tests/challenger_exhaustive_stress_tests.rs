@@ -7,7 +7,7 @@ mod common;
 
 use common::FakePlatform;
 use common::TestCryptoProvider;
-use common::{FakeRng, FakeStorage, FakeTimer};
+use common::{FakeStorage, FakeTimer};
 use hex_literal::hex;
 use tpm2::Handle;
 use tpm2::commands::{Command, Message, UnmarshalMessage};
@@ -26,9 +26,8 @@ fn setup_tpm<'a>(
     crypto: &'a mut TestCryptoProvider,
     storage: &'a mut FakeStorage,
     timer: &'a mut FakeTimer,
-    rng: &'a mut FakeRng,
-) -> TpmEngine<FakePlatform<'a, TestCryptoProvider, &'a mut FakeStorage, FakeTimer, FakeRng>> {
-    let platform = FakePlatform::new(crypto, timer, rng);
+) -> TpmEngine<FakePlatform<'a, TestCryptoProvider, &'a mut FakeStorage, FakeTimer>> {
+    let platform = FakePlatform::new(crypto, timer);
     let mut tpm = TpmEngine::new(platform, storage).unwrap();
     tpm.init_storage();
     tpm.state.nv_available = true;
@@ -43,9 +42,7 @@ fn setup_tpm<'a>(
 }
 
 fn execute_tpm_command<C: Command>(
-    tpm: &mut TpmEngine<
-        FakePlatform<'_, TestCryptoProvider, &'_ mut FakeStorage, FakeTimer, FakeRng>,
-    >,
+    tpm: &mut TpmEngine<FakePlatform<'_, TestCryptoProvider, &'_ mut FakeStorage, FakeTimer>>,
     cmd: &C,
     auths: &[TpmsAuthCommand],
 ) -> Result<C::Response<'static>, u32>
@@ -282,11 +279,10 @@ fn dup_policy_auth<P: tpm2_engine::Platform>(
 
 #[test]
 fn test_duplicate_invalid_parent_coordinates_zero_size() {
-    let mut crypto = TestCryptoProvider;
+    let mut crypto = common::test_crypto();
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let mut rng = FakeRng::new();
-    let mut tpm = setup_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
+    let mut tpm = setup_tpm(&mut crypto, &mut storage, &mut timer);
 
     // 1. Create a parent ECC storage key at 0x80000001
     let mut parent = create_transient_ecc_key(

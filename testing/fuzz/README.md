@@ -51,7 +51,7 @@ The input model, driver and session engine live in `src/` (see the docs of
 
 Every fuzzed TPM uses the fixed reference seed `4242:1000000`
 (`tpm2_fuzz::driver::FIXED_SEED`, the same as
-`TPM_REFERENCE_SEED=4242:1000000`). With `reference-rng`, `tpm-rs` and both
+`TPM_REFERENCE_SEED=4242:1000000`). With the C reference RNG (`ReferenceRng`), `tpm-rs` and both
 references draw identical random values from it, and between inputs the
 target only resets the TPM (`Tpm::reset()`), so every conversation is
 deterministic: an input always produces the same responses, crashes

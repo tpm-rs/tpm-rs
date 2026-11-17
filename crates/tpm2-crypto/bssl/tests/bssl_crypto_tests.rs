@@ -926,3 +926,77 @@ fn test_mldsa() {
     check_mldsa::<<C as Mldsa>::Mldsa65, 1952, 3309>();
     check_mldsa::<<C as Mldsa>::Mldsa87, 2592, 4627>();
 }
+
+// =========================================================================
+// Other random number generators
+// =========================================================================
+
+/// A deterministic RNG other than [`BsslRng`] (its seeded generator, counting the bytes drawn),
+/// for `BsslCryptoProvider<CountingRng>`.
+struct CountingRng {
+    inner: BsslRng,
+    drawn: usize,
+}
+
+impl Rng for CountingRng {
+    fn fill_bytes(&mut self, out: &mut [u8]) -> Result<(), CryptoError> {
+        self.drawn += out.len();
+        self.inner.fill_bytes(out)
+    }
+
+    fn stir_bytes(&mut self, data: &[u8]) -> Result<(), CryptoError> {
+        self.inner.stir_bytes(data)
+    }
+}
+
+impl Random for CountingRng {
+    type Rng = Self;
+
+    fn from_entropy() -> Result<Self, CryptoError> {
+        Self::from_seed(b"entropy")
+    }
+
+    fn from_seed(seed: &[u8]) -> Result<Self, CryptoError> {
+        Ok(Self {
+            inner: BsslRng::from_seed(seed)?,
+            drawn: 0,
+        })
+    }
+}
+
+/// `BsslCryptoProvider<R>` constructs its RNG with `R` and draws every random value of its
+/// keys from it (an RNG other than BoringSSL's system RNG, [`Rng::is_system_rng`]), so the keys
+/// depend only on the RNG's output.
+#[test]
+fn test_provider_with_another_rng_draws_its_keys_from_it() {
+    use tpm2::TpmEccCurve;
+    use tpm2::TpmiRsaKeyBits;
+    use tpm2::crypto::{EccPrivateKey, RsaPrivateKey};
+
+    type P = BsslCryptoProvider<CountingRng>;
+    let _ = P::new();
+    let rsa = |seed: &[u8]| {
+        let mut rng = P::from_seed(seed).unwrap();
+        assert!(!rng.is_system_rng());
+        let key = RsaPrivateKey::<P>::generate(&mut rng, TpmiRsaKeyBits::Rsa1024, 0).unwrap();
+        assert!(rng.drawn > 0);
+        let mut n = [0u8; TpmiRsaKeyBits::MAX_PUB_KEY_BYTES];
+        key.modulus(&mut n).unwrap().as_slice().to_vec()
+    };
+    assert_eq!(rsa(b"a"), rsa(b"a"));
+    assert_ne!(rsa(b"a"), rsa(b"b"));
+
+    let ecc = |seed: &[u8]| {
+        let mut rng = P::from_seed(seed).unwrap();
+        let key = EccPrivateKey::<P>::generate(&mut rng, TpmEccCurve::NistP256, None).unwrap();
+        assert!(rng.drawn >= 32);
+        let mut d = [0u8; 80];
+        key.scalar(&mut d).unwrap().as_slice().to_vec()
+    };
+    assert_eq!(ecc(b"a"), ecc(b"a"));
+    assert_ne!(ecc(b"a"), ecc(b"b"));
+
+    // The default RNG generates RSA keys with BoringSSL's own randomness.
+    assert!(C::from_entropy().unwrap().is_system_rng());
+    assert!(!C::from_seed(b"seed").unwrap().is_system_rng());
+}

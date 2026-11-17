@@ -1,17 +1,20 @@
 //! RSA encryption and decryption with the schemes of the TPM (`TPM_ALG_NULL`, `TPM_ALG_RSAES`
 //! and `TPM_ALG_OAEP`) and a raw OAEP label: [`rsa_encrypt`] and [`rsa_decrypt`].
 //!
-//! The crypto backend's OAEP ([`RsaEncryptScheme::Oaep`]) takes the label as a C string, i.e.
+//! The dispatch functions' OAEP ([`RsaEncryptScheme::Oaep`]) takes the label as a C string, i.e.
 //! the TPM's zero-terminated label without embedded zero octets. The TPM checks only the
 //! terminating zero (TPM 2.0 Part 3, `TPM2_RSA_Encrypt`: "If label is present, the label must
 //! be terminated by a zero octet"), and the reference's `OaepEncode()`/`OaepDecode()` hash the
-//! whole label buffer. A label that is not a C string (with an embedded zero octet) is therefore
-//! handled here with the EME-OAEP encoding of RFC 8017 (7.1) over the backend's raw RSA
-//! (`RSAEP`/`RSADP`, [`RsaEncryptScheme::Raw`]) and its hashes, as the reference does.
+//! whole label buffer. The TPM's OAEP encryption is therefore always
+//! [`tpm2::crypto::rsa_oaep_encode`] (the reference's encoding, which takes the label's octets
+//! and draws the seed from the TPM's DRBG) over the backend's raw RSA (`RSAEP`,
+//! [`RsaEncryptScheme::Raw`]), and a label that is not a C string (with an embedded zero octet)
+//! is decrypted here with the EME-OAEP decoding of RFC 8017 (7.1.2) over the backend's `RSADP`
+//! and its hashes, as the reference does.
 
 use core::ffi::CStr;
 
-use tpm2::crypto::{Crypto, CryptoError, Rng, RsaEncryptScheme, RsaPrivateKey, RsaPublicKey};
+use tpm2::crypto::{Crypto, CryptoError, RsaEncryptScheme, RsaPrivateKey, RsaPublicKey};
 use tpm2::{Alg, TpmiAlgHash};
 
 /// The largest modulus of the profile.
@@ -63,15 +66,14 @@ pub(crate) fn rsa_encrypt<C: Crypto>(
     message: &[u8],
     out: &mut [u8],
 ) -> Result<Option<usize>, CryptoError> {
-    match backend_scheme(scheme, hash, label)? {
-        Some(scheme) => Ok(key
-            .encrypt(rng, scheme, message, out)?
-            .map(|c| c.as_slice().len())),
-        None => {
-            let hash = TpmiAlgHash::try_from(hash).map_err(|_| CryptoError::Unsupported)?;
-            oaep_encrypt(rng, key, hash, label, message, out)
-        }
+    if scheme == Alg::OAEP {
+        let hash = TpmiAlgHash::try_from(hash).map_err(|_| CryptoError::Unsupported)?;
+        return oaep_encrypt(rng, key, hash, label, message, out);
     }
+    let scheme = backend_scheme(scheme, hash, label)?.ok_or(CryptoError::Unsupported)?;
+    Ok(key
+        .encrypt(rng, scheme, message, out)?
+        .map(|c| c.as_slice().len()))
 }
 
 /// Decrypts `ciphertext` with the private key `key` and the scheme `scheme` (see
@@ -117,7 +119,8 @@ fn mgf1_xor<C: Crypto>(hash: TpmiAlgHash, seed: &[u8], mask: &mut [u8]) -> Resul
     Ok(())
 }
 
-/// RSAES-OAEP-ENCRYPT (RFC 8017, 7.1.1) with the raw label `label`, on the backend's `RSAEP`.
+/// RSAES-OAEP-ENCRYPT (RFC 8017, 7.1.1) with the raw label `label`: the reference's encoding
+/// ([`tpm2::crypto::rsa_oaep_encode`], drawing the seed from `rng`) on the backend's `RSAEP`.
 fn oaep_encrypt<C: Crypto>(
     rng: &mut C::Rng,
     key: &RsaPublicKey<C>,
@@ -127,23 +130,11 @@ fn oaep_encrypt<C: Crypto>(
     out: &mut [u8],
 ) -> Result<Option<usize>, CryptoError> {
     let k = usize::from(key.bits().as_u16()) / 8;
-    let h_len = hash.digest_size();
-    if k < 2 * h_len + 2 || message.len() > k - 2 * h_len - 2 {
+    let mut em = [0u8; MAX_MODULUS];
+    let em = em.get_mut(..k).ok_or(CryptoError::Internal)?;
+    if tpm2::crypto::rsa_oaep_encode::<C>(rng, hash, label, message, em)?.is_none() {
         return Ok(None);
     }
-    // EM = 0x00 || maskedSeed || maskedDB, DB = lHash || PS || 0x01 || M.
-    let mut em = [0u8; MAX_MODULUS];
-    let em = &mut em[..k];
-    let (seed, db) = em[1..].split_at_mut(h_len);
-    let mut l_hash = [0u8; MAX_DIGEST];
-    let l_hash = tpm2::crypto::hash::<C>(hash, &[label], &mut l_hash)?;
-    db[..h_len].copy_from_slice(l_hash.digest());
-    let one = db.len() - message.len() - 1;
-    db[one] = 0x01;
-    db[one + 1..].copy_from_slice(message);
-    rng.fill_bytes(seed)?;
-    mgf1_xor::<C>(hash, seed, db)?;
-    mgf1_xor::<C>(hash, db, seed)?;
     Ok(key
         .encrypt(rng, RsaEncryptScheme::Raw, em, out)?
         .map(|c| c.as_slice().len()))
@@ -198,7 +189,7 @@ mod tests {
     use tpm2::TpmiRsaKeyBits;
     use tpm2::crypto::Random;
     #[cfg(feature = "dev_crypto_bssl")]
-    use tpm2_crypto_bssl::BsslCryptoProvider as Dev;
+    type Dev = tpm2_crypto_bssl::BsslCryptoProvider;
     #[cfg(feature = "dev_crypto_crux")]
     use tpm2_crypto_crux::CruxCryptoProvider as Dev;
     #[cfg(feature = "dev_crypto_rust")]

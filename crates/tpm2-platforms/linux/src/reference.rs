@@ -10,8 +10,9 @@
 //! (with a port of glibc's `rand()`, [`GlibcRand`]), given the process ID of
 //! the reference process and the same clock ([`VirtualClock`]).
 //!
-//! Together with the references' DRBG, which `tpm2-engine`'s `reference-rng` links,
-//! this makes `tpm-rs` draw exactly the random values a C reference TPM draws.
+//! Together with the references' DRBG ([`crate::ReferenceRng`], which links
+//! their C code), this makes `tpm-rs` draw exactly the random values a C
+//! reference TPM draws.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -212,23 +213,18 @@ mod tests {
     }
 
     /// `DRBG_Instantiate()` and `DRBG_Generate()` of the same C process on top
-    /// of this entropy source, through the C DRBG linked by `tpm2-engine`.
+    /// of this entropy source, through the linked C DRBG ([`crate::ReferenceRng`]).
     #[test]
     fn reference_drbg_on_reference_entropy_matches_c() {
-        use tpm2_engine::reference_rng::{RefRng, drbg};
+        use tpm2::crypto::Rng;
         let clock = VirtualClock::new(123_456_789);
-        let mut rng = crate::LinuxRng::reference(ReferenceEntropy::new(814_633, clock.clone()));
-        tpm2::crypto::Rng::init(&mut rng).unwrap();
+        let mut rng = crate::ReferenceRng::new(ReferenceEntropy::new(814_633, clock.clone()));
+        rng.init().unwrap();
         clock.advance(5);
-        let mut state = tpm2_engine::DrbgState::default();
-        let mut ref_rng = RefRng {
-            drbg: Some(&mut state),
-            entropy: Some(&mut rng),
-            self_test: None,
-        };
-        drbg::instantiate(&mut ref_rng).unwrap();
+        // `CryptRandStartup()` instantiates the new DRBG (`DRBG_Instantiate()`).
+        rng.startup().unwrap();
         let mut out = [0u8; 40];
-        drbg::fill(&mut ref_rng, None, &mut out).unwrap();
+        rng.fill_bytes(&mut out).unwrap();
         assert_eq!(
             out,
             [

@@ -1,8 +1,8 @@
 //! The platform a [`TpmEngine`](crate::TpmEngine) runs on.
 //!
 //! Everything the engine needs from its environment is behind the [`Platform`] trait: the
-//! cryptography backend, the monotonic timer, the platform random number generator, the type
-//! of the structure that holds the NV data ([`IndexState`], kept in the TPM state as
+//! cryptography backend (and the TPM's random number generator, [`Platform::crypto_rng`]),
+//! the monotonic timer, the type of the structure that holds the NV data ([`IndexState`], kept in the TPM state as
 //! [`Nv::index`]), the firmware secrets ([`Platform::firmware_secret`],
 //! [`Platform::firmware_svn_secret`]), the secure transport layer and the platform
 //! [`PlatformInfo`] (including the firmware identity, [`Firmware`]). The platform also decides how the NV data reaches external storage
@@ -18,7 +18,7 @@ use crate::state::Nv;
 use crate::state::State;
 use crate::storage::IndexState;
 use crate::timer::TpmTimer;
-use tpm2::crypto::{Crypto, Rng};
+use tpm2::crypto::{Crypto, CryptoError, Random};
 use tpm2::errors::TpmRc;
 use tpm2::platform::{FirmwareSecretUnavailable, SecureChannel};
 use tpm2::{TpmCc, TpmaCc};
@@ -117,10 +117,6 @@ pub trait Platform: Sized {
     type Crypto: Crypto;
     /// Monotonic timer.
     type Timer: TpmTimer;
-    /// Platform random number generator ([`Rng::fill_bytes`] draws random bytes,
-    /// [`Rng::stir_bytes`] mixes additional entropy into its state and [`Rng::init`]
-    /// reinitializes its entropy source at `_TPM_Init`).
-    type Rng: Rng + Sync;
     /// Structure used to hold the NV data (the `Handle -> [u8]` mapping of the NV Indices,
     /// persistent objects and internal records, see [`IndexState`]). The TPM state owns it
     /// ([`Nv::index`]); every [`crate::storage::NvStorage`] medium is one.
@@ -135,8 +131,28 @@ pub trait Platform: Sized {
     /// The monotonic timer.
     fn timer(&self) -> &Self::Timer;
 
-    /// The platform random number generator.
-    fn rng(&mut self) -> &mut Self::Rng;
+    /// Creates the TPM's random number generator (its DRBG, kept as
+    /// [`TpmEngine::crypto_rng`](crate::TpmEngine::crypto_rng)), from which the engine draws
+    /// every random value: seeds, proofs, nonces, `TPM2_GetRandom`, keys, secrets and the
+    /// randomness of the randomized key operations. The engine calls it once, in
+    /// [`TpmEngine::new`](crate::TpmEngine::new), and drives the generator's lifecycle through
+    /// the hooks of [`Rng`] ([`Rng::init`] at `_TPM_Init` and manufacture, [`Rng::self_test`],
+    /// [`Rng::startup`] at `TPM2_Startup`, and [`Rng::save_state`]/[`Rng::load_state`] at the
+    /// NV points of the references' `go.drbgState`).
+    ///
+    /// Defaults to [`Random::from_entropy`] of the crypto backend. A platform overrides it to
+    /// choose another generator of the backend's [`Random::Rng`] type (e.g. a deterministic
+    /// one for differential testing).
+    ///
+    /// [`Rng`]: tpm2::crypto::Rng
+    /// [`Rng::init`]: tpm2::crypto::Rng::init
+    /// [`Rng::self_test`]: tpm2::crypto::Rng::self_test
+    /// [`Rng::startup`]: tpm2::crypto::Rng::startup
+    /// [`Rng::save_state`]: tpm2::crypto::Rng::save_state
+    /// [`Rng::load_state`]: tpm2::crypto::Rng::load_state
+    fn crypto_rng(&mut self) -> Result<<Self::Crypto as Random>::Rng, CryptoError> {
+        <Self::Crypto as Random>::from_entropy()
+    }
 
     /// Writes the Firmware Secret of the running firmware into `out` and returns its length (at
     /// most `out.len()`); the TPM asks for as many octets as the seed or proof of the

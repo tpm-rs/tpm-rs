@@ -1,7 +1,7 @@
 mod common;
 
 use common::FakePlatform;
-use common::{FakeCrypto, FakeRng, FakeStorage, FakeTimer};
+use common::{FakeCrypto, FakeStorage, FakeTimer};
 use hex_literal::hex;
 use tpm2_engine::TpmEngine;
 
@@ -30,9 +30,8 @@ fn setup_tpm_with_fake_platform<'a>(
     crypto: &'a mut FakeCrypto,
     storage: &'a mut FakeStorage,
     timer: &'a mut FakeTimer,
-    rng: &'a mut FakeRng,
-) -> TpmEngine<FakePlatform<'a, FakeCrypto, &'a mut FakeStorage, FakeTimer, FakeRng>> {
-    let platform = FakePlatform::new(crypto, timer, rng);
+) -> TpmEngine<FakePlatform<'a, FakeCrypto, &'a mut FakeStorage, FakeTimer>> {
+    let platform = FakePlatform::new(crypto, timer);
     let mut tpm = TpmEngine::new(platform, storage).unwrap();
     tpm.init_storage();
 
@@ -48,8 +47,7 @@ fn test_adv_mac_unsupported_hash() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let mut rng = FakeRng::new();
-    let mut tpm = setup_tpm_with_fake_platform(&mut crypto, &mut storage, &mut timer, &mut rng);
+    let mut tpm = setup_tpm_with_fake_platform(&mut crypto, &mut storage, &mut timer);
     let key_handle = 0x80000001;
 
     let public = TpmtPublic {
@@ -108,8 +106,7 @@ fn test_ecdh_zgen_scheme_error() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let mut rng = FakeRng::new();
-    let mut tpm = setup_tpm_with_fake_platform(&mut crypto, &mut storage, &mut timer, &mut rng);
+    let mut tpm = setup_tpm_with_fake_platform(&mut crypto, &mut storage, &mut timer);
     let key_handle = 0x80000001;
 
     // Key with ECDSA scheme (invalid for ECDH_ZGen)
@@ -177,8 +174,7 @@ fn test_ecdh_zgen_public_only_key_error() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let mut rng = FakeRng::new();
-    let mut tpm = setup_tpm_with_fake_platform(&mut crypto, &mut storage, &mut timer, &mut rng);
+    let mut tpm = setup_tpm_with_fake_platform(&mut crypto, &mut storage, &mut timer);
     let key_handle = 0x80000001;
 
     // ECC key but private_len = 0

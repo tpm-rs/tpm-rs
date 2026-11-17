@@ -4,8 +4,8 @@ use core::ffi::CStr;
 
 use super::{
     CryptoError, SignatureBuffer,
-    backend::{PrivateKey, Rsa, RsaKey},
-    left_pad_be, match_rsa_bits,
+    backend::{Hash, PrivateKey, Rsa, RsaKey},
+    left_pad_be, match_rsa_bits, rsa_oaep_encode, rsa_pkcs1v15_encode,
 };
 use crate::{
     Tpm2bPrivateKeyRsa, Tpm2bPublicKeyRsa, TpmiAlgHash, TpmiRsaKeyBits, TpmtRsaDecrypt,
@@ -201,18 +201,24 @@ impl<R: Rsa> RsaPublicKey<R> {
             },
         })
     }
+}
 
+impl<R: Rsa + Hash> RsaPublicKey<R> {
     /// Encrypts `plaintext` under this key using `scheme`
     /// (`TPM2_RSA_Encrypt`, `TPM2_MakeCredential`, `TPM2_Duplicate`),
     /// writing the ciphertext into `out`.
+    ///
+    /// For [`RsaEncryptScheme::Rsaes`] and [`RsaEncryptScheme::Oaep`], the
+    /// message is encoded by [`rsa_pkcs1v15_encode`] / [`rsa_oaep_encode`]
+    /// (tpm-rs extensions: the C reference TPMs' encodings, drawing from
+    /// `rng`) and raised to the public exponent by the backend's raw RSA.
     ///
     /// `out` must be at least `self.bits().as_u16() / 8` bytes (e.g. an
     /// [`RsaModulusBuffer`]). Returns `Ok(None)` if `plaintext` is invalid
     /// for the key or `scheme` (e.g. too long, or `>= modulus` for
     /// [`RsaEncryptScheme::Raw`]), or `Err(`[`CryptoError::Unsupported`]`)`
     /// for [`RsaEncryptScheme::Rsaes`] if the `rsaes`
-    /// [crate feature](crate#algorithm-feature-flags) is disabled or the
-    /// backend doesn't support it.
+    /// [crate feature](crate#algorithm-feature-flags) is disabled.
     pub fn encrypt<'a>(
         &self,
         rng: &mut R::Rng,
@@ -233,10 +239,22 @@ impl<R: Rsa> RsaPublicKey<R> {
                         };
                         R::$Alg::raw_encrypt(k, &m, buf)?
                     }
-                    RsaEncryptScheme::Rsaes => R::$Alg::rsaes_encrypt(k, rng, plaintext, buf)?,
-                    RsaEncryptScheme::Oaep { hash, .. } => {
-                        let label = scheme.label_bytes();
-                        R::$Alg::oaep_encrypt(k, rng, hash, label, plaintext, buf)?
+                    RsaEncryptScheme::Rsaes | RsaEncryptScheme::Oaep { .. } => {
+                        let mut padded = *buf;
+                        let encoded = match scheme {
+                            RsaEncryptScheme::Oaep { hash, .. } => rsa_oaep_encode::<R>(
+                                rng,
+                                hash,
+                                scheme.label_bytes(),
+                                plaintext,
+                                &mut padded,
+                            )?,
+                            _ => rsa_pkcs1v15_encode(rng, plaintext, &mut padded)?,
+                        };
+                        match encoded {
+                            Some(()) => R::$Alg::raw_encrypt(k, &padded, buf)?,
+                            None => None,
+                        }
                     }
                 };
                 match res {
@@ -286,8 +304,8 @@ impl<R: Rsa> RsaPrivateKey<R> {
         })
     }
 
-    /// Generates a new RSA keypair from `rng` (`exponent == 0` defaults to
-    /// `65537`).
+    /// Generates a new RSA keypair from `rng` with the backend's key
+    /// generation (`exponent == 0` defaults to `65537`).
     ///
     /// Returns `Err(`[`CryptoError::Unsupported`]`)` if `bits` or
     /// `exponent` is unsupported.
@@ -428,10 +446,16 @@ impl<R: Rsa> RsaPrivateKey<R> {
     }
 }
 
-impl<R: Rsa> RsaPrivateKey<R> {
+impl<R: Rsa + Hash> RsaPrivateKey<R> {
     /// Signs `digest` with this key using `scheme` (`RSASSA` or `RSAPSS`;
     /// `TPM2_Sign`), writing the signature into `out` and returning it as a
     /// [`TpmtSignature`].
+    ///
+    /// For `RSAPSS`, the digest is encoded by [`rsa_pss_encode`] (a tpm-rs
+    /// extension: the C reference TPMs' encoding, drawing the salt from `rng`)
+    /// and raised to the private exponent by the backend's raw RSA.
+    ///
+    /// [`rsa_pss_encode`]: super::rsa_pss_encode
     ///
     /// Returns `Err(`[`CryptoError::Unsupported`]`)` for any other scheme, or
     /// `Err(`[`CryptoError::Internal`]`)` if `digest.len()` doesn't match
@@ -477,7 +501,9 @@ impl<R: Rsa> RsaPrivateKey<R> {
                     return Err(CryptoError::Internal);
                 };
                 if pss {
-                    R::$Alg::rsapss_sign(k, rng, digest, buf)?;
+                    let mut encoded = *buf;
+                    super::rsa_pss_encode::<R>(rng, digest.hash_alg(), digest.digest(), &mut encoded)?;
+                    R::$Alg::raw_decrypt(k, rng, &encoded, buf)?.ok_or(CryptoError::Internal)?;
                 } else {
                     R::$Alg::rsassa_sign(k, rng, digest, buf)?;
                 }

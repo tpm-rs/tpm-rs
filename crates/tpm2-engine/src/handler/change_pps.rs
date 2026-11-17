@@ -48,9 +48,9 @@ impl<'b, P: Platform> CommandHandler<'b, P> {
         let mut new_ph_proof = [0u8; 64];
 
         self.context
-            .random_platform(&mut new_pp_seed[..PRIMARY_SEED_SIZE])?;
+            .crypt_random_generate(&mut new_pp_seed[..PRIMARY_SEED_SIZE])?;
         self.context
-            .random_platform(&mut new_ph_proof[..PROOF_SIZE])?;
+            .crypt_random_generate(&mut new_ph_proof[..PROOF_SIZE])?;
 
         self.nv_clear_orderly()?;
 

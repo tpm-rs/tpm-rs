@@ -11,7 +11,7 @@ use tpm2_engine::TpmEngine;
 
 /// Executes `request` and returns the response.
 fn execute(
-    tpm: &mut TpmEngine<FakePlatform<'_, FakeCrypto, &'_ mut FakeStorage, FakeTimer, FakeRng>>,
+    tpm: &mut TpmEngine<FakePlatform<'_, FakeCrypto, &'_ mut FakeStorage, FakeTimer>>,
     request: &[u8],
 ) -> Vec<u8> {
     let mut response = [0u8; 1024];
@@ -31,8 +31,7 @@ fn failed_self_test_enters_failure_mode_until_tpm_init() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let mut rng = FakeRng::new();
-    let platform = FakePlatform::new(&mut crypto, &mut timer, &mut rng);
+    let platform = FakePlatform::new(&mut crypto, &mut timer);
     let mut tpm = TpmEngine::new(platform, &mut storage).unwrap();
     tpm.init_storage();
     tpm.reset();
@@ -82,8 +81,7 @@ fn failure_information_is_reported_by_get_test_result() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let mut rng = FakeRng::new();
-    let platform = FakePlatform::new(&mut crypto, &mut timer, &mut rng);
+    let platform = FakePlatform::new(&mut crypto, &mut timer);
     let mut tpm = TpmEngine::new(platform, &mut storage).unwrap();
     tpm.init_storage();
     tpm.reset();
@@ -105,21 +103,84 @@ fn failure_information_is_reported_by_get_test_result() {
     assert_eq!(tpm.self_test.failure(), (0x0123_4567_89AB_CDEF, 5));
 }
 
-/// The DRBG self-test flags (`g_cryptoSelfTestState.rng`) belong to the TPM: `_TPM_Init` clears
-/// them and runs `DRBG_SelfTest()` (`CryptoRand_LibInit()`), which sets `TESTED`.
-#[cfg(feature = "reference-rng")]
+std::thread_local! {
+    /// The calls of the [`LifecycleRng`] hooks of this thread, in order.
+    static RNG_CALLS: std::cell::RefCell<Vec<&'static str>> = const { std::cell::RefCell::new(Vec::new()) };
+    /// The result of the next [`LifecycleRng`] self tests of this thread.
+    static RNG_SELF_TEST_PASSES: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+}
+
+/// A TPM random number generator ([`FakeRng`]) that records its lifecycle hooks
+/// ([`RNG_CALLS`]) and whose self test passes as [`RNG_SELF_TEST_PASSES`] says.
+#[derive(Default)]
+struct LifecycleRng(FakeRng);
+
+impl tpm2::crypto::Rng for LifecycleRng {
+    fn fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), tpm2::crypto::CryptoError> {
+        self.0.fill_bytes(dest)
+    }
+
+    fn stir_bytes(&mut self, data: &[u8]) -> Result<(), tpm2::crypto::CryptoError> {
+        self.0.stir_bytes(data)
+    }
+
+    fn init(&mut self) -> Result<(), tpm2::crypto::CryptoError> {
+        RNG_CALLS.with_borrow_mut(|calls| calls.push("init"));
+        Ok(())
+    }
+
+    fn startup(&mut self) -> Result<(), tpm2::crypto::CryptoError> {
+        RNG_CALLS.with_borrow_mut(|calls| calls.push("startup"));
+        Ok(())
+    }
+
+    fn self_test(&mut self) -> Result<bool, tpm2::crypto::CryptoError> {
+        RNG_CALLS.with_borrow_mut(|calls| calls.push("self_test"));
+        Ok(RNG_SELF_TEST_PASSES.get())
+    }
+}
+
+/// The fake crypto backend with a [`LifecycleRng`].
+struct LifecycleCrypto;
+
+impl_fake_crypto!(common, LifecycleCrypto, LifecycleRng);
+
+/// The TPM's random number generator is (re)initialized and self-tested at manufacture and at
+/// every `_TPM_Init` (`CryptInit()`: `_plat__GetEntropy(NULL, 0)`, then `DRBG_SelfTest()`) and
+/// started at manufacture and `TPM2_Startup` (`CryptRandStartup()`); a failed DRBG self test
+/// puts the TPM into Failure mode until the next `_TPM_Init` whose self test passes.
 #[test]
 fn tpm_init_runs_the_drbg_self_test() {
-    use tpm2_engine::self_test::rng_flags;
-    let mut crypto = FakeCrypto;
+    let mut crypto = LifecycleCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let mut rng = FakeRng::new();
-    let platform = FakePlatform::new(&mut crypto, &mut timer, &mut rng);
+    let platform = FakePlatform::new(&mut crypto, &mut timer);
     let mut tpm = TpmEngine::new(platform, &mut storage).unwrap();
+    RNG_CALLS.with_borrow_mut(Vec::clear);
+    RNG_SELF_TEST_PASSES.set(true);
     tpm.init_storage();
-    tpm.self_test.set_rng_flags(rng_flags::ENTROPY);
+    assert_eq!(
+        RNG_CALLS.with_borrow_mut(std::mem::take),
+        ["init", "self_test", "startup"]
+    );
+
+    RNG_SELF_TEST_PASSES.set(false);
     tpm.reset();
-    assert_eq!(tpm.self_test.rng_flags(), rng_flags::TESTED);
+    assert_eq!(
+        RNG_CALLS.with_borrow_mut(std::mem::take),
+        ["init", "self_test"]
+    );
+    assert!(tpm.self_test.failed());
+
+    RNG_SELF_TEST_PASSES.set(true);
+    tpm.reset();
     assert!(!tpm.self_test.failed());
+    let startup = [0x80, 0x01, 0, 0, 0, 0x0c, 0, 0, 0x01, 0x44, 0, 0];
+    let mut response = [0u8; 64];
+    tpm.execute_command_separate(&startup, &mut response);
+    assert_eq!(&response[6..10], &[0, 0, 0, 0]);
+    assert_eq!(
+        RNG_CALLS.with_borrow_mut(std::mem::take),
+        ["init", "self_test", "startup"]
+    );
 }

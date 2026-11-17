@@ -289,25 +289,22 @@ fn test_rsa_decrypt_oaep_non_utf8_label() {
     let res = key.decrypt(&mut rng(), scheme, &ciphertext, &mut plaintext);
     assert_eq!(res, Ok(None));
 
-    // A real ciphertext with this label: the `rust` and `bssl` backends accept
-    // any label bytes, while `crux` (whose `rsa` crate takes UTF-8 labels)
-    // rejects non-UTF-8 labels with `Ok(None)`.
+    // A real ciphertext with this label: the dispatch functions' OAEP encoding takes any label
+    // bytes on every backend, and the `rust` and `bssl` backends decrypt it, while `crux` (whose
+    // `rsa` crate takes UTF-8 labels) rejects non-UTF-8 labels with `Ok(None)`.
     let public = rsa_public(TpmiRsaKeyBits::Rsa1024, 65537, &modulus[..128]).unwrap();
     let mut ct = [0u8; MAX_PUB_KEY_BYTES];
     let ct = public
         .encrypt(&mut rng(), scheme, b"secret", &mut ct)
+        .unwrap()
+        .unwrap();
+    let dec = key
+        .decrypt(&mut rng(), scheme, ct.as_slice(), &mut plaintext)
         .unwrap();
     #[cfg(feature = "crux")]
-    assert_eq!(ct, None);
+    assert_eq!(dec, None);
     #[cfg(not(feature = "crux"))]
-    {
-        let ct = ct.unwrap();
-        let dec = key
-            .decrypt(&mut rng(), scheme, ct.as_slice(), &mut plaintext)
-            .unwrap()
-            .unwrap();
-        assert_eq!(dec.as_slice(), b"secret");
-    }
+    assert_eq!(dec.unwrap().as_slice(), b"secret");
 }
 
 #[test]

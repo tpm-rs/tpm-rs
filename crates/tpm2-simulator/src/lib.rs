@@ -18,13 +18,15 @@ pub struct Args {
 
 use tpm2::Connection;
 use tpm2::commands::Command;
+use tpm2::crypto::{Crypto, Random};
 use tpm2::platform::SimulatedSecureChannel;
 pub use tpm2_engine::{
     DeserializeError, NO_STREAM, PlatformConnection, SerializeError, SimulatorPlatformSignal,
 };
 use tpm2_engine::{InternalError, TpmEngine};
 use tpm2_platform_linux::{
-    LinuxPlatform, LinuxRng, LinuxTimer, PlatformCryptoProvider, create_linux_platform,
+    LinuxPlatform, LinuxTimer, PlatformCryptoProvider, create_linux_platform,
+    platform_crypto_provider,
 };
 
 /// Commands for the command server.
@@ -106,28 +108,45 @@ pub const NV_STORAGE_SIZE: usize = 2 * tpm2_engine::storage::nv_capacity::NV_MEM
 /// through the command interface ([`Simulator::execute`] and
 /// [`Connection::transact`]) and platform signals
 /// ([`PlatformConnection::signal_platform`]), exactly like a real TPM.
-pub struct Simulator<'a> {
-    context: Box<
-        TpmEngine<
-            LinuxPlatform<'a, PlatformCryptoProvider, &'a mut RamStorageMock<NV_STORAGE_SIZE>>,
-        >,
-    >,
+///
+/// `C` is the crypto backend of the TPM, by default the platform's
+/// ([`PlatformCryptoProvider`]); its RNG (`C::Rng`) is the TPM's RNG, from which every random
+/// value of the TPM is drawn (with the `reference-rng` feature, the simulators of
+/// [`create_reference_simulator!`] use `ReferenceCryptoProvider`, whose RNG is the C reference
+/// TPM's DRBG).
+pub struct Simulator<'a, C: Crypto = PlatformCryptoProvider> {
+    context: Box<TpmEngine<LinuxPlatform<'a, C, &'a mut RamStorageMock<NV_STORAGE_SIZE>>>>,
     is_power_on: bool,
     is_nv_on: bool,
 }
 
-impl<'a> Simulator<'a> {
+impl<'a, C: Crypto> Simulator<'a, C> {
+    /// A simulator on the crypto backend `crypto` (the TPM's RNG is `C::from_entropy()`),
+    /// the NV storage `storage` and the timer `timer`.
     pub fn new(
-        crypto: &'a mut PlatformCryptoProvider,
+        crypto: &'a mut C,
         storage: &'a mut RamStorageMock<NV_STORAGE_SIZE>,
         timer: &'a mut LinuxTimer,
-        platform_rng: &'a mut LinuxRng,
+    ) -> Result<Self, InternalError> {
+        Self::with_crypto_rng(crypto, storage, timer, None)
+    }
+
+    /// Like [`Simulator::new`], but the TPM's RNG is `crypto_rng` (if given) instead of
+    /// `C::from_entropy()` (see `LinuxPlatform::with_crypto_rng`).
+    pub fn with_crypto_rng(
+        crypto: &'a mut C,
+        storage: &'a mut RamStorageMock<NV_STORAGE_SIZE>,
+        timer: &'a mut LinuxTimer,
+        crypto_rng: Option<<C as Random>::Rng>,
     ) -> Result<Self, InternalError> {
         // Like the TCG reference, the simulator has a dummy secure transport layer that
         // protects every command with an SPDM session (`SimulatedSecureChannel`); the TPM uses
         // it with the `sec-channel` feature of `tpm2-engine`.
-        let platform = create_linux_platform(crypto, timer, platform_rng)
-            .with_secure_channel(&SimulatedSecureChannel);
+        let mut platform =
+            create_linux_platform(crypto, timer).with_secure_channel(&SimulatedSecureChannel);
+        if let Some(crypto_rng) = crypto_rng {
+            platform.set_crypto_rng(crypto_rng);
+        }
         let mut context = Box::new(TpmEngine::new(platform, storage)?);
         context.init_storage();
         Ok(Self {
@@ -138,27 +157,25 @@ impl<'a> Simulator<'a> {
     }
 
     /// Returns the simulator to the state of a new one built from its own
-    /// crypto backend, fresh empty NV storage, `timer` and `platform_rng`,
-    /// powered on, NV enabled and `TPM2_Startup(TPM_SU_CLEAR)` done, reusing
+    /// crypto backend, fresh empty NV storage, `timer` and the TPM's RNG `crypto_rng`, powered on, NV enabled and `TPM2_Startup(TPM_SU_CLEAR)` done, reusing
     /// the simulator's allocations (the components it borrows are
     /// overwritten in place, so nothing is leaked).
     ///
     /// # Panics
-    /// If the power-on, NV enable or `TPM2_Startup` fails, or the crypto
-    /// backend's entropy source fails.
+    /// If the power-on, NV enable or `TPM2_Startup` fails.
     #[cfg(feature = "reference-rng")]
-    fn restart_with(&mut self, timer: LinuxTimer, platform_rng: LinuxRng) {
+    fn restart_with(&mut self, timer: LinuxTimer, crypto_rng: <C as Random>::Rng) {
         let platform = &mut self.context.platform;
         *platform.timer = timer;
-        *platform.rng = platform_rng;
+        platform.set_crypto_rng(crypto_rng);
         platform.reset_vendor_state();
         *self.context.state.nv.index = RamStorageMock::new();
         // The firmware of a new simulator.
         platform.info.firmware = tpm2_platform_linux::DEFAULT_FIRMWARE;
         // What `TpmEngine::new` + `Simulator::new` do.
         self.context.state.reinitialize();
-        self.context.crypto_rng = <PlatformCryptoProvider as tpm2::crypto::Random>::from_entropy()
-            .expect("the crypto backend's entropy source failed");
+        self.context.crypto_rng = tpm2_engine::Platform::crypto_rng(&mut self.context.platform)
+            .expect("the TPM's RNG was set");
         self.context.init_storage();
         self.is_power_on = false;
         self.is_nv_on = false;
@@ -508,7 +525,7 @@ pub const SERIALIZED_STATE_CAPACITY: usize = 128 * 1024;
 
 /// Sends commands through the simulator's MSSIM command path at locality 0: while the simulator
 /// is powered off, the response is empty.
-impl Connection for Simulator<'_> {
+impl<C: Crypto> Connection for Simulator<'_, C> {
     type Error = ExecuteError;
 
     fn transact<'b>(&mut self, cmd: &[u8], rsp: &'b mut [u8]) -> Result<&'b mut [u8], Self::Error> {
@@ -535,7 +552,7 @@ impl Connection for Simulator<'_> {
     }
 }
 
-impl PlatformConnection for Simulator<'_> {
+impl<C: Crypto> PlatformConnection for Simulator<'_, C> {
     fn signal_platform<S: Read + Write>(
         &mut self,
         command: SimulatorPlatformSignal,
@@ -576,14 +593,16 @@ pub mod __private {
     pub use tpm2::TpmSu;
     pub use tpm2::commands::Startup;
     pub use tpm2_engine::storage::ram_storage_mock::RamStorageMock;
-    pub use tpm2_platform_linux::{LinuxRng, LinuxTimer, PlatformCryptoProvider};
+    pub use tpm2_platform_linux::{
+        LinuxRng, LinuxTimer, PlatformCryptoProvider, platform_crypto_provider,
+    };
 }
 
 /// Powers `sim` on, enables NV and sends `TPM2_Startup(TPM_SU_CLEAR)`.
 ///
 /// # Panics
 /// If any of these steps fails.
-fn power_on_start_up(sim: &mut Simulator<'_>) {
+fn power_on_start_up<C: Crypto>(sim: &mut Simulator<'_, C>) {
     sim.signal_platform(SimulatorPlatformSignal::PowerOn, NO_STREAM)
         .expect("failed to power on the TPM simulator");
     sim.signal_platform(SimulatorPlatformSignal::NvOn, NO_STREAM)
@@ -594,14 +613,18 @@ fn power_on_start_up(sim: &mut Simulator<'_>) {
     .expect("TPM2_Startup(TPM_SU_CLEAR) failed");
 }
 
-/// Builds a powered-on, NV-enabled, started simulator from leaked components.
-fn new_started_simulator(timer: LinuxTimer, platform_rng: LinuxRng) -> Simulator<'static> {
-    let crypto: &'static mut PlatformCryptoProvider = Box::leak(Box::new(PlatformCryptoProvider));
+/// Builds a powered-on, NV-enabled, started simulator on the crypto backend `crypto` from
+/// leaked components (the TPM's RNG is `crypto_rng`, or `C::from_entropy()`).
+fn new_started_simulator<C: Crypto>(
+    crypto: C,
+    timer: LinuxTimer,
+    crypto_rng: Option<<C as Random>::Rng>,
+) -> Simulator<'static, C> {
+    let crypto: &'static mut C = Box::leak(Box::new(crypto));
     let storage: &'static mut RamStorageMock<NV_STORAGE_SIZE> =
         Box::leak(Box::new(RamStorageMock::new()));
     let timer: &'static mut LinuxTimer = Box::leak(Box::new(timer));
-    let platform_rng: &'static mut LinuxRng = Box::leak(Box::new(platform_rng));
-    let mut sim = Simulator::new(crypto, storage, timer, platform_rng)
+    let mut sim = Simulator::with_crypto_rng(crypto, storage, timer, crypto_rng)
         .expect("failed to create TPM simulator");
     power_on_start_up(&mut sim);
     sim
@@ -610,14 +633,14 @@ fn new_started_simulator(timer: LinuxTimer, platform_rng: LinuxRng) -> Simulator
 /// Implementation of [`create_simulator!`]. Not part of the public API.
 #[doc(hidden)]
 pub fn __new_simulator() -> Simulator<'static> {
-    new_started_simulator(LinuxTimer::new(), LinuxRng::new())
+    new_started_simulator(platform_crypto_provider(), LinuxTimer::new(), None)
 }
 
 /// Creates a fresh, self-contained in-process [`Simulator`] that has been
 /// powered on, had NV enabled, and received `TPM2_Startup(TPM_SU_CLEAR)`.
 ///
-/// Every invocation allocates its own crypto backend, RAM-backed NV storage,
-/// timer and platform RNG (leaked to obtain a `'static` lifetime), so
+/// Every invocation allocates its own crypto backend, RAM-backed NV storage
+/// and timer (leaked to obtain a `'static` lifetime), so
 /// simulators created by different tests — or by repeated calls of the same
 /// helper — never share TPM state.
 ///
@@ -630,8 +653,28 @@ macro_rules! create_simulator {
     };
 }
 
+/// The crypto backend of the reference simulators: BoringSSL on the C reference TPM's DRBG
+/// (`tpm2_platform_linux::ReferenceRng`).
 #[cfg(feature = "reference-rng")]
-impl Simulator<'_> {
+pub use tpm2_platform_linux::ReferenceCryptoProvider;
+
+/// The virtual clock at `realtime_ms`, a virtual timer on it and the C reference TPM's DRBG
+/// on the reference entropy of process `pid` at that clock.
+#[cfg(feature = "reference-rng")]
+fn reference_components(
+    pid: u32,
+    realtime_ms: u64,
+) -> (LinuxTimer, tpm2_platform_linux::ReferenceRng) {
+    use tpm2_platform_linux::{ReferenceEntropy, ReferenceRng, VirtualClock};
+    let clock = VirtualClock::new(realtime_ms);
+    (
+        LinuxTimer::new_virtual(clock.clone()),
+        ReferenceRng::new(ReferenceEntropy::new(pid, clock)),
+    )
+}
+
+#[cfg(feature = "reference-rng")]
+impl Simulator<'_, ReferenceCryptoProvider> {
     /// Advances the simulator's virtual clock by `ms` milliseconds.
     ///
     /// Returns `false` (and does nothing) if the simulator runs on the wall
@@ -642,45 +685,41 @@ impl Simulator<'_> {
 
     /// Returns the simulator to exactly the state
     /// [`create_reference_simulator!`]`(pid, realtime_ms)` gives (fresh NV,
-    /// virtual clock at `realtime_ms`, reference entropy seeded from `pid`,
-    /// powered on, NV enabled and `TPM2_Startup(TPM_SU_CLEAR)` done), but
+    /// virtual clock at `realtime_ms`, the reference DRBG on the reference entropy seeded
+    /// from `pid`, powered on, NV enabled and `TPM2_Startup(TPM_SU_CLEAR)` done), but
     /// reuses the simulator's components instead of leaking new ones. Use it
     /// to reset a simulator many times (e.g. once per fuzz input).
     ///
     /// # Panics
     /// If the power-on, NV enable or `TPM2_Startup` fails.
     pub fn reset_reference(&mut self, pid: u32, realtime_ms: u64) {
-        use tpm2_platform_linux::{ReferenceEntropy, VirtualClock};
-        let clock = VirtualClock::new(realtime_ms);
-        self.restart_with(
-            LinuxTimer::new_virtual(clock.clone()),
-            LinuxRng::reference(ReferenceEntropy::new(pid, clock)),
-        );
+        let (timer, crypto_rng) = reference_components(pid, realtime_ms);
+        self.restart_with(timer, crypto_rng);
     }
 }
 
 /// Implementation of [`create_reference_simulator!`]. Not part of the public API.
 #[cfg(feature = "reference-rng")]
 #[doc(hidden)]
-pub fn __new_reference_simulator(pid: u32, realtime_ms: u64) -> Simulator<'static> {
-    use tpm2_platform_linux::{ReferenceEntropy, VirtualClock};
-    let clock = VirtualClock::new(realtime_ms);
-    new_started_simulator(
-        LinuxTimer::new_virtual(clock.clone()),
-        LinuxRng::reference(ReferenceEntropy::new(pid, clock)),
-    )
+pub fn __new_reference_simulator(
+    pid: u32,
+    realtime_ms: u64,
+) -> Simulator<'static, ReferenceCryptoProvider> {
+    let (timer, crypto_rng) = reference_components(pid, realtime_ms);
+    new_started_simulator(ReferenceCryptoProvider::new(), timer, Some(crypto_rng))
 }
 
-/// Like [`create_simulator!`], but the simulator reproduces the randomness and
+/// Like [`create_simulator!`], but the simulator (a `Simulator<'static,
+/// ReferenceCryptoProvider>`) reproduces the randomness and
 /// clock of a C reference TPM process (`tcgtpm`/`ibmswtpm2` built for
 /// differential testing) with process ID `$pid` whose `_plat__RealTime()`
 /// started at `$realtime_ms` milliseconds:
 ///
 /// * the timer is a virtual clock starting at 0 ms (real time `$realtime_ms`)
 ///   that only moves via [`Simulator::advance_clock`];
-/// * the platform entropy reproduces the reference's `_plat__GetEntropy()`
-///   (glibc `rand()` seeded from the real time and `$pid`), which feeds
-///   `tpm2-engine`'s port of the reference DRBG (`reference-rng` feature).
+/// * the TPM's RNG is the C reference TPM's DRBG (`tpm2_platform_linux::ReferenceRng`, which
+///   also runs the reference's algorithms that consume its output) on the reference's
+///   `_plat__GetEntropy()` (glibc `rand()` seeded from the real time and `$pid`).
 ///
 /// Two simulators created with the same `$pid` and `$realtime_ms` and fed the
 /// same inputs (including clock advances) produce byte-identical responses,

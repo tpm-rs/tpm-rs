@@ -3,7 +3,7 @@ use common::marshal_to_slice;
 mod common;
 
 use common::FakePlatform;
-use common::{FakeCrypto, FakeRng, FakeStorage, FakeTimer};
+use common::{FakeCrypto, FakeStorage, FakeTimer};
 use tpm2::Handle;
 use tpm2::commands::HierarchyChangeAuth;
 use tpm2_engine::TpmEngine;
@@ -14,8 +14,7 @@ fn test_no_direct_nv_write() {
     let mut storage = FakeStorage::default();
     storage.fail_on_write = true; // MUST NOT write to NV directly
     let mut timer = FakeTimer;
-    let mut rng = FakeRng::new();
-    let platform = FakePlatform::new(&mut crypto, &mut timer, &mut rng);
+    let platform = FakePlatform::new(&mut crypto, &mut timer);
     let mut tpm = TpmEngine::new(platform, &mut storage).unwrap();
     tpm.init_storage();
     tpm.state.nv_available = true;
@@ -100,10 +99,6 @@ impl tpm2_engine::storage::NvStorage for CountingStorage {
 }
 
 #[test]
-#[cfg_attr(
-    feature = "reference-rng",
-    ignore = "checks the default random sources; `reference-rng` draws from the reference DRBG"
-)]
 fn test_no_nv_writes_stress() {
     let mut crypto = FakeCrypto;
     let mut storage = CountingStorage {
@@ -111,8 +106,7 @@ fn test_no_nv_writes_stress() {
         writes: 0,
     };
     let mut timer = FakeTimer;
-    let mut rng = FakeRng::new();
-    let platform = FakePlatform::new(&mut crypto, &mut timer, &mut rng);
+    let platform = FakePlatform::new(&mut crypto, &mut timer);
     let mut tpm = TpmEngine::new(platform, &mut storage).unwrap();
     tpm.init_storage();
     tpm.state.nv_available = true;

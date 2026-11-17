@@ -16,6 +16,16 @@ tpm2-engine = { workspace = true }
 tpm2-crypto-rust = { workspace = true, optional = true }
 tpm2-crypto-crux = { workspace = true, optional = true }
 tpm2-crypto-bssl = { workspace = true, optional = true }
+# `reference-rng`: thread-local storage (`pthread_*`) for the linked C code's state.
+libc = { version = "0.2", default-features = false, optional = true }
+
+[build-dependencies]
+# `reference-rng`: Rust types and prototypes of the linked C reference code.
+bindgen = { version = "0.72", optional = true }
+
+[dev-dependencies]
+hex-literal = { workspace = true }
+num-bigint = "0.4"
 
 [features]
 default = ["bssl", "sha512"]
@@ -25,10 +35,19 @@ sha512 = ["tpm2/sha512", "tpm2-engine/sha512", "tpm2-crypto-rust?/sha512", "tpm2
 rust = ["dep:tpm2-crypto-rust"]
 crux = ["dep:tpm2-crypto-crux"]
 bssl = ["dep:tpm2-crypto-bssl"]
-# Reproduce the simulator-platform entropy source and clock of the C reference
-# TPMs (`LinuxRng::reference`, `LinuxTimer::new_virtual`, `VirtualClock`) and
-# enable `tpm2-engine`'s linked C code of their DRBG, for differential testing.
-reference-rng = ["tpm2-engine/reference-rng"]
+# Reproduce the random-number generation, entropy source and clock of the C
+# reference TPMs (`tcgtpm`, `ibmswtpm2`) exactly, for differential testing:
+# `ReferenceRng` (a `tpm2::crypto::Rng` that implements every algorithm hook of
+# `tpm2::crypto` with the references' own C code: their CTR-DRBG and every
+# algorithm that consumes its output, see `src/reference_rng/mod.rs`; the TPM's
+# RNG of `LinuxPlatform<ReferenceCryptoProvider, ...>`, i.e.
+# `BsslCryptoProvider<ReferenceRng>`), `ReferenceEntropy`, `LinuxTimer::new_virtual`
+# and `VirtualClock`. Implies the `bssl` backend. `build.rs` clones and compiles
+# `tcgtpm` and generates its bindings (needs git, a C compiler, binutils, libclang
+# and OpenSSL's `libcrypto.a`); the crate then uses `unsafe` (confined to
+# `reference_rng::ffi`) and libc. Not for production (the C big-number arithmetic
+# is not constant time).
+reference-rng = ["bssl", "dep:libc", "dep:bindgen"]
 # The Nuvoton vendor commands `NTC2_PreConfig`, `NTC2_LockPreConfig` and
 # `NTC2_GetConfig` (`CC_VEND + 0x211..=0x213`, not in the TPM 2.0 specification) as
 # emulated by `ibmswtpm2` (built with `TPM_NUVOTON`), implemented by `LinuxPlatform` as

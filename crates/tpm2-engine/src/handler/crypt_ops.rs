@@ -17,9 +17,7 @@ use tpm2::{
 
 use crate::{handler::CommandHandler, req_resp::RequestThenResponse};
 use tpm2::Alg;
-#[cfg(not(feature = "reference-rng"))]
-use tpm2::crypto::Rng;
-use tpm2::crypto::{Crypto, EccPrivateKey, RsaPrivateKey};
+use tpm2::crypto::{Crypto, RsaPrivateKey};
 
 impl<'b, P: Platform> CommandHandler<'b, P> {
     /// Handles the [TpmCc::VerifySignature] (`0x177`) command.
@@ -533,8 +531,11 @@ impl<'b, P: Platform> CommandHandler<'b, P> {
     /// private key of an object with public parameters `key` (`CryptSign()`), writing the
     /// signature (`r || s` for ECDSA) to `out`.
     ///
-    /// With `reference-rng`, the random parts (the ECDSA nonce, the PSS salt) are drawn from the
-    /// TPM's DRBG exactly as in the reference code; otherwise the crypto backend signs.
+    /// The random parts (the ECDSA, SM2 or EC-Schnorr nonce, the PSS salt) are drawn from the
+    /// TPM's DRBG: the PSS salt by [`tpm2::crypto::rsa_pss_encode`] (the dispatch function), the
+    /// nonces by the reference's algorithms of [`crate::asymmetric`], except that ECDSA on the
+    /// curves of the backend's ECDSA is the backend's for the backend's system RNG
+    /// ([`crate::asymmetric::sign_ecdsa`]).
     pub(crate) fn sign_asymmetric(
         &mut self,
         sign_alg: Alg,
@@ -566,90 +567,40 @@ impl<'b, P: Platform> CommandHandler<'b, P> {
         digest: tpm2::TpmtHa<'_>,
         out: &mut [u8],
     ) -> Result<Option<usize>, tpm2::crypto::CryptoError> {
-        #[cfg(feature = "reference-rng")]
-        match (sign_alg, key) {
-            (Alg::ECDSA | Alg::SM2 | Alg::ECSCHNORR, OwnedPublicParmsAndId::Ecc(parms, _)) => {
-                const MAX: usize = TpmEccCurve::MAX_ECC_KEY_BYTES;
-                let (mut r, mut s) = ([0u8; MAX], [0u8; MAX]);
-                let len = self
-                    .reference_ecc_sign(
-                        sign_alg,
-                        digest.hash_alg(),
-                        parms.curve_id,
-                        private_key,
-                        digest.digest(),
-                        &mut r,
-                        &mut s,
-                    )
-                    .map_err(|_| tpm2::crypto::CryptoError::Internal)?;
-                let out = out
-                    .get_mut(..2 * len)
-                    .ok_or(tpm2::crypto::CryptoError::Internal)?;
-                out[..len].copy_from_slice(&r[..len]);
-                out[len..].copy_from_slice(&s[..len]);
-                return Ok(Some(2 * len));
-            }
-            (Alg::RSAPSS, OwnedPublicParmsAndId::Rsa(parms, unique)) => {
-                let hash = digest.hash_alg();
-                return self
-                    .reference_rsa_pss_sign(
-                        hash,
-                        parms,
-                        unique.get_buffer(),
-                        private_key,
-                        digest.digest(),
-                        out,
-                    )
-                    .map_err(|_| tpm2::crypto::CryptoError::Internal);
-            }
-            _ => {}
-        }
-        #[cfg(not(feature = "reference-rng"))]
         if let OwnedPublicParmsAndId::Ecc(parms, _) = key {
-            // The schemes and curves the crypto backend's signing interface cannot express, with
-            // nonces from the backend's random number generator.
             let curve = parms.curve_id;
-            let crypto = crate::self_test::Tested::<P::Crypto>::new(&self.context.self_test);
             let rng = &mut self.context.crypto_rng;
-            let nonce = |buf: &mut [u8]| rng.fill_bytes(buf);
-            match sign_alg {
-                Alg::ECDSA if !provider_ecdsa_curve(curve) => {
-                    return crate::ecc_schemes::ecdsa_sign::<P::Crypto>(
-                        curve,
-                        private_key,
-                        digest.digest(),
-                        nonce,
-                        out,
-                    );
+            return match sign_alg {
+                Alg::ECDSA => {
+                    crate::asymmetric::sign_ecdsa::<P::Crypto>(rng, curve, private_key, digest, out)
                 }
-                Alg::SM2 => {
-                    return crate::ecc_schemes::sm2_sign::<P::Crypto>(
-                        curve,
-                        private_key,
-                        digest.digest(),
-                        nonce,
-                        out,
-                    );
-                }
+                Alg::SM2 => crate::ecc_schemes::sm2_sign::<P::Crypto>(
+                    curve,
+                    private_key,
+                    digest.digest(),
+                    rng,
+                    out,
+                ),
                 Alg::ECSCHNORR => {
-                    return crate::ecc_schemes::schnorr_sign(
+                    let crypto =
+                        crate::self_test::Tested::<P::Crypto>::new(&self.context.self_test);
+                    crate::ecc_schemes::schnorr_sign(
                         &crypto,
                         curve,
                         digest.hash_alg(),
                         private_key,
                         digest.digest(),
-                        nonce,
+                        rng,
                         out,
-                    );
+                    )
                 }
-                _ => {}
-            }
+                _ => Err(tpm2::crypto::CryptoError::Unsupported),
+            };
         }
         let hash = digest.hash_alg();
         let scheme = match sign_alg {
             Alg::RSASSA => TpmtSigScheme::Rsassa(hash),
             Alg::RSAPSS => TpmtSigScheme::Rsapss(hash),
-            Alg::ECDSA => TpmtSigScheme::Ecdsa(hash),
             _ => return Err(tpm2::crypto::CryptoError::Unsupported),
         };
         let rng = &mut self.context.crypto_rng;
@@ -658,14 +609,6 @@ impl<'b, P: Platform> CommandHandler<'b, P> {
             OwnedPublicParmsAndId::Rsa(parms, unique) => {
                 let Some(private) =
                     super::rsa_private_key::<P::Crypto>(parms, unique.get_buffer(), private_key)?
-                else {
-                    return Ok(None);
-                };
-                private.sign(rng, scheme, digest.digest(), &mut sig)?
-            }
-            OwnedPublicParmsAndId::Ecc(parms, _) => {
-                let Some(private) =
-                    EccPrivateKey::<P::Crypto>::from_scalar(parms.curve_id, private_key)?
                 else {
                     return Ok(None);
                 };
@@ -706,13 +649,8 @@ impl<'b, P: Platform> CommandHandler<'b, P> {
         let obj = self.resolve_object(key_handle.0, Position::handle(1))?;
 
         // Validate the key referenced by key_handle is an RSA key
-        let (key_bits, key_scheme, exponent, pub_key) = match &obj.public.parms_and_id {
-            OwnedPublicParmsAndId::Rsa(parms, pub_key) => (
-                parms.key_bits,
-                parms.scheme,
-                parms.exponent,
-                pub_key.get_buffer(),
-            ),
+        let (key_bits, key_scheme) = match &obj.public.parms_and_id {
+            OwnedPublicParmsAndId::Rsa(parms, _) => (parms.key_bits, parms.scheme),
             _ => {
                 return Err(TpmRc::KEY.with(Position::handle(1)));
             }
@@ -745,43 +683,9 @@ impl<'b, P: Platform> CommandHandler<'b, P> {
             return Err(TpmRc::VALUE.to_rc());
         }
         let mut encrypted_data = [0u8; 512];
-        // With `reference-rng`, OAEP and RSAES padding are drawn from the TPM's DRBG exactly as
-        // in the reference code (`OaepEncode()`, `RSAES_PKCS1v1_5Encode()`).
-        #[cfg(feature = "reference-rng")]
-        let encrypted = match resolved_scheme {
-            Alg::OAEP | Alg::RSAES => {
-                let hash = if resolved_scheme == Alg::OAEP {
-                    Some(
-                        tpm2::TpmiAlgHash::try_from(resolved_hash_alg)
-                            .map_err(|_| TpmRc::HASH.to_rc())?,
-                    )
-                } else {
-                    None
-                };
-                match self.reference_rsa_encrypt(
-                    hash,
-                    pub_key,
-                    exponent,
-                    label_bytes,
-                    cmd.message.get_buffer(),
-                    &mut encrypted_data[..key_size],
-                ) {
-                    Ok(r) => Ok(r),
-                    Err(e) if e == TpmRc::VALUE.to_rc() || e == TpmRc::HASH.to_rc() => Ok(None),
-                    Err(e) => return Err(e),
-                }
-            }
-            _ => Self::rsa_encrypt_with(
-                &mut self.context.crypto_rng,
-                &obj,
-                resolved_scheme,
-                resolved_hash_alg,
-                label_bytes,
-                cmd.message.get_buffer(),
-                &mut encrypted_data[..key_size],
-            ),
-        };
-        #[cfg(not(feature = "reference-rng"))]
+        // The OAEP seed and the RSAES padding are drawn from the TPM's DRBG as the reference's
+        // `OaepEncode()`/`RSAES_PKCS1v1_5Encode()` draw them (`tpm2::crypto::rsa_oaep_encode`,
+        // `rsa_pkcs1v15_encode`).
         let encrypted = Self::rsa_encrypt_with(
             &mut self.context.crypto_rng,
             &obj,
@@ -791,8 +695,6 @@ impl<'b, P: Platform> CommandHandler<'b, P> {
             cmd.message.get_buffer(),
             &mut encrypted_data[..key_size],
         );
-        #[cfg(not(feature = "reference-rng"))]
-        let _ = (exponent, pub_key);
         let encrypted_len = match encrypted {
             Ok(Some(len)) => len,
             Ok(None) | Err(_) => return Err(TpmRc::VALUE.to_rc()),

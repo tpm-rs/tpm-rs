@@ -104,12 +104,11 @@ mod policy_transport_spdm;
 pub(crate) mod pqc;
 mod quote;
 mod random;
+pub(crate) mod random_ops;
 mod read_clock;
 #[cfg(feature = "cc-read-only-control")]
 mod read_only_control;
 mod read_public;
-#[cfg(feature = "reference-rng")]
-pub(crate) mod reference_ops;
 mod rewrap;
 pub(crate) mod rsa_sensitive;
 mod sequence;
@@ -126,13 +125,12 @@ pub(crate) mod vendor;
 
 use crate::Platform;
 use crate::owned::{
-    AuthCommandLike, OwnedAuth, OwnedAuthCommand, OwnedDigest, OwnedEccPoint, OwnedName,
-    OwnedNonce, OwnedPublic, OwnedPublicKeyRsa, OwnedPublicParmsAndId, OwnedTpm2b,
+    AuthCommandLike, OwnedAuth, OwnedAuthCommand, OwnedDigest, OwnedName, OwnedNonce, OwnedPublic,
+    OwnedPublicParmsAndId,
 };
 use crate::req_resp::RequestThenResponse;
 use crate::self_test::kdfa_bits;
 use crate::{State, TpmEngine};
-use tpm2::Alg;
 use tpm2::crypto::{
     CipherInput, Crypto, CryptoError, Direction, RsaPrivateKey, RsaPublicKey, SymmetricKey,
 };
@@ -141,7 +139,7 @@ use tpm2::{Handle, TpmSe};
 use tpm2::{Marshal, Unmarshal};
 use tpm2::{
     Tpm2bAuth, Tpm2bDigest, Tpm2bNonce, TpmaObject, TpmaSession, TpmiAlgHash, TpmiAlgSymMode,
-    TpmlPcrSelection, TpmsAuthResponse, TpmsEccParms, TpmsRsaParms, TpmtSymDef, TpmtSymDefObject,
+    TpmlPcrSelection, TpmsAuthResponse, TpmsRsaParms, TpmtSymDef, TpmtSymDefObject,
 };
 
 /// The `qualifiedSigner` reported in attestation structures when `signHandle` is `TPM_RH_NULL`.
@@ -490,13 +488,6 @@ pub(crate) fn attest_hash_alg(
     }
 }
 
-pub struct KeyDerivationArgs<'a> {
-    pub gen_seed: Option<&'a [u8]>,
-    pub obj_seed: &'a [u8],
-    pub get_random_fallback: bool,
-    pub fallback_sensitive_data: Option<&'a [u8]>,
-}
-
 /// Encrypts or decrypts `data` in place with the symmetric algorithm and block cipher mode of
 /// `alg`, the key `key` and the IV `iv` ([`crate::self_test::Tested::crypt`], which tests the
 /// block cipher first). `iv` is updated in place with the chaining value for a following call
@@ -608,7 +599,7 @@ pub(crate) fn decode_auth_timeout(buf: &[u8]) -> Option<(u64, bool)> {
 /// Returns the first `size` bytes of a Primary Seed or hierarchy proof buffer.
 ///
 /// A size of 0 marks a value that was never provisioned (the TPM was not manufactured, or the
-/// platform RNG failed during manufacture). Primary Seeds and proofs are secret random values
+/// TPM's DRBG failed during manufacture). Primary Seeds and proofs are secret random values
 /// (TPM 2.0 Part 1, "Primary Seeds", "Hierarchy Proofs"), so an unprovisioned value is never
 /// used as key material: this fails with `TPM_RC_FAILURE` instead.
 pub(crate) fn provisioned_secret(buf: &[u8; 64], size: u16) -> Result<&[u8], TpmRc> {
@@ -1081,269 +1072,6 @@ impl<'b, P: Platform> CommandHandler<'b, P> {
         }
     }
 
-    /// Generates key bytes and updates the public key/unique fields of `parms_and_id`.
-    /// Returns the length of the generated private key.
-    pub fn generate_key_and_unique(
-        &self,
-        name_alg: TpmiAlgHash,
-        parms_and_id: &mut OwnedPublicParmsAndId,
-        args: KeyDerivationArgs<'_>,
-        actual_private_key: &mut [u8],
-    ) -> Result<usize, TpmRc> {
-        match parms_and_id {
-            OwnedPublicParmsAndId::Ecc(parms, point) => {
-                self.generate_ecc_key(parms, point, args.gen_seed, actual_private_key)
-            }
-            OwnedPublicParmsAndId::Rsa(parms, unique) => {
-                self.generate_rsa_key(parms, unique, args.gen_seed, actual_private_key)
-            }
-            OwnedPublicParmsAndId::KeyedHash(_, unique) => {
-                self.generate_keyed_hash_key(name_alg, args, unique, actual_private_key)
-            }
-            OwnedPublicParmsAndId::Sym(sym_def, unique) => self.generate_symmetric_key(
-                name_alg,
-                args,
-                (sym_def.key_bits() as usize) / 8,
-                unique,
-                actual_private_key,
-            ),
-            OwnedPublicParmsAndId::Mlkem(parms, unique) => {
-                let param_set = parms.parameter_set;
-                // `CryptoMlkem_GenerateKey()` tests ML-KEM before it draws the seed.
-                self.crypto()
-                    .do_self_test(Alg::MLKEM)
-                    .map_err(|_| TpmRc::FAILURE)?;
-                let mut seed = [0u8; tpm2::TpmiMlkemParms::PRIV_KEY_BYTES];
-                self.pqc_creation_entropy(name_alg, &args, &mut seed)?;
-                let mut public_key = [0u8; tpm2::TPM2_MAX_MLKEM_PUB_SIZE];
-                let len = self.mlkem_public_key(param_set, &seed, &mut public_key)?;
-                *unique = OwnedTpm2b::from_bytes(&public_key[..len]).map_err(|_| TpmRc::FAILURE)?;
-                actual_private_key[..seed.len()].copy_from_slice(&seed);
-                Ok(seed.len())
-            }
-            OwnedPublicParmsAndId::Mldsa(tpm2::TpmsMldsaParms { parameter_set, .. }, unique)
-            | OwnedPublicParmsAndId::HashMldsa(
-                tpm2::TpmsHashMldsaParms { parameter_set, .. },
-                unique,
-            ) => {
-                let param_set = *parameter_set;
-                // `CryptoMldsa_GenerateKey()` tests ML-DSA before it draws the seed.
-                self.crypto()
-                    .do_self_test(Alg::MLDSA)
-                    .map_err(|_| TpmRc::FAILURE)?;
-                let mut seed = [0u8; tpm2::TpmiMldsaParms::PRIV_KEY_BYTES];
-                self.pqc_creation_entropy(name_alg, &args, &mut seed)?;
-                let mut public_key = [0u8; tpm2::TPM2_MAX_MLDSA_PUB_SIZE];
-                let len = self.mldsa_public_key(param_set, &seed, &mut public_key)?;
-                *unique = OwnedTpm2b::from_bytes(&public_key[..len]).map_err(|_| TpmRc::FAILURE)?;
-                actual_private_key[..seed.len()].copy_from_slice(&seed);
-                Ok(seed.len())
-            }
-        }
-    }
-
-    /// The seed of an ML-KEM or ML-DSA key created without the `reference-rng` feature: derived
-    /// from the creation seed of a Primary Object (KDFa with the label `PQC Key Seed`), or drawn
-    /// from the crypto backend's entropy source ([`Random::rand_bytes`](tpm2::crypto::Random::rand_bytes)) for an ordinary object.
-    fn pqc_creation_entropy(
-        &self,
-        name_alg: TpmiAlgHash,
-        args: &KeyDerivationArgs<'_>,
-        out: &mut [u8],
-    ) -> Result<(), TpmRc> {
-        if let Some(seed) = args.gen_seed {
-            let mut derived = [0u8; 64];
-            kdfa_bits(
-                &self.crypto(),
-                name_alg,
-                seed,
-                b"PQC Key Seed",
-                &[],
-                &[],
-                (out.len() * 8) as u32,
-                &mut derived,
-            )
-            .map_err(|_| TpmRc::FAILURE)?;
-            out.copy_from_slice(&derived[..out.len()]);
-            Ok(())
-        } else {
-            <P::Crypto as tpm2::crypto::Random>::rand_bytes(out).map_err(|_| TpmRc::FAILURE)
-        }
-    }
-
-    /// Generates key bytes for an ECC curve and populates the public point coordinates.
-    ///
-    /// The key of a Primary Object is derived from its creation seed `gen_seed_arg` (with the
-    /// backend's deterministic generator [`Random::from_seed`](tpm2::crypto::Random::from_seed)); any other key is drawn from the
-    /// backend's entropy source.
-    fn generate_ecc_key(
-        &self,
-        parms: &mut TpmsEccParms,
-        point: &mut OwnedEccPoint,
-        gen_seed_arg: Option<&[u8]>,
-        actual_private_key: &mut [u8],
-    ) -> Result<usize, TpmRc> {
-        let curve = parms.curve_id;
-        // `CryptEccGenerateKey()`: "ECDSA is used to verify each key" (`TPM_DO_SELF_TEST`).
-        self.crypto()
-            .do_self_test(Alg::ECDSA)
-            .map_err(|_| TpmRc::FAILURE)?;
-        let mut rng = match gen_seed_arg {
-            Some(seed) => <P::Crypto as tpm2::crypto::Random>::from_seed(seed),
-            None => <P::Crypto as tpm2::crypto::Random>::from_entropy(),
-        }
-        .map_err(|_| TpmRc::FAILURE)?;
-        let key = tpm2::crypto::EccPrivateKey::<P::Crypto>::generate(&mut rng, curve, None)
-            .map_err(|_| TpmRc::FAILURE)?;
-        let scalar_len = {
-            let mut scalar = [0u8; tpm2::TpmEccCurve::MAX_ECC_KEY_BYTES];
-            let d = key
-                .scalar(&mut scalar)
-                .map_err(|_| TpmRc::FAILURE)?
-                .as_slice();
-            actual_private_key
-                .get_mut(..d.len())
-                .ok_or(TpmRc::FAILURE)?
-                .copy_from_slice(d);
-            d.len()
-        };
-        let (mut x, mut y) = (
-            [0u8; tpm2::TpmEccCurve::MAX_ECC_KEY_BYTES],
-            [0u8; tpm2::TpmEccCurve::MAX_ECC_KEY_BYTES],
-        );
-        let q = key.point(&mut x, &mut y).map_err(|_| TpmRc::FAILURE)?;
-        *point = OwnedEccPoint {
-            x: OwnedTpm2b::from_bytes(q.x.as_slice()).map_err(|_| TpmRc::FAILURE)?,
-            y: OwnedTpm2b::from_bytes(q.y.as_slice()).map_err(|_| TpmRc::FAILURE)?,
-        };
-        Ok(scalar_len)
-    }
-
-    /// Generates RSA key bytes and populates the public exponent and modulus: the private value
-    /// is the prime `p` ([`rsa_private_prime`]).
-    ///
-    /// The key of a Primary Object is derived from its creation seed `gen_seed_arg` (with the
-    /// backend's deterministic generator [`Random::from_seed`](tpm2::crypto::Random::from_seed)); any other key is drawn from the
-    /// backend's entropy source.
-    fn generate_rsa_key(
-        &self,
-        parms: &mut TpmsRsaParms,
-        unique: &mut OwnedPublicKeyRsa,
-        gen_seed_arg: Option<&[u8]>,
-        actual_private_key: &mut [u8],
-    ) -> Result<usize, TpmRc> {
-        // `CryptRsaGenerateKey()`: an exponent below 65537 or not prime is `TPM_RC_RANGE`.
-        // The crypto backend generates keys with the default exponent only, so any other
-        // (valid) exponent is unsupported, which is `TPM_RC_RANGE` as well. TPM 2.0 Part 1,
-        // RSA: "A TPM is required only to support a public exponent (*e*) of $2^{16}+1$.
-        // Support for other exponents is allowed but discouraged." (The response code is not
-        // specified; the TCG reference's is used.)
-        // `RSA_DEFAULT_PUBLIC_EXPONENT`.
-        const DEFAULT_EXPONENT: u32 = 65537;
-        if parms.exponent != 0 && parms.exponent != DEFAULT_EXPONENT {
-            return Err(TpmRc::RANGE.to_rc());
-        }
-        let mut rng = match gen_seed_arg {
-            Some(seed) => <P::Crypto as tpm2::crypto::Random>::from_seed(seed),
-            None => <P::Crypto as tpm2::crypto::Random>::from_entropy(),
-        }
-        .map_err(|_| TpmRc::FAILURE)?;
-        let key = RsaPrivateKey::<P::Crypto>::generate(&mut rng, parms.key_bits, DEFAULT_EXPONENT)
-            .map_err(|_| TpmRc::FAILURE)?;
-        let priv_len = rsa_private_prime(&key, actual_private_key).map_err(|_| TpmRc::FAILURE)?;
-        let mut modulus = [0u8; tpm2::TpmiRsaKeyBits::MAX_PUB_KEY_BYTES];
-        let modulus = key.modulus(&mut modulus).map_err(|_| TpmRc::FAILURE)?;
-        *unique = OwnedPublicKeyRsa::from_bytes(modulus.as_slice())
-            .expect("generated public key has valid length");
-        Ok(priv_len)
-    }
-
-    /// Derives or generates bytes for keyed hash objects, hashing them to get a unique identifier.
-    fn generate_keyed_hash_key(
-        &self,
-        name_alg: TpmiAlgHash,
-        args: KeyDerivationArgs<'_>,
-        unique: &mut OwnedDigest,
-        actual_private_key: &mut [u8],
-    ) -> Result<usize, TpmRc> {
-        let key_size = 32;
-        let key_len = if let Some(data) = args.fallback_sensitive_data {
-            let data_len = data.len();
-            actual_private_key[..data_len].copy_from_slice(data);
-            data_len
-        } else if let Some(seed) = args.gen_seed {
-            let mut generated_key = [0u8; 64];
-            kdfa_bits(
-                &self.crypto(),
-                name_alg,
-                seed,
-                b"Symmetric Key",
-                &[],
-                &[],
-                (key_size * 8) as u32,
-                &mut generated_key,
-            )
-            .map_err(|_| TpmRc::FAILURE)?;
-            actual_private_key[..key_size].copy_from_slice(&generated_key[..key_size]);
-            key_size
-        } else if args.get_random_fallback {
-            <P::Crypto as tpm2::crypto::Random>::rand_bytes(&mut actual_private_key[..key_size])
-                .map_err(|_| TpmRc::FAILURE)?;
-            key_size
-        } else {
-            return Err(TpmRc::VALUE.to_rc());
-        };
-
-        let (digest_bytes, digest_len) =
-            self.compute_hash(name_alg, &[args.obj_seed, &actual_private_key[..key_len]])?;
-        *unique = OwnedDigest::from_bytes(&digest_bytes[..digest_len]).unwrap();
-        Ok(key_len)
-    }
-
-    /// Derives or generates symmetric keys of specific target sizes, hashing them to get a unique identifier.
-    fn generate_symmetric_key(
-        &self,
-        name_alg: TpmiAlgHash,
-        args: KeyDerivationArgs<'_>,
-        sym_key_size: usize,
-        unique: &mut OwnedDigest,
-        actual_private_key: &mut [u8],
-    ) -> Result<usize, TpmRc> {
-        let key_len = if let Some(data) = args.fallback_sensitive_data {
-            let data_len = data.len();
-            actual_private_key[..data_len].copy_from_slice(data);
-            data_len
-        } else if let Some(seed) = args.gen_seed {
-            let mut generated_key = [0u8; 64];
-            kdfa_bits(
-                &self.crypto(),
-                name_alg,
-                seed,
-                b"Symmetric Key",
-                &[],
-                &[],
-                (sym_key_size * 8) as u32,
-                &mut generated_key,
-            )
-            .map_err(|_| TpmRc::FAILURE)?;
-            actual_private_key[..sym_key_size].copy_from_slice(&generated_key[..sym_key_size]);
-            sym_key_size
-        } else if args.get_random_fallback {
-            <P::Crypto as tpm2::crypto::Random>::rand_bytes(
-                &mut actual_private_key[..sym_key_size],
-            )
-            .map_err(|_| TpmRc::FAILURE)?;
-            sym_key_size
-        } else {
-            return Err(TpmRc::VALUE.to_rc());
-        };
-
-        let (digest_bytes, digest_len) =
-            self.compute_hash(name_alg, &[args.obj_seed, &actual_private_key[..key_len]])?;
-        *unique = OwnedDigest::from_bytes(&digest_bytes[..digest_len]).unwrap();
-        Ok(key_len)
-    }
-
     /// Verifies password authorization. If the session is of type `RS_PW`, compares the provided HMAC against
     /// the expected authorization value (with trailing zeros stripped, in constant time).
     /// If the session is not `RS_PW`, it returns `true` (meaning the session validation is bypassed here
@@ -1710,7 +1438,7 @@ mod tests {
     use super::*;
     use crate::req_resp::{RequestResponseCursor, Response};
     use crate::test_support::FakePlatform;
-    use crate::test_support::{FakeCrypto, FakeRng, FakeStorage, FakeTimer};
+    use crate::test_support::{FakeCrypto, FakeStorage, FakeTimer};
     use alloc::vec::Vec;
     use tpm2::commands::responses;
     use tpm2::{AlgSym, Tpm2bName, TpmiAlgCipherMode};
@@ -1726,7 +1454,7 @@ mod tests {
     }
 
     type TestHandler<'a, 'b> =
-        CommandHandler<'b, FakePlatform<'a, FakeCrypto, &'a mut FakeStorage, FakeTimer, FakeRng>>;
+        CommandHandler<'b, FakePlatform<'a, FakeCrypto, &'a mut FakeStorage, FakeTimer>>;
 
     /// Where the response handle area starts (after the 10-byte response header).
     const RESPONSE_OFFSET: usize = 10;
@@ -1736,8 +1464,7 @@ mod tests {
         let mut crypto = FakeCrypto;
         let mut storage = FakeStorage::default();
         let mut timer = FakeTimer;
-        let mut rng = FakeRng::new();
-        let platform = FakePlatform::new(&mut crypto, &mut timer, &mut rng);
+        let platform = FakePlatform::new(&mut crypto, &mut timer);
         let mut engine = crate::TpmEngine::new(platform, &mut storage).unwrap();
         engine.state.in_shadow_execution = in_shadow_execution;
         let handler = CommandHandler::new(&mut engine);

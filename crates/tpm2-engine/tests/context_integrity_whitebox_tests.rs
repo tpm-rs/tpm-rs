@@ -7,7 +7,7 @@
 mod common;
 
 use common::{
-    FakeRng, FakeStorage, FakeTimer, TestCryptoProvider, execute_command, password_auth,
+    FakeStorage, FakeTimer, TestCryptoProvider, execute_command, password_auth,
     setup_real_crypto_tpm,
 };
 use tpm2::commands::{ContextSave, CreatePrimary};
@@ -25,11 +25,10 @@ use tpm2::{
 /// owner/storage hierarchy).
 #[test]
 fn test_context_save_kdfa_bug() {
-    let mut crypto = TestCryptoProvider;
+    let mut crypto = common::test_crypto();
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let mut rng = FakeRng::new();
-    let mut tpm = setup_real_crypto_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
+    let mut tpm = setup_real_crypto_tpm(&mut crypto, &mut storage, &mut timer);
 
     let in_sensitive = tpm2::Tpm2b(TpmsSensitiveCreate {
         user_auth: Tpm2bAuth::from_bytes(b"pass").unwrap(),

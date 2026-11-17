@@ -22,8 +22,8 @@
 mod common;
 
 use common::{
-    FakeRng, FakeStorage, FakeTimer, RealCryptoEngine, TestCryptoProvider, execute_command,
-    password_auth, setup_real_crypto_tpm,
+    FakeStorage, FakeTimer, RealCryptoEngine, TestCryptoProvider, execute_command, password_auth,
+    setup_real_crypto_tpm,
 };
 use tpm2::commands::{ContextLoad, ContextSave, CreatePrimary, FlushContext};
 use tpm2::crypto::{CipherInput, Direction, HmacContext, SymmetricKey};
@@ -113,11 +113,10 @@ fn with_blob(context: TpmsContext<'static>, blob: Vec<u8>) -> TpmsContext<'stati
 
 macro_rules! setup {
     ($tpm:ident) => {
-        let mut crypto = TestCryptoProvider;
+        let mut crypto = common::test_crypto();
         let mut storage = FakeStorage::default();
         let mut timer = FakeTimer;
-        let mut rng = FakeRng::new();
-        let mut $tpm = setup_real_crypto_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
+        let mut $tpm = setup_real_crypto_tpm(&mut crypto, &mut storage, &mut timer);
     };
 }
 

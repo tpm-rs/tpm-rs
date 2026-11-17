@@ -3,8 +3,8 @@
 #   make test               the full suite: every target below
 #   make test-workspace     `cargo test --release` (BoringSSL backend)
 #   make test-tpm2          the tpm2 tests (alone: its default features are every algorithm)
-#   make test-reference-rng the tpm2-engine tests with the reference RNG port
-#   make test-no-sha512     the tpm2-engine tests of a TPM without SHA-512
+#   make test-reference-rng the tpm2-platform-linux tests with the C reference RNG
+#   make test-no-sha512     the tpm2-engine (and reference RNG) tests of a TPM without SHA-512
 #   make test-backends      the crypto backend tests (Rust and Crux)
 #   make test-differential  the differential tests, one run per target
 #   make test-<target>      the differential tests against one target (see DIFFERENTIAL_TARGETS)
@@ -82,13 +82,14 @@ test-workspace:
 test-tpm2:
 	$(CARGO) test --release -p tpm2 $(CARGO_TEST_ARGS)
 
+# The C reference RNG (`ReferenceRng`) and the tests that compare it with the C code.
 test-reference-rng:
-	$(CARGO) test --release -p tpm2-engine --features reference-rng $(CARGO_TEST_ARGS)
+	$(CARGO) test --release -p tpm2-platform-linux --features reference-rng $(CARGO_TEST_ARGS)
 
-# A TPM without SHA-512 (as the tcgtpm target), with and without the reference RNG.
+# A TPM without SHA-512 (as the tcgtpm target), also with the reference RNG.
 test-no-sha512:
 	$(CARGO) test --release -p tpm2-engine --no-default-features --features dev_crypto_bssl $(CARGO_TEST_ARGS)
-	$(CARGO) test --release -p tpm2-engine --no-default-features --features dev_crypto_bssl,reference-rng $(CARGO_TEST_ARGS)
+	$(CARGO) test --release -p tpm2-platform-linux --no-default-features --features bssl,reference-rng $(CARGO_TEST_ARGS)
 
 # The crates that support other crypto backends (AGENTS.md, "Testing Different
 # Cryptographic Backends"); `testing` supports only BoringSSL.
@@ -134,12 +135,12 @@ clippy: $(DIFFERENTIAL_CLIPPY) clippy-features
 	$(CARGO) clippy --all-targets -- -D warnings
 	$(CARGO) clippy --all-targets -p tpm2 -- -D warnings
 	$(CARGO) clippy --all-targets -p tpm2-engine -p testing --features $(ALL_OPTIONAL_FEATURES) -- -D warnings
-	$(CARGO) clippy --all-targets -p tpm2-engine --features reference-rng -- -D warnings
+	$(CARGO) clippy --all-targets -p tpm2-platform-linux --features reference-rng -- -D warnings
 	$(CARGO) clippy --all-targets -p tpm2-engine --features $(VTPM_FEATURES) -- -D warnings
 	# A TPM without SHA-512 (every crate without its default `sha512` feature).
 	$(CARGO) clippy --all-targets -p tpm2-engine -p tpm2-crypto-rust -p tpm2-crypto-crux \
-		-p tpm2-crypto-bssl -p tpm2-client --no-default-features \
-		--features tpm2-engine/dev_crypto_bssl,tpm2-engine/reference-rng -- -D warnings
+		-p tpm2-crypto-bssl -p tpm2-client -p tpm2-platform-linux --no-default-features \
+		--features tpm2-engine/dev_crypto_bssl,tpm2-platform-linux/reference-rng -- -D warnings
 	# `testing` without SHA-512 is `clippy-tcgtpm` (TARGET_ARGS_tcgtpm).
 
 # Each optional feature alone (on a TPM without the other optional features and without

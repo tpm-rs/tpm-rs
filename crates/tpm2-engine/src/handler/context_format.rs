@@ -1981,7 +1981,7 @@ mod tests {
     }
 
     #[cfg(feature = "dev_crypto_bssl")]
-    use tpm2_crypto_bssl::BsslCryptoProvider as TestCrypto;
+    type TestCrypto = tpm2_crypto_bssl::BsslCryptoProvider;
     #[cfg(feature = "dev_crypto_crux")]
     use tpm2_crypto_crux::CruxCryptoProvider as TestCrypto;
     #[cfg(feature = "dev_crypto_rust")]

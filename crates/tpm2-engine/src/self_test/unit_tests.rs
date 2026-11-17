@@ -6,7 +6,7 @@ use super::*;
 use std::vec;
 use std::vec::Vec;
 #[cfg(feature = "dev_crypto_bssl")]
-use tpm2_crypto_bssl::BsslCryptoProvider as Crypto;
+type Crypto = tpm2_crypto_bssl::BsslCryptoProvider;
 #[cfg(feature = "dev_crypto_crux")]
 use tpm2_crypto_crux::CruxCryptoProvider as Crypto;
 #[cfg(feature = "dev_crypto_rust")]
@@ -48,38 +48,15 @@ fn initial_to_do_list() -> Vec<u16> {
     ids(&algs)
 }
 
-/// Runs `f` with a self tester on the dev crypto backend and `state` (with the
-/// `reference-rng` feature, with a DRBG instantiated from fixed entropy).
+/// Runs `f` with a self tester on the dev crypto backend and `state`, with a DRBG of the dev
+/// crypto backend for the tests that draw random values.
 fn with_tester<T>(state: &SelfTestState, f: impl FnOnce(&mut SelfTester<'_, Crypto>) -> T) -> T {
-    #[cfg(feature = "reference-rng")]
-    {
-        use crate::reference_rng::{RefRng, drbg};
-        static ENTROPY: [u8; 64] = [0x5a; 64];
-        let mut entropy = drbg::tests::FixedEntropy(&ENTROPY, 0);
-        let mut drbg_state = crate::engine::DrbgState::default();
-        drbg::instantiate(&mut RefRng {
-            drbg: Some(&mut drbg_state),
-            entropy: Some(&mut entropy),
-            self_test: None,
-        })
-        .unwrap();
-        let mut tester = SelfTester {
-            crypto: Tested::new(state),
-            rng: Some(RefRng {
-                drbg: Some(&mut drbg_state),
-                entropy: Some(&mut entropy),
-                self_test: None,
-            }),
-        };
-        f(&mut tester)
-    }
-    #[cfg(not(feature = "reference-rng"))]
-    {
-        let mut tester = SelfTester {
-            crypto: Tested::new(state),
-        };
-        f(&mut tester)
-    }
+    let mut rng = <Crypto as tpm2::crypto::Random>::from_entropy().unwrap();
+    let mut tester = SelfTester {
+        crypto: Tested::new(state),
+        rng: Some(&mut rng),
+    };
+    f(&mut tester)
 }
 
 /// The algorithms that still need a test.

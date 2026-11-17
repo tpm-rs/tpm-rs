@@ -56,7 +56,7 @@ digest_state!(
     64
 );
 
-impl Hash for BsslCryptoProvider {
+impl<R> Hash for BsslCryptoProvider<R> {
     type Sha1 = BsslSha1;
     type Sha256 = BsslSha256;
     type Sha384 = BsslSha384;
@@ -96,7 +96,7 @@ pub type BsslHmacSha384 = BsslHmac<48>;
 /// HMAC-SHA-512 state for `BsslCryptoProvider`.
 pub type BsslHmacSha512 = BsslHmac<64>;
 
-impl Hmac for BsslCryptoProvider {
+impl<R> Hmac for BsslCryptoProvider<R> {
     type Sha1 = BsslHmacSha1;
     type Sha256 = BsslHmacSha256;
     type Sha384 = BsslHmacSha384;

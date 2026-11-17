@@ -1,14 +1,16 @@
 //! Builds the reference RNG library of the opt-in `reference-rng` feature.
 //!
 //! With the feature, `tpm-rs` draws its random numbers with the original C code of the TCG
-//! reference TPM (`tcgtpm`), linked into this crate without any hand-written C:
+//! reference TPM (`tcgtpm`), linked into this crate (as `ReferenceRng`, a `tpm2::crypto::Rng`
+//! whose hooks are the reference's C functions) without any hand-written C:
 //!
 //! 1. The build clones `https://github.com/TrustedComputingGroup/TPM` at the commit the
 //!    differential tests pin (checked against `testing/build.rs`) and applies the same patches
 //!    as the differential reference (`testing/patches/tcgtpm/*.patch`, in sorted file-name
 //!    order), so that the code is compiled with exactly the profile the reference runs with
 //!    (none of the patches changes the random-number generation), except that SHA-512 is
-//!    enabled (`enable_sha512`) when this crate's `sha512` feature is.
+//!    enabled (`enable_sha512`) when this crate's `sha512` feature is (which must match the
+//!    `sha512` feature of the `tpm2` the TPM is built with; every crate forwards its `sha512`).
 //! 2. It compiles the unmodified reference files the random-number code consists of
 //!    ([`SOURCES`]) with the reference's compiler flags, plus command-line macros that redirect
 //!    the three mutable globals involved to accessor functions implemented in Rust
@@ -122,8 +124,8 @@ mod reference_rng {
     /// The platform functions the reference code calls, implemented in Rust (renamed
     /// `tpmrs_refrng_<name>` in the C objects). `CryptTestAlgorithm` is the self test that the
     /// reference's `TPM_DO_SELF_TEST()` runs for an untested algorithm (`ENABLE_SELF_TESTS`):
-    /// `tpm-rs` runs the algorithm self tests itself (`crate::self_test`), so the linked code's
-    /// `g_toTest` (a zero-initialized global that no linked code sets) never requests one.
+    /// `tpm-rs` runs the algorithm self tests itself (`tpm2_engine`'s self tests), so the linked
+    /// code's `g_toTest` (a zero-initialized global that no linked code sets) never requests one.
     const PLATFORM_FUNCTIONS: [&str; 5] = [
         "_plat__GetEntropy",
         "_plat__InFailureMode",
@@ -350,8 +352,10 @@ mod reference_rng {
     /// Clones and patches the reference, and builds `lib<LIB_NAME>.a` in `out` unless an
     /// up-to-date one exists. Returns the reference's `TPMCmd` directory.
     fn build_library(manifest: &Path, out: &Path) -> PathBuf {
-        let patch_dir = manifest.join("../../testing/patches/tcgtpm");
-        let testing_build = manifest.join("../../testing/build.rs");
+        // `crates/tpm2-platforms/linux` -> the repository root.
+        let root = manifest.join("../../..");
+        let patch_dir = root.join("testing/patches/tcgtpm");
+        let testing_build = root.join("testing/build.rs");
         println!("cargo:rerun-if-changed={}", patch_dir.display());
         println!("cargo:rerun-if-changed={}", testing_build.display());
 

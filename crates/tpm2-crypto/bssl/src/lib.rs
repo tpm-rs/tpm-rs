@@ -1,7 +1,10 @@
 #![cfg_attr(not(test), no_std)]
 #![deny(unsafe_code)]
 
+use core::marker::PhantomData;
+
 use tpm2::crypto::{Crypto, CryptoError, Random, Rng};
+use tpm2_crypto_rust::RngAdapter;
 
 /// BoringSSL-based implementation of the `tpm2::crypto` backend interfaces
 /// ([`Crypto`] and the [`tpm2::crypto::backend`] family traits).
@@ -22,9 +25,30 @@ use tpm2::crypto::{Crypto, CryptoError, Random, Rng};
 /// ML-KEM-512 and ML-DSA signing (with the TPM's signing randomness) fall back
 /// to RustCrypto `ml-kem`/`ml-dsa` (`tpm2-crypto-rust`; see [`pqc`]).
 /// Everything else is bound to `!` ([`CryptoError::Unsupported`]).
-pub struct BsslCryptoProvider;
+///
+/// The backend is generic over its random number generator `R` ([`Random::Rng`], by default
+/// [`BsslRng`]): any [`Rng`] that is its own constructor ([`Random`] with `Rng = R`, which
+/// [`BsslCryptoProvider`]'s [`Random`] delegates to). The keys draw their randomness from `R`
+/// (except where BoringSSL draws it itself, see [`Rng::is_system_rng`]); `R` only provides random
+/// bytes (e.g. the C reference RNG of `tpm2-platform-linux`, `BsslCryptoProvider<ReferenceRng>`,
+/// whose draws `tpm2-engine` turns into the C reference TPMs' keys and signatures with its own
+/// algorithms).
+pub struct BsslCryptoProvider<R = BsslRng>(PhantomData<fn() -> R>);
 
-impl Crypto for BsslCryptoProvider {
+impl<R> BsslCryptoProvider<R> {
+    /// The backend (a zero-sized value).
+    pub const fn new() -> Self {
+        Self(PhantomData)
+    }
+}
+
+impl<R> Default for BsslCryptoProvider<R> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<R: Rng + Random<Rng = R>> Crypto for BsslCryptoProvider<R> {
     /// Compares `a` and `b` with BoringSSL's `CRYPTO_memcmp`, in time independent
     /// of their contents (slices of different lengths are unequal).
     fn ct_eq(a: &[u8], b: &[u8]) -> bool {
@@ -32,10 +56,36 @@ impl Crypto for BsslCryptoProvider {
     }
 }
 
-/// The RNG of [`BsslCryptoProvider::from_entropy`] is BoringSSL's `RAND_bytes`, and the
-/// deterministic RNG of [`BsslCryptoProvider::from_seed`] is a ChaCha20 RNG seeded with
-/// SHA-256 of the seed.
-impl Random for BsslCryptoProvider {
+/// The RNG `R` constructs itself (for [`BsslRng`]: BoringSSL's `RAND_bytes`, or a ChaCha20 RNG
+/// seeded with SHA-256 of the seed).
+impl<R: Rng + Random<Rng = R>> Random for BsslCryptoProvider<R> {
+    type Rng = R;
+
+    fn from_entropy() -> Result<R, CryptoError> {
+        R::from_entropy()
+    }
+
+    fn from_seed(seed: &[u8]) -> Result<R, CryptoError> {
+        R::from_seed(seed)
+    }
+
+    fn rand_bytes(out: &mut [u8]) -> Result<(), CryptoError> {
+        R::rand_bytes(out)
+    }
+
+    fn instantiate_seeded(
+        seed: &[u8],
+        purpose: &[u8],
+        name: &[u8],
+        additional: &[u8],
+    ) -> Result<R, CryptoError> {
+        R::instantiate_seeded(seed, purpose, name, additional)
+    }
+}
+
+/// [`BsslRng`] constructs itself: [`Random::from_entropy`] is BoringSSL's `RAND_bytes`, and the
+/// deterministic RNG of [`Random::from_seed`] is a ChaCha20 RNG seeded with SHA-256 of the seed.
+impl Random for BsslRng {
     type Rng = BsslRng;
 
     fn from_entropy() -> Result<BsslRng, CryptoError> {
@@ -92,7 +142,7 @@ pub(crate) fn output<T>(result: Result<T, BsslError>) -> Result<Option<T>, Crypt
     }
 }
 
-/// The random number generator of [`BsslCryptoProvider`] ([`Random::Rng`]).
+/// The default random number generator of [`BsslCryptoProvider`] ([`Random::Rng`]).
 ///
 /// It is either BoringSSL's `RAND_bytes` ([`Random::from_entropy`]), or a deterministic
 /// ChaCha20 RNG ([`Random::from_seed`]), whose output depends only on the seed and the
@@ -138,6 +188,13 @@ impl Rng for BsslRng {
         }
         Ok(())
     }
+
+    /// BoringSSL's `RAND_bytes` is the backend's system RNG: keys are generated with
+    /// BoringSSL's own randomness (e.g. `RSA_generate_key_ex`), and `tpm2-engine` keeps
+    /// BoringSSL's key generation and ECDSA for it. The seeded RNG is not.
+    fn is_system_rng(&self) -> bool {
+        !self.is_seeded()
+    }
 }
 
 impl rand_core::RngCore for BsslRng {
@@ -169,8 +226,19 @@ impl rand_core::RngCore for BsslRng {
 impl rand_core::CryptoRng for BsslRng {}
 
 /// Draws an `N`-byte array from `rng`.
-pub(crate) fn random_array<const N: usize>(rng: &mut BsslRng) -> [u8; N] {
+pub(crate) fn random_array<const N: usize, R: Rng>(rng: &mut R) -> Result<[u8; N], CryptoError> {
     let mut out = [0u8; N];
-    rand_core::RngCore::fill_bytes(rng, &mut out);
-    out
+    rng.fill_bytes(&mut out)?;
+    Ok(out)
+}
+
+/// Runs `f` with `rng` adapted to the `rand_core` traits of BoringSSL's key generation
+/// ([`RngAdapter`]), failing with [`CryptoError::Internal`] if `rng` failed.
+pub(crate) fn with_rand_core<R: Rng, T>(
+    rng: &mut R,
+    f: impl FnOnce(&mut RngAdapter<'_, R>) -> Result<T, BsslError>,
+) -> Result<T, CryptoError> {
+    let mut adapter = RngAdapter::new(rng);
+    let result = f(&mut adapter);
+    adapter.finish(result)?.map_err(CryptoError::from)
 }

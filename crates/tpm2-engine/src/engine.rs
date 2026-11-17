@@ -91,13 +91,14 @@ pub struct TpmEngine<P: Platform> {
     /// mode), which TPM 2.0 Part 1 ("Command Dispatch") considers "different from the command
     /// execution state": see [`crate::self_test`].
     pub self_test: crate::self_test::SelfTestState,
-    /// The crypto backend's random number generator (`C::Rng`, created from the backend's
-    /// entropy source with [`tpm2::crypto::Random::from_entropy`] by [`TpmEngine::new`]). It is
-    /// not part of the [`State`]: it is neither persisted nor serialized. It
-    /// draws the values the default build takes from the crypto backend (response nonces,
-    /// TPM-generated keys and seeds, secrets, see the `rng` module), the randomness of the
-    /// randomized key operations (RSA padding and blinding, signature nonces) and absorbs the
-    /// data of `TPM2_StirRandom`.
+    /// The TPM's random number generator, its DRBG (`C::Rng`, created by
+    /// [`Platform::crypto_rng`] in [`TpmEngine::new`]), from which every random value is drawn
+    /// (seeds, proofs, nonces, `TPM2_GetRandom`, IVs, TPM-generated keys and secrets, and the
+    /// randomness of the randomized key operations: RSA padding, signature nonces), in the
+    /// order of the reference implementation (see the `rng` module). `TPM2_StirRandom` stirs it.
+    /// It is not part of the [`State`] and is not serialized; its persistent state
+    /// ([`tpm2::crypto::Rng::save_state`]) is kept in NV as the reference's `go.drbgState`
+    /// ([`crate::OrderlyState::drbg_state`]).
     pub crypto_rng: <P::Crypto as tpm2::crypto::Random>::Rng,
 }
 
@@ -186,15 +187,22 @@ type DecryptBuf = [u8; DECRYPT_BUF_SIZE];
 /// Magic value (`"DRBG"`) identifying an initialized SP800-90A CTR_DRBG state (`go.drbgState`).
 pub const DRBG_MAGIC: u32 = 0x47425244;
 
-/// Represents the internal NIST SP800-90A CTR_DRBG state (`go.drbgState` in `ibmswtpm2`).
+/// The size of the NV slot of the TPM's DRBG state (`go.drbgState`, [`DrbgState`]): the
+/// largest [`tpm2::crypto::Rng::STATE_SIZE`] the engine can persist.
+pub const DRBG_STATE_SIZE: usize = 76;
+
+/// The NV image of the TPM's DRBG state (`go.drbgState`, the reference's SP800-90A CTR_DRBG
+/// `DRBG_STATE`), [`DRBG_STATE_SIZE`] octets in the NV header ([`crate::storage::nv::NvHeader`])
+/// and in the orderly state ([`crate::OrderlyState::drbg_state`]).
 ///
-/// This structure is committed to non-volatile storage (`ORDERLY_DATA`) on orderly shutdown
-/// (`TPM2_Shutdown`) and restored and reseeded on subsequent orderly startup (`TPM2_Startup`).
-/// It preserves accumulated entropy across power cycles and satisfies `ibmswtpm2` rollback assertions
-/// (`pAssert(drbgState->magic == DRBG_MAGIC)`).
-///
-/// With the `reference-rng` feature, it is converted field by field to and from the reference
-/// code's `DRBG_STATE` around every call into that code.
+/// The engine does not interpret it: it holds the state of the TPM's random number generator
+/// ([`tpm2::crypto::Rng::save_state`], the first [`tpm2::crypto::Rng::STATE_SIZE`] octets of
+/// [`DrbgState::to_bytes`]), which the engine writes at the reference's NV points (manufacture,
+/// `TPM2_Shutdown`, `TPM2_Clear` and NV updates of *Clock*) and gives back to the generator at
+/// `_TPM_Init` ([`tpm2::crypto::Rng::load_state`]). Its fields are those of the reference's
+/// `DRBG_STATE` (a generator that implements that DRBG, such as the reference RNG of
+/// `tpm2-platform-linux`, can use this type for its state); the conversions
+/// [`DrbgState::to_bytes`]/[`DrbgState::from_bytes`] are a bijection on the 76 octets.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DrbgState {
     /// Reseed counter tracking requests since last reseed.
@@ -250,42 +258,6 @@ impl DrbgState {
             seed,
             last_value,
         }
-    }
-
-    /// Instantiates a fresh DRBG state (`DRBG_Instantiate`), drawing fresh entropy from `rng`.
-    ///
-    /// Draws 48 bytes of seed material from `rng` ([`Rng::fill_bytes`](tpm2::crypto::Rng::fill_bytes)), then 16 bytes for the
-    /// continuous health test history (`last_value`).
-    pub fn instantiate<R: tpm2::crypto::Rng>(&mut self, rng: &mut R) -> Result<(), TpmRc> {
-        self.magic = DRBG_MAGIC;
-        self.reseed_counter = 1;
-        rng.fill_bytes(&mut self.seed).map_err(|_| TpmRc::FAILURE)?;
-        let mut last_bytes = [0u8; 16];
-        rng.fill_bytes(&mut last_bytes)
-            .map_err(|_| TpmRc::FAILURE)?;
-        for (i, val) in self.last_value.iter_mut().enumerate() {
-            let off = i * 4;
-            *val = u32::from_be_bytes([
-                last_bytes[off],
-                last_bytes[off + 1],
-                last_bytes[off + 2],
-                last_bytes[off + 3],
-            ]);
-        }
-        Ok(())
-    }
-
-    /// Reseeds an existing DRBG state (`DRBG_Reseed`), mixing fresh platform entropy into `seed`.
-    ///
-    /// Draws 48 bytes of fresh entropy from `rng` ([`Rng::fill_bytes`](tpm2::crypto::Rng::fill_bytes)).
-    pub fn reseed<R: tpm2::crypto::Rng>(&mut self, rng: &mut R) -> Result<(), TpmRc> {
-        let mut entropy = [0u8; 48];
-        rng.fill_bytes(&mut entropy).map_err(|_| TpmRc::FAILURE)?;
-        for (s, e) in self.seed.iter_mut().zip(entropy.iter()) {
-            *s ^= *e;
-        }
-        self.reseed_counter = 1;
-        Ok(())
     }
 }
 
@@ -1229,8 +1201,8 @@ impl<P: Platform> TpmEngine<P> {
     }
 
     /// Manufactures the TPM (`TPM_Manufacture` / `HierarchyPreInstall_Init`): draws the three
-    /// Primary Seeds and the three hierarchy proofs as independent values from the platform RNG
-    /// and persists them, and clears the reserved NV entries.
+    /// Primary Seeds and the three hierarchy proofs as independent values from the TPM's DRBG
+    /// ([`Self::crypto_rng`]) and persists them, and clears the reserved NV entries.
     ///
     /// TPM 2.0 Part 1, "Primary Seeds" and "Hierarchy Proofs": each seed and proof is a
     /// secret, statistically unique random value. The draw order and sizes follow the reference
@@ -1238,16 +1210,13 @@ impl<P: Platform> TpmEngine<P> {
     pub fn init_storage(&mut self) {
         // `CryptInit()` and `CryptStartup(SU_RESET)` of `TPM_Manufacture()` come first: the
         // DRBG the hierarchy secrets are drawn from is instantiated here.
-        #[cfg(feature = "reference-rng")]
         let rng_ok = self.manufacture_rng().is_ok();
-        #[cfg(not(feature = "reference-rng"))]
-        let rng_ok = true;
-        // A value the platform RNG cannot produce stays unprovisioned (zeroed, size 0): every
+        // A value the DRBG cannot produce stays unprovisioned (zeroed, size 0): every
         // command that needs it as key material then fails with `TPM_RC_FAILURE`
         // (`handler::provisioned_secret`) instead of using a predictable value.
         let draw = |engine: &mut Self, size: usize| -> ([u8; 64], u16) {
             let mut buf = [0u8; 64];
-            if rng_ok && engine.random_platform(&mut buf[..size]).is_ok() {
+            if rng_ok && engine.crypt_random_generate(&mut buf[..size]).is_ok() {
                 (buf, size as u16)
             } else {
                 ([0u8; 64], 0)
@@ -1286,20 +1255,21 @@ impl<P: Platform> TpmEngine<P> {
         // `NvManufacture()`: the orderly-Index RAM is cleared and saved to its NV copy.
         let _ = crate::storage::orderly_ram::save(&mut self.state.nv.index);
         // `NvWrite(NV_ORDERLY_DATA, ...)`: the DRBG state after manufacture is persisted.
-        #[cfg(feature = "reference-rng")]
-        self.save_drbg_state();
+        let _ = self.save_drbg_state();
         self.platform.store_nv(&self.state.nv);
     }
 
     /// Creates a new [`TpmEngine`] over `platform` with the state of a new (unmanufactured)
     /// TPM ([`State::new`]) whose NV data is held in `index` (e.g. the platform's NV medium).
-    pub fn new(platform: P, index: P::IndexState) -> Result<Self, InternalError> {
+    pub fn new(mut platform: P, index: P::IndexState) -> Result<Self, InternalError> {
+        let crypto_rng = platform
+            .crypto_rng()
+            .map_err(|_| InternalError::HardwareError)?;
         Ok(Self {
             platform,
             state: State::new(index),
             self_test: Default::default(),
-            crypto_rng: <P::Crypto as tpm2::crypto::Random>::from_entropy()
-                .map_err(|_| InternalError::HardwareError)?,
+            crypto_rng,
         })
     }
 
@@ -1327,8 +1297,7 @@ impl<P: Platform> TpmEngine<P> {
     /// including the Primary Seeds and hierarchy proofs written at manufacture
     /// ([`Self::init_storage`]) or by `TPM2_Clear`/`TPM2_ChangeEPS`/`TPM2_ChangePPS`.
     pub fn reset(&mut self) {
-        // `CryptInit()` re-seeds the platform entropy source.
-        #[cfg(feature = "reference-rng")]
+        // `CryptInit()` re-seeds the DRBG's entropy source.
         self.crypt_rand_init();
         self.time_power_on();
         // `_plat__ACT_EnableTicks(FALSE)`: the ACTs do not count until the next TPM2_Startup
@@ -1338,7 +1307,6 @@ impl<P: Platform> TpmEngine<P> {
         // `CryptInitializeToTest()` (`CryptInit()`): every algorithm needs its test again, and
         // Failure mode ends; then `CryptRandInit()` runs the DRBG self test.
         self.self_test.initialize();
-        #[cfg(feature = "reference-rng")]
         self.crypt_rand_self_test();
         // The platform reads the NV data from external storage before the NV-synced state is
         // reloaded from it.
@@ -1348,7 +1316,6 @@ impl<P: Platform> TpmEngine<P> {
         self.restore_persistent_state();
         self.restore_pcr_allocation();
         // `NvRead(&go, NV_ORDERLY_DATA, ...)`: the DRBG reverts to its last persisted state.
-        #[cfg(feature = "reference-rng")]
         self.load_drbg_state();
         self.platform.store_nv(&self.state.nv);
     }
@@ -1865,8 +1832,7 @@ impl<P: Platform> TpmEngine<P> {
             // The clock is persisted with the rest of the persistent hierarchy data.
             self.save_hierarchy_auths();
             // The reference writes all of `go`, including the DRBG state.
-            #[cfg(feature = "reference-rng")]
-            self.save_drbg_state();
+            let _ = self.save_drbg_state();
         }
     }
 
@@ -2451,7 +2417,7 @@ impl<P: Platform> TpmEngine<P> {
                         .map(|s| s.nonce_tpm.get_size() as usize)
                         .unwrap_or(32);
                     let mut nonce_bytes = [0u8; 64];
-                    self.random_crypto(&mut nonce_bytes[..nonce_size])
+                    self.crypt_random_generate(&mut nonce_bytes[..nonce_size])
                         .map_err(|_| TpmRc::MEMORY)?;
                     nonces_tpm_new[i] = Some(
                         OwnedNonce::from_bytes(&nonce_bytes[..nonce_size])

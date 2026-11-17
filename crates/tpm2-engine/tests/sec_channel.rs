@@ -7,8 +7,7 @@
 mod common;
 
 use common::{
-    FakeRng, FakeStorage, FakeTimer, RealCryptoEngine, TestCryptoProvider, execute_command,
-    password_auth, setup_real_crypto_tpm,
+    FakeStorage, FakeTimer, RealCryptoEngine, execute_command, password_auth, setup_real_crypto_tpm,
 };
 use tpm2::commands::{
     CreatePrimary, FlushContext, GetCapability, PolicyGetDigest, PolicyTransportSPDM,
@@ -180,14 +179,10 @@ fn capability(
 /// `checkSecureChannel` is `TPM_RC_CHANNEL` with the position of the session.
 #[test]
 fn no_secure_channel_is_channel_error() {
-    let (mut crypto, mut storage, mut timer, mut rng) = (
-        TestCryptoProvider,
-        FakeStorage::default(),
-        FakeTimer,
-        FakeRng::new(),
-    );
+    let (mut crypto, mut storage, mut timer) =
+        (common::test_crypto(), FakeStorage::default(), FakeTimer);
     // `setup_real_crypto_tpm` builds the platform without a secure transport layer.
-    let mut tpm = setup_real_crypto_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
+    let mut tpm = setup_real_crypto_tpm(&mut crypto, &mut storage, &mut timer);
     assert!(tpm.platform.secure_channel.is_none());
     assert_eq!(
         capability(&mut tpm, TpmCap::PubKeys).map(|_| ()),
@@ -213,13 +208,9 @@ fn no_secure_channel_is_channel_error() {
 #[test]
 fn responder_only_session_has_no_requester_key() {
     static CHANNEL: ResponderOnly = ResponderOnly;
-    let (mut crypto, mut storage, mut timer, mut rng) = (
-        TestCryptoProvider,
-        FakeStorage::default(),
-        FakeTimer,
-        FakeRng::new(),
-    );
-    let mut tpm = setup_real_crypto_tpm(&mut crypto, &mut storage, &mut timer, &mut rng);
+    let (mut crypto, mut storage, mut timer) =
+        (common::test_crypto(), FakeStorage::default(), FakeTimer);
+    let mut tpm = setup_real_crypto_tpm(&mut crypto, &mut storage, &mut timer);
     tpm.platform.secure_channel = Some(&CHANNEL);
     let tpm_key_name = match capability(&mut tpm, TpmCap::SpdmSessionInfo) {
         Ok(TpmsCapabilityData::SpdmSessionInfo(list)) => {

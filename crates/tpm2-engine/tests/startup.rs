@@ -1,7 +1,7 @@
 mod common;
 
 use common::FakePlatform;
-use common::{FakeCrypto, FakeRng, FakeStorage, FakeTimer};
+use common::{FakeCrypto, FakeStorage, FakeTimer};
 use tpm2::errors::TpmRc;
 use tpm2_engine::TpmEngine;
 
@@ -10,8 +10,7 @@ fn test_adv_total_reset_count_overflow() {
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let mut rng = FakeRng::new();
-    let platform = FakePlatform::new(&mut crypto, &mut timer, &mut rng);
+    let platform = FakePlatform::new(&mut crypto, &mut timer);
     let mut tpm = TpmEngine::new(platform, &mut storage).unwrap();
     tpm.init_storage();
     tpm.state.nv_available = true;
@@ -36,8 +35,7 @@ fn test_adv_nv_storage_failure() {
     let mut storage = FakeStorage::default();
     storage.fail_on_write = true;
     let mut timer = FakeTimer;
-    let mut rng = FakeRng::new();
-    let platform = FakePlatform::new(&mut crypto, &mut timer, &mut rng);
+    let platform = FakePlatform::new(&mut crypto, &mut timer);
     let mut tpm = TpmEngine::new(platform, &mut storage).unwrap();
     tpm.init_storage();
     tpm.state.nv_available = true;
@@ -63,8 +61,7 @@ fn test_startup_preserves_custom_platform_unique_details_and_allows_policy_secre
     let mut crypto = FakeCrypto;
     let mut storage = FakeStorage::default();
     let mut timer = FakeTimer;
-    let mut rng = FakeRng::new();
-    let platform = FakePlatform::new(&mut crypto, &mut timer, &mut rng);
+    let platform = FakePlatform::new(&mut crypto, &mut timer);
     let mut tpm = TpmEngine::new(platform, &mut storage).unwrap();
     tpm.init_storage();
     tpm.state.nv_available = true;

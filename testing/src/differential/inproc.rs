@@ -803,7 +803,7 @@ mod references {
     #[cfg(test)]
     mod tests {
         use tpm2::Connection as _;
-        use tpm2_simulator::{Simulator, create_reference_simulator};
+        use tpm2_simulator::{ReferenceCryptoProvider, Simulator, create_reference_simulator};
 
         use super::*;
 
@@ -831,7 +831,10 @@ mod references {
         }
 
         /// The `tpm-rs` response to `command`.
-        fn tpm_rs(sim: &mut Simulator<'static>, command: &[u8]) -> Vec<u8> {
+        fn tpm_rs(
+            sim: &mut Simulator<'static, ReferenceCryptoProvider>,
+            command: &[u8],
+        ) -> Vec<u8> {
             let mut rsp = vec![0u8; 8192];
             sim.transact(command, &mut rsp).expect("transact").to_vec()
         }
@@ -839,7 +842,7 @@ mod references {
         /// Sends `command` to `sim` and mirrors it to `references` (which
         /// panics on a divergence); the `tpm-rs` response.
         fn mirrored(
-            sim: &mut Simulator<'static>,
+            sim: &mut Simulator<'static, ReferenceCryptoProvider>,
             references: &mut InProcReferences,
             command: &[u8],
         ) -> Vec<u8> {

@@ -60,7 +60,7 @@ pub fn make_test_session_state(
 }
 
 /// A deterministic RNG: fills buffers with an incrementing (wrapping) byte counter that starts at
-/// 1 and continues across calls. It is both the fake platform RNG and the RNG of [`FakeCrypto`].
+/// 1 and continues across calls. It is the RNG of [`FakeCrypto`].
 pub struct FakeRng {
     counter: u8,
 }
@@ -315,7 +315,7 @@ impl TpmTimer for FakeTimer {
 
 /// A [`crate::Platform`] over the fake components whose NV data structure is an owned
 /// [`FakeStorage`], for tests of a standalone [`TestState`].
-pub type TestPlatform = FakePlatform<'static, FakeCrypto, FakeStorage, FakeTimer, FakeRng>;
+pub type TestPlatform = FakePlatform<'static, FakeCrypto, FakeStorage, FakeTimer>;
 
 /// A standalone TPM state ([`crate::State`]) over [`TestPlatform`]; its
 /// [`Default`](crate::State::default) has a fresh [`FakeStorage`].
@@ -327,20 +327,17 @@ pub type TestState = crate::State<TestPlatform>;
 /// `I` is the [`crate::Platform::IndexState`] of the TPM, which the engine owns
 /// ([`crate::TpmEngine::new`]); typically an NV medium or a mutable reference to one.
 #[allow(dead_code)]
-pub struct FakePlatform<'a, C, I, T, R>
+pub struct FakePlatform<'a, C, I, T>
 where
     C: Crypto,
     I: IndexState,
     T: TpmTimer,
-    R: Rng,
 {
     /// Cryptography backend ([`Crypto`]). The backend's interfaces are static (its
     /// algorithms are associated types); the reference only selects and borrows it.
     pub crypto: &'a mut C,
     /// Monotonic timer.
     pub timer: &'a mut T,
-    /// Platform random number generator ([`crate::Platform::Rng`]).
-    pub rng: &'a mut R,
     /// Whether the platform provides the reference platform's dummy firmware secrets
     /// ([`crate::Platform::firmware_secret`], [`crate::Platform::firmware_svn_secret`]),
     /// enabling the firmware-limited and SVN-limited hierarchies; `false` by default
@@ -357,19 +354,17 @@ where
 }
 
 #[allow(dead_code)]
-impl<'a, C, I, T, R> FakePlatform<'a, C, I, T, R>
+impl<'a, C, I, T> FakePlatform<'a, C, I, T>
 where
     C: Crypto,
     I: IndexState,
     T: TpmTimer,
-    R: Rng,
 {
     /// Constructs a new `FakePlatform` from mutable references to hardware providers.
-    pub fn new(crypto: &'a mut C, timer: &'a mut T, rng: &'a mut R) -> Self {
+    pub fn new(crypto: &'a mut C, timer: &'a mut T) -> Self {
         Self {
             crypto,
             timer,
-            rng,
             limited_hierarchies: false,
             secure_channel: None,
             info: crate::PlatformInfo::DEFAULT,
@@ -406,16 +401,14 @@ where
     }
 }
 
-impl<C, I, T, R> crate::Platform for FakePlatform<'_, C, I, T, R>
+impl<C, I, T> crate::Platform for FakePlatform<'_, C, I, T>
 where
     C: Crypto,
     I: IndexState,
     T: TpmTimer,
-    R: Rng + Sync,
 {
     type Crypto = C;
     type Timer = T;
-    type Rng = R;
     type IndexState = I;
 
     fn info(&self) -> &crate::PlatformInfo {
@@ -424,10 +417,6 @@ where
 
     fn timer(&self) -> &T {
         self.timer
-    }
-
-    fn rng(&mut self) -> &mut R {
-        self.rng
     }
 
     fn firmware_secret(
