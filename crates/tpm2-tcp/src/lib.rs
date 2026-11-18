@@ -1,6 +1,9 @@
 #![doc = include_str!("../README.md")]
 #![forbid(unsafe_code)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
+// The `zerocopy` derive macros generate identifiers with a non-ASCII
+// character in them, which nightly Rust warns about.
+#![allow(uncommon_codepoints)]
 
 use std::fs;
 use std::io::{self, Error, ErrorKind, IoSlice, Read, Write};
