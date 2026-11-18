@@ -14,6 +14,13 @@ license.workspace = true
 keywords.workspace = true
 categories = ["development-tools::testing"]
 
+[features]
+default = ["tempfile"]
+
+# Launch a simulator in a temporary directory, which is removed afterwards.
+tempfile = ["dep:tempfile"]
+
 [dependencies]
 tpm2 = { workspace = true }
+tempfile = { version = "3.27", default-features = false, optional = true }
 zerocopy = { version = "0.8", features = ["derive"] }

@@ -50,6 +50,13 @@ There is a Dockerfile that can build this for you, making the process easier:
 cd crates/tpm2-client && docker compose run --rm simulator_tests
 ```
 
+To use a simulator you built yourself, set `TPM_SIMULATOR_BIN` to its absolute
+path:
+
+```
+TPM_SIMULATOR_BIN=/path/to/Simulator cargo test -p tpm2-client --test simulator -- --ignored
+```
+
 ## Contributing
 
 - You can read our detailed [coding style] and [contribution guide].

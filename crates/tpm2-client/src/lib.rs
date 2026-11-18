@@ -17,10 +17,13 @@
 //! ```rust,no_run
 //! use tpm2_client::{run_command, protocol::RESP_BUFFER_SIZE};
 //! use tpm2::commands::GetRandom;
-//! use tpm2_tcp::TcpConnection;
+//! use tpm2_tcp::{DEFAULT_PLATFORM_PORT, DEFAULT_TPM_PORT, TcpConnection};
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let mut tpm = TcpConnection::connect("127.0.0.1", None, None)?;
+//! let mut tpm = TcpConnection::connect(
+//!     ("127.0.0.1", DEFAULT_TPM_PORT),
+//!     ("127.0.0.1", DEFAULT_PLATFORM_PORT),
+//! )?;
 //! let cmd = GetRandom { bytes_requested: 16 };
 //! let mut resp_buffer = [0u8; RESP_BUFFER_SIZE];
 //! let resp = run_command(&cmd, &mut tpm, &mut resp_buffer)?;

@@ -16,5 +16,4 @@ categories.workspace = true
 tpm2 = { workspace = true }
 
 [dev-dependencies]
-tempfile = { version = "3.27", default-features = false }
 tpm2-tcp = { workspace = true }

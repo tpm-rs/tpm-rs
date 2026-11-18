@@ -24,6 +24,7 @@ jobs:
       - uses: actions/checkout@v4
       - run: rustc --version
       - run: cargo test
+      - run: cargo test -p tpm2-tcp --no-default-features
 
   features:
     name: Feature Subsets (tpm2)
@@ -112,6 +113,7 @@ jobs:
       - uses: actions/checkout@v4
       - run: rustc +nightly --version
       - run: cargo +nightly doc
+      - run: cargo +nightly doc -p tpm2-tcp --no-default-features
 
   miri:
     name: Miri UB Test Suite

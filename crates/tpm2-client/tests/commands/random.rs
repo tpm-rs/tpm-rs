@@ -4,7 +4,7 @@ use tpm2::{Tpm2bDigest, TpmiAlgHash};
 use tpm2_client::run_command;
 
 #[test]
-#[ignore = "requires running TPM simulator"]
+#[ignore = "requires TPM_SIMULATOR_BIN"]
 fn test_get_random_duplicate_value_trap() {
     let mut tpm = get_started_tpm();
 
@@ -13,7 +13,7 @@ fn test_get_random_duplicate_value_trap() {
     };
 
     let mut resp_buffer = [0u8; tpm2_client::protocol::RESP_BUFFER_SIZE];
-    let resp = run_command(&command, tpm.connection_mut(), &mut resp_buffer)
+    let resp = run_command(&command, &mut tpm.connection, &mut resp_buffer)
         .expect("Failed running command.");
 
     // Lets pull out the actual data as a slice for convenience
@@ -40,7 +40,7 @@ fn test_get_random_duplicate_value_trap() {
 }
 
 #[test]
-#[ignore = "requires running TPM simulator"]
+#[ignore = "requires TPM_SIMULATOR_BIN"]
 fn test_get_random_large_sizes() {
     let mut tpm = get_started_tpm();
     let mut detected_max_size = 0;
@@ -50,7 +50,7 @@ fn test_get_random_large_sizes() {
     for i in [0xFFF, 0xFFFF] {
         let command = GetRandom { bytes_requested: i };
         let mut resp_buffer = [0u8; tpm2_client::protocol::RESP_BUFFER_SIZE];
-        let resp = run_command(&command, tpm.connection_mut(), &mut resp_buffer)
+        let resp = run_command(&command, &mut tpm.connection, &mut resp_buffer)
             .expect("Failed running command.");
 
         // Lets pull out the actual slice size for convenience
@@ -80,7 +80,7 @@ fn test_get_random_large_sizes() {
 }
 
 #[test]
-#[ignore = "requires running TPM simulator"]
+#[ignore = "requires TPM_SIMULATOR_BIN"]
 fn test_get_random_small_sizes() {
     let mut tpm = get_started_tpm();
 
@@ -88,7 +88,7 @@ fn test_get_random_small_sizes() {
         let command = GetRandom { bytes_requested: i };
 
         let mut resp_buffer = [0u8; tpm2_client::protocol::RESP_BUFFER_SIZE];
-        let resp = run_command(&command, tpm.connection_mut(), &mut resp_buffer)
+        let resp = run_command(&command, &mut tpm.connection, &mut resp_buffer)
             .expect("Failed running command.");
 
         // Lets pull out the actual slice size for convenience

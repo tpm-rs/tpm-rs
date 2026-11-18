@@ -79,6 +79,9 @@ RUN ln -s /simulators/openssl1/tpm2-simulator /tpm2-simulator
 # following exceptions:
 #  - replace the COPY statement with RUN git clone to obtain the TPM sources.
 
+# The simulator that the tests launch (see the `tpm2-tcp` crate).
+ENV TPM_SIMULATOR_BIN=/tpm2-simulator
+
 WORKDIR /tpm-rs
 
 # Install Rust

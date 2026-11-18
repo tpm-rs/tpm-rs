@@ -1,36 +1,40 @@
-//! A connection to the TCG TPM 2.0 Simulator over TCP.
-//!
-//! This crate provides two types for communicating with the TPM over TCP:
-//!
-//! - The [`TcpConnection`] struct, which implements the [`Connection`] trait.
-//! - A [`TcpSimulator`] struct that manages the lifetime of a TPM simulator
-//!   process and a [`TcpConnection`] to it.
+#![doc = include_str!("../README.md")]
 #![forbid(unsafe_code)]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 
-use std::ffi::OsStr;
+use std::fs;
 use std::io::{self, Error, ErrorKind, IoSlice, Read, Write};
-use std::net::TcpStream;
+use std::net::{Ipv4Addr, Shutdown, TcpListener, TcpStream, ToSocketAddrs};
 use std::path::Path;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::{Mutex, PoisonError};
+use std::thread;
+use std::time::{Duration, Instant};
 
+#[cfg(feature = "tempfile")]
+use tempfile::TempDir;
 use tpm2::Connection;
 use zerocopy::network_endian::U32;
 use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
-/// Compiles the examples in the README as doctests.
-#[cfg(doctest)]
-#[doc = include_str!("../README.md")]
-struct ReadmeDoctests;
+// Miri supports neither sockets nor child processes.
+#[cfg(all(test, not(miri)))]
+mod tests;
 
-/// The default TPM port of the TPM simulator
-const SIMULATOR_DEFAULT_TPM_PORT: u16 = 2321;
+/// The simulator's default port for TPM commands.
+pub const DEFAULT_TPM_PORT: u16 = 2321;
 
-/// The default Platform port of the TPM simulator
-const SIMULATOR_DEFAULT_PLATFORM_PORT: u16 = 2322;
+/// The simulator's default port for platform signals.
+pub const DEFAULT_PLATFORM_PORT: u16 = 2322;
 
-/// A TPM connection over TCP, designed for use with the TCG TPM 2.0 Simulator.
+/// The environment variable read by [`TcpSimulator::launch_from_env`].
+#[cfg(feature = "tempfile")]
+pub const SIMULATOR_BIN_ENV: &str = "TPM_SIMULATOR_BIN";
+
+/// A connection to a running TCG TPM 2.0 Simulator over TCP.
 ///
-/// This struct implements the [`Connection`] trait.
+/// TPM commands are sent with the [`Connection`] trait. The other methods
+/// control the simulator itself.
 #[derive(Debug)]
 pub struct TcpConnection {
     /// TCP connection to the TPM port of the TPM simulator
@@ -44,51 +48,21 @@ pub struct TcpConnection {
 }
 
 impl TcpConnection {
-    /// Connects to an already running TPM simulator using the specified ports.
+    /// Connects to a running TPM simulator, given the addresses of its TPM port
+    /// and its Platform port.
     ///
     /// # Errors
     ///
     /// Returns an error if the connection to the TPM or Platform port fails.
     pub fn connect(
-        ip: &str,
-        tpm_port: Option<u16>,
-        plat_port: Option<u16>,
+        tpm: impl ToSocketAddrs,
+        platform: impl ToSocketAddrs,
     ) -> io::Result<TcpConnection> {
-        let tpm_port = tpm_port.unwrap_or(SIMULATOR_DEFAULT_TPM_PORT);
-        let plat_port = plat_port.unwrap_or(SIMULATOR_DEFAULT_PLATFORM_PORT);
-
         Ok(TcpConnection {
-            tpm_tcp: TcpStream::connect((ip, tpm_port))?,
-            plat_tcp: TcpStream::connect((ip, plat_port))?,
+            tpm_tcp: TcpStream::connect(tpm)?,
+            plat_tcp: TcpStream::connect(platform)?,
             locality: 0,
         })
-    }
-
-    /// Connects to an already running TPM simulator with retries.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the connection to the TPM or Platform port fails
-    /// after the number of retries has been exhausted.
-    pub fn connect_with_retries(
-        ip: &str,
-        tpm_port: Option<u16>,
-        plat_port: Option<u16>,
-    ) -> io::Result<TcpConnection> {
-        let mut attempts = 0;
-        let conn = loop {
-            attempts += 1;
-            match TcpConnection::connect(ip, tpm_port, plat_port) {
-                Ok(conn) => break conn,
-                Err(err) => {
-                    if attempts > 3 {
-                        return Err(err);
-                    }
-                    std::thread::sleep(std::time::Duration::from_secs(1));
-                }
-            }
-        };
-        Ok(conn)
     }
 
     /// Performs an H-CRTM Event Sequence against the TPM simulator.
@@ -160,7 +134,8 @@ impl TcpConnection {
         Ok(resp)
     }
 
-    /// Sets an alternative result in the TPM simulator.
+    /// Sets an alternative result. The TCG simulator accepts this and ignores
+    /// it.
     ///
     /// # Errors
     ///
@@ -199,12 +174,11 @@ impl TcpConnection {
         Self::check_response_end(&mut self.plat_tcp)
     }
 
-    /// Convenience function to reinitialize the TPM simulator, causing it to
-    /// call _TPM_Init.
+    /// Power cycles the TPM, causing the simulator to call `_TPM_Init`.
     ///
     /// # Errors
     ///
-    /// Returns an error if any of the plaform signals fail.
+    /// Returns an error if any of the platform signals fail.
     pub fn reinit(&mut self) -> io::Result<()> {
         self.platform_signal(SimulatorPlatformSignal::NvOff)?;
         self.platform_signal(SimulatorPlatformSignal::PowerOff)?;
@@ -213,7 +187,8 @@ impl TcpConnection {
         Ok(())
     }
 
-    /// Puts the TPM simulator into failure mode.
+    /// Makes the TPM's next self-test fail, which puts the TPM into failure
+    /// mode.
     ///
     /// # Errors
     ///
@@ -226,8 +201,8 @@ impl TcpConnection {
         Self::check_response_end(&mut self.plat_tcp)
     }
 
-    /// Gets the largest command/response the simulator received. Once received,
-    /// the simulator will reset the largest command/response to zero.
+    /// Gets the largest command and the largest response the simulator has
+    /// seen, and resets its record of them.
     ///
     /// # Errors
     ///
@@ -349,34 +324,48 @@ impl TcpConnection {
     ///
     /// Returns an error if the communication with the TPM or Platform port
     /// fails.
-    pub fn session_end(&mut self) -> io::Result<()> {
+    pub fn end_session(mut self) -> io::Result<()> {
         let cmd_code = U32::new(SimulatorTpmCommandCode::SessionEnd as u32);
         self.tpm_tcp.write_all(cmd_code.as_bytes())?;
-        self.tpm_tcp.shutdown(std::net::Shutdown::Both)?;
+        self.tpm_tcp.shutdown(Shutdown::Both)?;
 
         let cmd_code = U32::new(SimulatorPlatformCommandCode::SessionEnd as u32);
         self.plat_tcp.write_all(cmd_code.as_bytes())?;
-        self.plat_tcp.shutdown(std::net::Shutdown::Both)?;
+        self.plat_tcp.shutdown(Shutdown::Both)?;
 
         Ok(())
     }
 
-    /// Stops the TPM simulator. This causes the simulator to exit the program.
+    /// Stops the TPM simulator, causing its process to exit.
     ///
     /// # Errors
     ///
     /// Returns an error if the communication with the TPM or Platform port
     /// fails.
-    pub fn stop_simulator(&mut self) -> io::Result<()> {
-        let cmd_code = U32::new(SimulatorTpmCommandCode::Stop as u32);
-        self.tpm_tcp.write_all(cmd_code.as_bytes())?;
-        self.tpm_tcp.shutdown(std::net::Shutdown::Both)?;
+    pub fn stop_simulator(mut self) -> io::Result<()> {
+        self.send_stop()
+    }
 
+    /// Tells the simulator to exit. The connection is unusable afterwards.
+    fn send_stop(&mut self) -> io::Result<()> {
+        // The simulator exits once its TPM port is told to stop, so tell the
+        // Platform port first, while the simulator is still there to hear it.
         let cmd_code = U32::new(SimulatorPlatformCommandCode::Stop as u32);
         self.plat_tcp.write_all(cmd_code.as_bytes())?;
-        self.plat_tcp.shutdown(std::net::Shutdown::Both)?;
+        self.plat_tcp.shutdown(Shutdown::Both)?;
+
+        let cmd_code = U32::new(SimulatorTpmCommandCode::Stop as u32);
+        self.tpm_tcp.write_all(cmd_code.as_bytes())?;
+        self.tpm_tcp.shutdown(Shutdown::Both)?;
 
         Ok(())
+    }
+
+    /// Limits how long reads from the simulator may block. `None` waits
+    /// forever.
+    fn set_read_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
+        self.tpm_tcp.set_read_timeout(timeout)?;
+        self.plat_tcp.set_read_timeout(timeout)
     }
 
     /// Reads the trailing zero from the TPM simulator response.
@@ -494,7 +483,7 @@ struct RemoteHandshakeRequest {
     client_version: U32,
 }
 
-/// Parameters for the RemoteHandshake response
+/// The simulator's response to a remote handshake.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Default, FromBytes, IntoBytes, KnownLayout, Immutable,
 )]
@@ -515,7 +504,7 @@ impl RemoteHandshakeResponse {
     }
 }
 
-/// A signal that can be sent to the Platform port of the TPM simulator
+/// A signal that can be sent to the Platform port of the TPM simulator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u32)]
 pub enum SimulatorPlatformSignal {
@@ -539,7 +528,7 @@ pub enum SimulatorPlatformSignal {
     KeyCacheOn = 13,
     /// Disable the use of the RSA key cache in the TPM simulator.
     KeyCacheOff = 14,
-    /// Perform a TPM Reset (i.e. platorm reboot / power on).
+    /// Perform a TPM Reset (i.e. platform reboot / power on).
     Reset = 17,
     /// Perform a TPM Restart (i.e. restore from hibernation).
     Restart = 18,
@@ -565,12 +554,15 @@ enum SimulatorPlatformCommandCode {
     SetFirmwareSvn = 36,
 }
 
-/// Parameters for the GetCommandResponseSizes response
+/// The largest command and the largest response the simulator has seen.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Default, FromBytes, IntoBytes, KnownLayout, Immutable,
 )]
 #[repr(C)]
 pub struct GetCommandResponseSizesResponse {
+    // The simulator sends its C struct as it is in memory. The sizes are in
+    // its native byte order. The codes are bytes copied from TPM buffers, so
+    // they are big-endian.
     largest_command_size: u32,
     largest_command: U32,
     largest_response_size: u32,
@@ -582,7 +574,7 @@ impl GetCommandResponseSizesResponse {
     pub fn largest_command_size(&self) -> u32 {
         self.largest_command_size
     }
-    /// Returns the largest command code.
+    /// Returns the command code of the largest command.
     pub fn largest_command(&self) -> u32 {
         self.largest_command.get()
     }
@@ -590,7 +582,7 @@ impl GetCommandResponseSizesResponse {
     pub fn largest_response_size(&self) -> u32 {
         self.largest_response_size
     }
-    /// Returns the largest response code.
+    /// Returns the response code of the largest response.
     pub fn largest_response(&self) -> u32 {
         self.largest_response.get()
     }
@@ -624,105 +616,221 @@ struct SetFirmwareSvnRequest {
     svn: U32,
 }
 
-/// Structure to manage the subprocess used to spawn the TPM simulator and a
-/// connection to it.
+/// How long a new simulator gets to start listening, and then to answer each
+/// of its first requests.
+const STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// How long a simulator gets to exit after it is asked to stop.
+const STOP_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// How long to wait between checks on a simulator that is starting or
+/// stopping.
+const POLL_INTERVAL: Duration = Duration::from_millis(1);
+
+/// How many times to ask the OS for a free port that is followed by another.
+const PORT_PICK_ATTEMPTS: usize = 16;
+
+/// The client version sent in the startup handshake. Any non-zero value works.
+const HANDSHAKE_CLIENT_VERSION: u32 = 1;
+
+/// A TPM simulator process, and a connection to it.
+///
+/// The process is stopped, as by [`stop`](Self::stop), when this is dropped.
 #[derive(Debug)]
 pub struct TcpSimulator {
+    /// The connection to the simulator.
+    pub connection: TcpConnection,
+
     child: Child,
-    conn: TcpConnection,
+
+    /// The directory made by [`TcpSimulator::launch`]. It is removed when this
+    /// is dropped, after the process has exited.
+    #[cfg(feature = "tempfile")]
+    _temp_dir: Option<TempDir>,
 }
 
 impl TcpSimulator {
-    /// Starts the TPM simulator binary with the given arguments and connects to
-    /// it.
-    pub fn new<B: AsRef<OsStr>, A: AsRef<OsStr>, P: AsRef<Path>>(
-        bin: B,
-        args: &[A],
-        cwd: P,
-        ip: &str,
-    ) -> io::Result<TcpSimulator> {
-        let mut command = Command::new(bin.as_ref());
-        command.current_dir(&cwd);
-        if !args.is_empty() {
-            command.args(args);
+    /// Starts the simulator binary at the absolute path `bin` in the
+    /// directory `dir`, connects to it, and powers on its TPM.
+    ///
+    /// The simulator keeps its state (such as NV memory) in `dir`, which is
+    /// created if needed. No other running simulator may use `dir`. Reusing
+    /// it later resumes from the state left there.
+    ///
+    /// The binary is run as `<bin> <port>`, and must listen for TPM commands
+    /// on `port` and for platform signals on `port + 1`. The port is picked
+    /// so that any number of simulators can run at once.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `bin` is not an absolute path, or if the simulator
+    /// cannot be started, exits during startup, or does not answer on both
+    /// ports in time.
+    pub fn launch_in(bin: &Path, dir: &Path) -> io::Result<TcpSimulator> {
+        // The simulator runs in `dir`, where a relative path would name a
+        // different file.
+        if !bin.is_absolute() {
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                format!("simulator binary {bin:?} is not an absolute path"),
+            ));
         }
+        fs::create_dir_all(dir)?;
 
-        let child = command
+        // Nothing reserves the ports between us picking them and the simulator
+        // listening on them, so only one thread starts a simulator at a time.
+        static STARTUP_LOCK: Mutex<()> = Mutex::new(());
+        let _startup = STARTUP_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
+
+        // Like the simulator, we listen on all interfaces to find out if a port
+        // is free.
+        let is_free = |port| TcpListener::bind((Ipv4Addr::UNSPECIFIED, port)).is_ok();
+        let tpm_port = (0..PORT_PICK_ATTEMPTS)
+            .find_map(|_| {
+                // Port 0 asks the OS for any free port.
+                let listener = TcpListener::bind((Ipv4Addr::UNSPECIFIED, 0)).ok()?;
+                let port = listener.local_addr().ok()?.port();
+                drop(listener);
+                // The simulator asks for its ports by number, which can fail
+                // even for a port the OS just suggested. So ask by number too.
+                (is_free(port) && is_free(port.checked_add(1)?)).then_some(port)
+            })
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::AddrInUse,
+                    "could not find two consecutive free ports",
+                )
+            })?;
+
+        let mut child = Command::new(bin)
+            .arg(tpm_port.to_string())
+            .current_dir(dir)
+            .stdin(Stdio::null())
             // TODO: Capture stdout/stderr to display when requested.
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
-            .map_err(|e| {
-                Error::new(
-                    e.kind(),
-                    format!(
-                        "failed to start TCP simulator \"{:?} {:?}\": {e}",
-                        command.get_program(),
-                        command.get_args().collect::<Vec<_>>(),
-                    ),
-                )
-            })?;
+            .map_err(|e| Error::new(e.kind(), format!("failed to start simulator {bin:?}: {e}")))?;
 
-        // The TCG TPM simulator writes the ports it uses to two files:
-        //   - TPM port: "command.port"
-        //   - Platform port: "platform.port"
-        let tpm_port = Self::read_port_from_file_with_retries(&cwd.as_ref().join("command.port"))?;
-        let plat_port =
-            Self::read_port_from_file_with_retries(&cwd.as_ref().join("platform.port"))?;
+        // Connect as soon as the simulator listens on both of its ports.
+        let deadline = Instant::now() + STARTUP_TIMEOUT;
+        let connection = loop {
+            // A simulator that cannot listen on its TPM port exits, and
+            // reports success when it does.
+            if let Some(status) = child.try_wait()? {
+                return Err(Error::other(format!(
+                    "simulator exited during startup ({status})"
+                )));
+            }
+            match TcpConnection::connect(
+                (Ipv4Addr::LOCALHOST, tpm_port),
+                (Ipv4Addr::LOCALHOST, tpm_port + 1),
+            ) {
+                Ok(connection) => break connection,
+                Err(e) if Instant::now() >= deadline => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(Error::new(
+                        e.kind(),
+                        format!("simulator is not listening: {e}"),
+                    ));
+                }
+                Err(_) => thread::sleep(POLL_INTERVAL),
+            }
+        };
+        // From here on, an early return drops `simulator`, stopping the
+        // process.
+        let mut simulator = TcpSimulator {
+            connection,
+            child,
+            #[cfg(feature = "tempfile")]
+            _temp_dir: None,
+        };
 
-        let conn = TcpConnection::connect_with_retries(ip, Some(tpm_port), Some(plat_port))?;
+        // Another program may have taken one of our ports before the simulator
+        // could, in which case we are now connected to that program. Make a
+        // request on each port, with a timeout, to fail instead of hanging.
+        // Powering on the TPM also makes it accept commands.
+        let connection = &mut simulator.connection;
+        connection.set_read_timeout(Some(STARTUP_TIMEOUT))?;
+        connection
+            .remote_handshake(HANDSHAKE_CLIENT_VERSION)
+            .and_then(|_| connection.platform_signal(SimulatorPlatformSignal::PowerOn))
+            .map_err(|e| Error::new(e.kind(), format!("simulator did not answer: {e}")))?;
+        connection.set_read_timeout(None)?;
 
-        Ok(TcpSimulator { child, conn })
+        Ok(simulator)
     }
 
-    /// Reads a port from a file with retires.
-    fn read_port_from_file_with_retries(path: &Path) -> io::Result<u16> {
-        let mut attempts = 0;
-        loop {
-            attempts += 1;
-            match std::fs::read_to_string(path) {
-                Ok(port_str) => {
-                    let port = port_str
-                        .trim()
-                        .parse::<u16>()
-                        .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
-                    return Ok(port);
-                }
-                Err(err) => {
-                    if attempts > 3 {
-                        return Err(err);
-                    }
-                    std::thread::sleep(std::time::Duration::from_secs(1));
-                }
-            }
+    /// Like [`launch_in`](Self::launch_in), in a new temporary directory.
+    ///
+    /// The simulator starts from fresh state. The directory is removed when
+    /// the simulator is dropped.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the directory cannot be created, or if
+    /// [`launch_in`](Self::launch_in) fails.
+    #[cfg(feature = "tempfile")]
+    pub fn launch(bin: &Path) -> io::Result<TcpSimulator> {
+        let temp_dir = tempfile::tempdir()?;
+        let mut simulator = Self::launch_in(bin, temp_dir.path())?;
+        simulator._temp_dir = Some(temp_dir);
+        Ok(simulator)
+    }
+
+    /// Like [`launch`](Self::launch), running the binary whose absolute path
+    /// is in the `TPM_SIMULATOR_BIN` environment variable
+    /// ([`SIMULATOR_BIN_ENV`]).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the variable is unset or empty, or if
+    /// [`launch`](Self::launch) fails.
+    #[cfg(feature = "tempfile")]
+    pub fn launch_from_env() -> io::Result<TcpSimulator> {
+        match std::env::var_os(SIMULATOR_BIN_ENV) {
+            Some(bin) if !bin.is_empty() => Self::launch(Path::new(&bin)),
+            _ => Err(Error::new(
+                ErrorKind::NotFound,
+                format!("set {SIMULATOR_BIN_ENV} to the absolute path of a TPM simulator binary"),
+            )),
         }
     }
 
-    /// Stops the TPM simulator process nicely.
-    pub fn stop_nicely(&mut self) -> io::Result<()> {
-        self.conn.stop_simulator()
+    /// Stops the simulator process, and returns how it exited.
+    ///
+    /// The simulator is asked to exit, and is killed if it does not.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if waiting for the process fails.
+    pub fn stop(mut self) -> io::Result<ExitStatus> {
+        self.shut_down()
     }
 
-    /// Stops the TPM simulator process.
-    pub fn stop(&mut self) -> io::Result<()> {
-        self.child
-            .kill()
-            .map_err(|e| Error::other(format!("failed to stop TCP simulator: {e}")))
-    }
-
-    /// Returns a reference to the underlying TCP connection.
-    pub fn connection(&self) -> &TcpConnection {
-        &self.conn
-    }
-
-    /// Returns a mutable reference to the underlying TCP connection.
-    pub fn connection_mut(&mut self) -> &mut TcpConnection {
-        &mut self.conn
+    /// Makes sure the process has exited, and returns how it exited.
+    fn shut_down(&mut self) -> io::Result<ExitStatus> {
+        // Asking first lets the simulator finish up (a coverage build writes
+        // its data on exit, for example).
+        if self.connection.send_stop().is_ok() {
+            let deadline = Instant::now() + STOP_TIMEOUT;
+            while Instant::now() < deadline {
+                if let Some(status) = self.child.try_wait()? {
+                    return Ok(status);
+                }
+                thread::sleep(POLL_INTERVAL);
+            }
+        }
+        // It could not be asked (as when this runs again on drop, after
+        // `stop`), or it did not listen.
+        let _ = self.child.kill();
+        self.child.wait()
     }
 }
 
 impl Drop for TcpSimulator {
     fn drop(&mut self) {
-        let _ = self.stop_nicely().or_else(|_| self.stop());
+        let _ = self.shut_down();
     }
 }
