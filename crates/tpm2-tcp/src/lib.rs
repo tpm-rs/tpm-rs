@@ -82,17 +82,10 @@ impl TcpConnection {
         let cmd_hdr = &SignalHashDataRequestHeader {
             length: U32::new(data.len() as u32),
         };
-        let bytes_written = self.tpm_tcp.write_vectored(&[
-            IoSlice::new(cmd_code.as_bytes()),
-            IoSlice::new(cmd_hdr.as_bytes()),
-            IoSlice::new(data),
-        ])?;
-        if bytes_written != cmd_code.as_bytes().len() + cmd_hdr.as_bytes().len() + data.len() {
-            return Err(Error::new(
-                ErrorKind::WriteZero,
-                "failed to write entire command to TPM",
-            ));
-        }
+        Self::write_parts(
+            &mut self.tpm_tcp,
+            &[cmd_code.as_bytes(), cmd_hdr.as_bytes(), data],
+        )?;
         Self::check_response_end(&mut self.tpm_tcp)?;
 
         // Send TPM_Hash_End
@@ -115,16 +108,10 @@ impl TcpConnection {
             client_version: U32::new(client_version),
         };
 
-        let bytes_written = self.tpm_tcp.write_vectored(&[
-            IoSlice::new(cmd_code.as_bytes()),
-            IoSlice::new(cmd_payload.as_bytes()),
-        ])?;
-        if bytes_written != cmd_code.as_bytes().len() + cmd_payload.as_bytes().len() {
-            return Err(Error::new(
-                ErrorKind::WriteZero,
-                "failed to write entire command to TPM",
-            ));
-        }
+        Self::write_parts(
+            &mut self.tpm_tcp,
+            &[cmd_code.as_bytes(), cmd_payload.as_bytes()],
+        )?;
 
         let mut resp: RemoteHandshakeResponse = RemoteHandshakeResponse::default();
         self.tpm_tcp.read_exact(resp.as_mut_bytes())?;
@@ -147,16 +134,10 @@ impl TcpConnection {
             result: U32::new(result),
         };
 
-        let bytes_written = self.tpm_tcp.write_vectored(&[
-            IoSlice::new(cmd_code.as_bytes()),
-            IoSlice::new(cmd_payload.as_bytes()),
-        ])?;
-        if bytes_written != cmd_code.as_bytes().len() + cmd_payload.as_bytes().len() {
-            return Err(Error::new(
-                ErrorKind::WriteZero,
-                "failed to write entire command to TPM",
-            ));
-        }
+        Self::write_parts(
+            &mut self.tpm_tcp,
+            &[cmd_code.as_bytes(), cmd_payload.as_bytes()],
+        )?;
 
         Self::check_response_end(&mut self.tpm_tcp)
     }
@@ -243,16 +224,10 @@ impl TcpConnection {
             act_handle: U32::new(act_handle),
         };
 
-        let bytes_written = self.plat_tcp.write_vectored(&[
-            IoSlice::new(cmd_code.as_bytes()),
-            IoSlice::new(cmd_payload.as_bytes()),
-        ])?;
-        if bytes_written != cmd_code.as_bytes().len() + cmd_payload.as_bytes().len() {
-            return Err(Error::new(
-                ErrorKind::WriteZero,
-                "failed to write entire command to TPM",
-            ));
-        }
+        Self::write_parts(
+            &mut self.plat_tcp,
+            &[cmd_code.as_bytes(), cmd_payload.as_bytes()],
+        )?;
 
         let mut resp: ActGetSignaledResponse = ActGetSignaledResponse::default();
         self.plat_tcp.read_exact(resp.as_mut_bytes())?;
@@ -274,16 +249,10 @@ impl TcpConnection {
             hash: U32::new(hash),
         };
 
-        let bytes_written = self.plat_tcp.write_vectored(&[
-            IoSlice::new(cmd_code.as_bytes()),
-            IoSlice::new(cmd_payload.as_bytes()),
-        ])?;
-        if bytes_written != cmd_code.as_bytes().len() + cmd_payload.as_bytes().len() {
-            return Err(Error::new(
-                ErrorKind::WriteZero,
-                "failed to write entire command to TPM",
-            ));
-        }
+        Self::write_parts(
+            &mut self.plat_tcp,
+            &[cmd_code.as_bytes(), cmd_payload.as_bytes()],
+        )?;
 
         Self::check_response_end(&mut self.plat_tcp)
     }
@@ -298,16 +267,10 @@ impl TcpConnection {
         let cmd_code = U32::new(SimulatorPlatformCommandCode::SetFirmwareSvn as u32);
         let cmd_payload = &SetFirmwareSvnRequest { svn: U32::new(svn) };
 
-        let bytes_written = self.plat_tcp.write_vectored(&[
-            IoSlice::new(cmd_code.as_bytes()),
-            IoSlice::new(cmd_payload.as_bytes()),
-        ])?;
-        if bytes_written != cmd_code.as_bytes().len() + cmd_payload.as_bytes().len() {
-            return Err(Error::new(
-                ErrorKind::WriteZero,
-                "failed to write entire command to TPM",
-            ));
-        }
+        Self::write_parts(
+            &mut self.plat_tcp,
+            &[cmd_code.as_bytes(), cmd_payload.as_bytes()],
+        )?;
 
         Self::check_response_end(&mut self.plat_tcp)
     }
@@ -368,6 +331,19 @@ impl TcpConnection {
         self.plat_tcp.set_read_timeout(timeout)
     }
 
+    /// Sends `parts` to the simulator in a single write.
+    fn write_parts(stream: &mut TcpStream, parts: &[&[u8]]) -> io::Result<()> {
+        let slices: Vec<_> = parts.iter().map(|part| IoSlice::new(part)).collect();
+        let len: usize = parts.iter().map(|part| part.len()).sum();
+        if stream.write_vectored(&slices)? != len {
+            return Err(Error::new(
+                ErrorKind::WriteZero,
+                "failed to write entire command to TPM",
+            ));
+        }
+        Ok(())
+    }
+
     /// Reads the trailing zero from the TPM simulator response.
     fn check_response_end(stream: &mut TcpStream) -> io::Result<()> {
         let mut resp_end = U32::ZERO;
@@ -396,17 +372,10 @@ impl Connection for TcpConnection {
             length: U32::new(cmd_size),
         };
 
-        let bytes_written = self.tpm_tcp.write_vectored(&[
-            IoSlice::new(cmd_code.as_bytes()),
-            IoSlice::new(cmd_hdr.as_bytes()),
-            IoSlice::new(command),
-        ])?;
-        if bytes_written != cmd_code.as_bytes().len() + cmd_hdr.as_bytes().len() + command.len() {
-            return Err(Error::new(
-                ErrorKind::WriteZero,
-                "failed to write entire command to TPM",
-            ));
-        };
+        Self::write_parts(
+            &mut self.tpm_tcp,
+            &[cmd_code.as_bytes(), cmd_hdr.as_bytes(), command],
+        )?;
 
         let mut resp_hdr: SendCommandResponseHeader = SendCommandResponseHeader::default();
         self.tpm_tcp.read_exact(resp_hdr.as_mut_bytes())?;
