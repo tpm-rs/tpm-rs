@@ -1,6 +1,5 @@
 use crate::ClientError;
 use crate::sessions::AuthorizationArea;
-use core::mem::size_of;
 use tpm2::errors::UnmarshalError;
 use tpm2::*;
 
@@ -31,11 +30,9 @@ pub const RESP_BUFFER_SIZE: usize = 4096;
 ///
 /// # impl Command for TooBig {
 /// #     const CMD_CODE: TpmCc = TpmCc::new(0);
+/// #     type Handles<'a> = [EntityHandle<'a>; 0];
 /// #     type Response<'a> = ();
-/// # }
-/// # impl Message for TooBig {
-/// #     type Handles = [Handle; 0];
-/// #     fn handles(&self) -> Self::Handles {
+/// #     fn handles(&self) -> Self::Handles<'_> {
 /// #         []
 /// #     }
 /// # }
@@ -53,15 +50,15 @@ pub const RESP_BUFFER_SIZE: usize = 4096;
 /// // Fails to compile, raising "command is too big for buffer".
 /// marshal_command(&cmd, &(), &mut buf);
 /// ```
-pub fn marshal_command<C: Command<MaxBuffer = [u8; N]>, const N: usize>(
-    cmd: &C,
+pub fn marshal_command<'c, C: Command<MaxBuffer = [u8; N]> + 'c, const N: usize>(
+    cmd: &'c C,
     cmd_sessions: &impl AuthorizationArea,
     dst: &mut [u8; CMD_BUFFER_SIZE],
 ) -> usize {
     const {
-        // Note: size_of::<Handle>() == Handle::MAX_SIZE (4 bytes).
+        let num_handles = size_of::<C::Handles<'c>>() / size_of::<EntityHandle<'c>>();
         let max_size = CommandHeader::MAX_SIZE
-            + size_of::<C::Handles>()
+            + num_handles * Handle::MAX_SIZE
             + (u32::MAX_SIZE + 3 * TpmsAuthCommand::MAX_SIZE)
             + C::MAX_SIZE;
         assert!(max_size <= CMD_BUFFER_SIZE, "command is too big for buffer");
@@ -78,7 +75,7 @@ pub fn marshal_command<C: Command<MaxBuffer = [u8; N]>, const N: usize>(
     for handle in cmd.handles().as_ref() {
         let handle_buf: &mut [u8; Handle::MAX_SIZE];
         (handle_buf, remaining_buf) = remaining_buf.split_first_chunk_mut().unwrap();
-        bytes_written += handle.marshal(handle_buf);
+        bytes_written += handle.handle().marshal(handle_buf);
     }
 
     // Marshal Sessions
@@ -120,7 +117,7 @@ pub fn marshal_command<C: Command<MaxBuffer = [u8; N]>, const N: usize>(
 /// - the response [`Handle`]s
 /// - the `parameterSize` and response parameters
 /// - the [`AuthorizationArea`] responses (if present)
-pub fn unmarshal_response<'a, R: UnmarshalMessage<'a>, E>(
+pub fn unmarshal_response<'a, R: UnmarshalResponse<'a>, E>(
     cmd_sessions: &impl AuthorizationArea,
     src: &'a [u8],
 ) -> Result<R, ClientError<E>> {

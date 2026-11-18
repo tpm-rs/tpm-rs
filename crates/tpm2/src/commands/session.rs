@@ -2,16 +2,16 @@
 //!
 //! This module implements the "Session Commands" commands defined in
 //! **Section 11** of the TPM 2.0 Specification.
-use super::{Command, Message, UnmarshalMessage};
+use super::{Command, Response, UnmarshalCommand, UnmarshalResponse};
 use crate::{errors::UnmarshalError, marshal::marshal_helper, *};
 
 /// TPM2_StartAuthSession (Command)
 #[doc(alias = "TPM2_StartAuthSession")]
 #[doc(alias = "StartAuthSession_In")]
-#[derive(Clone, Copy, PartialEq, Debug, Eq)]
+#[derive(Clone, Copy)]
 pub struct StartAuthSession<'a> {
-    pub tpm_key: Handle,
-    pub bind: Handle,
+    pub tpm_key: EntityHandle<'a>,
+    pub bind: EntityHandle<'a>,
     pub nonce_caller: Tpm2bNonce<'a>,
     pub encrypted_salt: Tpm2bEncryptedSecret<'a>,
     pub session_type: TpmSe,
@@ -28,11 +28,12 @@ pub struct StartAuthSessionRsp<'a> {
 
 impl Command for StartAuthSession<'_> {
     const CMD_CODE: TpmCc = TpmCc::StartAuthSession;
+    type Handles<'a>
+        = [EntityHandle<'a>; 2]
+    where
+        Self: 'a;
     type Response<'a> = StartAuthSessionRsp<'a>;
-}
-impl Message for StartAuthSession<'_> {
-    type Handles = [Handle; 2];
-    fn handles(&self) -> Self::Handles {
+    fn handles(&self) -> Self::Handles<'_> {
         [self.tpm_key, self.bind]
     }
 }
@@ -51,9 +52,9 @@ impl Marshal for StartAuthSession<'_> {
         marshal_helper(&self.auth_hash, dst, count)
     }
 }
-impl<'a> UnmarshalMessage<'a> for StartAuthSession<'a> {
+impl<'a> UnmarshalCommand<'a> for StartAuthSession<'a> {
     fn unmarshal_with_handles(
-        [tpm_key, bind]: Self::Handles,
+        [tpm_key, bind]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -68,7 +69,7 @@ impl<'a> UnmarshalMessage<'a> for StartAuthSession<'a> {
     }
 }
 
-impl Message for StartAuthSessionRsp<'_> {
+impl Response for StartAuthSessionRsp<'_> {
     type Handles = [Handle; 1];
     fn handles(&self) -> Self::Handles {
         [self.session_handle]
@@ -81,7 +82,7 @@ impl Marshal for StartAuthSessionRsp<'_> {
         self.nonce_tpm.marshal(dst)
     }
 }
-impl<'a> UnmarshalMessage<'a> for StartAuthSessionRsp<'a> {
+impl<'a> UnmarshalResponse<'a> for StartAuthSessionRsp<'a> {
     fn unmarshal_with_handles(
         [session_handle]: Self::Handles,
         src: &mut &'a [u8],
@@ -103,12 +104,13 @@ pub struct PolicyRestart {
 
 impl Command for PolicyRestart {
     const CMD_CODE: TpmCc = TpmCc::PolicyRestart;
+    type Handles<'a>
+        = [EntityHandle<'a>; 1]
+    where
+        Self: 'a;
     type Response<'a> = ();
-}
-impl Message for PolicyRestart {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.session_handle]
+    fn handles(&self) -> Self::Handles<'_> {
+        [EntityHandle::Handle(self.session_handle)]
     }
 }
 impl Marshal for PolicyRestart {
@@ -118,11 +120,13 @@ impl Marshal for PolicyRestart {
         0
     }
 }
-impl<'a> UnmarshalMessage<'a> for PolicyRestart {
+impl<'a> UnmarshalCommand<'a> for PolicyRestart {
     fn unmarshal_with_handles(
-        [session_handle]: Self::Handles,
+        [session_handle]: Self::Handles<'a>,
         _: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
-        Ok(Self { session_handle })
+        Ok(Self {
+            session_handle: session_handle.try_into()?,
+        })
     }
 }

@@ -252,17 +252,6 @@ pub type Tpm2bIv<'a> = Tpm2bSized<'a, limits::Iv>;
 impl_marshal!(Tpm2bIv<'_>);
 
 // ---------------------------------------------------------------------------
-// Tpm2bName
-// ---------------------------------------------------------------------------
-/// `TPM2B_NAME` structure defined in TPM 2.0 Part 2: Structures, Section 10.2.12 (Table 99).
-///
-/// A sized buffer holding a TPM entity Name (which consists of a 2-byte hash algorithm ID followed
-/// by the hash digest of the entity's public area, or a 4-byte handle for permanent entities).
-#[doc(alias = "TPM2B_NAME")]
-pub type Tpm2bName<'a> = Tpm2bSized<'a, limits::Name>;
-impl_marshal!(Tpm2bName<'_>);
-
-// ---------------------------------------------------------------------------
 // Tpm2bAttest
 // ---------------------------------------------------------------------------
 /// `TPM2B_ATTEST` structure defined in TPM 2.0 Part 2: Structures, Section 10.4.24 (Table 143).

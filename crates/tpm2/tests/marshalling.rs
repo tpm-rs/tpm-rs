@@ -3,7 +3,7 @@ use tpm2::*;
 #[test]
 fn test_marshal_struct_derive() {
     let name_buffer: [u8; 4] = [1, 2, 3, 4];
-    let index_name = Tpm2bName::new(&name_buffer).unwrap();
+    let index_name = Name::Handle(Handle(u32::from_be_bytes(name_buffer)));
     let nv_buffer = [24u8; 10];
     let nv_contents = Tpm2bMaxNvBuffer::new(&nv_buffer).unwrap();
     let info: TpmsNvCertifyInfo = TpmsNvCertifyInfo {
@@ -16,7 +16,7 @@ fn test_marshal_struct_derive() {
 
     // Build the expected output manually.
     let mut expected = Vec::with_capacity(bytes);
-    expected.extend_from_slice(&(index_name.as_slice().len() as u16).to_be_bytes());
+    expected.extend_from_slice(&(name_buffer.len() as u16).to_be_bytes());
     expected.extend_from_slice(&name_buffer);
     expected.extend_from_slice(&info.offset.to_be_bytes());
     expected.extend_from_slice(&(nv_contents.as_slice().len() as u16).to_be_bytes());
@@ -108,8 +108,8 @@ fn test_2b_struct() {
         pcr_digest: Tpm2bDigest::new(&[0x1, 0x2, 0x3, 0x4, 0x5, 0x6, 0x7, 0x8, 0x9]).unwrap(),
         locality: TpmaLocality(0xA),
         parent_name_alg: Some(TpmiAlgHash::Sha256),
-        parent_name: Tpm2bName::new(&[0xA, 0xB, 0xC, 0xD, 0xE, 0xF]).unwrap(),
-        parent_qualified_name: Tpm2bName::default(),
+        parent_name: Name::Digest(TpmtHa::Sha256(&[0xA; 32])),
+        parent_qualified_name: Name::Empty,
         outside_info: Tpm2bData::new(&[0x1; 32]).unwrap(),
     };
     let creation_data_2b: Tpm2bCreationData = Tpm2b(creation_data);

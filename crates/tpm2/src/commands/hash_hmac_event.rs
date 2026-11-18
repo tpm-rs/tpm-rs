@@ -2,33 +2,34 @@
 //!
 //! This module implements the "Hash/HMAC/Event Sequences" commands defined in
 //! **Section 17** of the TPM 2.0 Specification.
-use super::{Command, Message, UnmarshalMessage};
+use super::{Command, Response, UnmarshalCommand, UnmarshalResponse};
 use crate::{errors::UnmarshalError, marshal::marshal_helper, *};
 
 /// TPM2_HMAC_Start (Command)
 #[doc(alias = "TPM2_HMAC_Start")]
 #[doc(alias = "HMAC_Start_In")]
-#[derive(Clone, Copy, PartialEq, Debug, Eq)]
+#[derive(Clone, Copy)]
 pub struct HMACStart<'a> {
-    pub handle: Handle,
+    pub handle: ObjectHandle<'a>,
     pub auth: Tpm2bAuth<'a>,
     pub hash_alg: Option<TpmiAlgHash>,
 }
 /// TPM2_HMAC_Start (Response)
 #[doc(alias = "HMAC_Start_Out")]
-#[derive(Clone, Copy, PartialEq, Debug, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct HMACStartRsp {
-    pub sequence_handle: Handle,
+    pub sequence_handle: SequenceHandle,
 }
 
 impl Command for HMACStart<'_> {
     const CMD_CODE: TpmCc = TpmCc::HMACStart;
+    type Handles<'a>
+        = [EntityHandle<'a>; 1]
+    where
+        Self: 'a;
     type Response<'a> = HMACStartRsp;
-}
-impl Message for HMACStart<'_> {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.handle]
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.handle.into()]
     }
 }
 impl Marshal for HMACStart<'_> {
@@ -39,23 +40,23 @@ impl Marshal for HMACStart<'_> {
         marshal_helper(&self.hash_alg, dst, count)
     }
 }
-impl<'a> UnmarshalMessage<'a> for HMACStart<'a> {
+impl<'a> UnmarshalCommand<'a> for HMACStart<'a> {
     fn unmarshal_with_handles(
-        [handle]: Self::Handles,
+        [handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            handle,
+            handle: handle.try_into()?,
             auth: Unmarshal::unmarshal(src)?,
             hash_alg: Unmarshal::unmarshal(src)?,
         })
     }
 }
 
-impl Message for HMACStartRsp {
+impl Response for HMACStartRsp {
     type Handles = [Handle; 1];
     fn handles(&self) -> Self::Handles {
-        [self.sequence_handle]
+        [self.sequence_handle.0]
     }
 }
 impl Marshal for HMACStartRsp {
@@ -65,12 +66,14 @@ impl Marshal for HMACStartRsp {
         0
     }
 }
-impl<'a> UnmarshalMessage<'a> for HMACStartRsp {
+impl<'a> UnmarshalResponse<'a> for HMACStartRsp {
     fn unmarshal_with_handles(
         [sequence_handle]: Self::Handles,
         _: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
-        Ok(Self { sequence_handle })
+        Ok(Self {
+            sequence_handle: SequenceHandle(sequence_handle),
+        })
     }
 }
 
@@ -84,18 +87,19 @@ pub struct HashSequenceStart<'a> {
 }
 /// TPM2_HashSequenceStart (Response)
 #[doc(alias = "HashSequenceStart_Out")]
-#[derive(Clone, Copy, PartialEq, Debug, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct HashSequenceStartRsp {
-    pub sequence_handle: Handle,
+    pub sequence_handle: SequenceHandle,
 }
 
 impl Command for HashSequenceStart<'_> {
     const CMD_CODE: TpmCc = TpmCc::HashSequenceStart;
+    type Handles<'a>
+        = [EntityHandle<'a>; 0]
+    where
+        Self: 'a;
     type Response<'a> = HashSequenceStartRsp;
-}
-impl Message for HashSequenceStart<'_> {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -107,9 +111,9 @@ impl Marshal for HashSequenceStart<'_> {
         marshal_helper(&self.hash_alg, dst, count)
     }
 }
-impl<'a> UnmarshalMessage<'a> for HashSequenceStart<'a> {
+impl<'a> UnmarshalCommand<'a> for HashSequenceStart<'a> {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -119,10 +123,10 @@ impl<'a> UnmarshalMessage<'a> for HashSequenceStart<'a> {
     }
 }
 
-impl Message for HashSequenceStartRsp {
+impl Response for HashSequenceStartRsp {
     type Handles = [Handle; 1];
     fn handles(&self) -> Self::Handles {
-        [self.sequence_handle]
+        [self.sequence_handle.0]
     }
 }
 impl Marshal for HashSequenceStartRsp {
@@ -132,39 +136,42 @@ impl Marshal for HashSequenceStartRsp {
         0
     }
 }
-impl<'a> UnmarshalMessage<'a> for HashSequenceStartRsp {
+impl<'a> UnmarshalResponse<'a> for HashSequenceStartRsp {
     fn unmarshal_with_handles(
         [sequence_handle]: Self::Handles,
         _: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
-        Ok(Self { sequence_handle })
+        Ok(Self {
+            sequence_handle: SequenceHandle(sequence_handle),
+        })
     }
 }
 
 /// TPM2_SignSequenceStart (Command)
 #[doc(alias = "TPM2_SignSequenceStart")]
 #[doc(alias = "SignSequenceStart_In")]
-#[derive(Clone, Copy, PartialEq, Debug, Eq)]
+#[derive(Clone, Copy)]
 pub struct SignSequenceStart<'a> {
-    pub key_handle: Handle,
+    pub key_handle: ObjectHandle<'a>,
     pub auth: Tpm2bAuth<'a>,
     pub context: Tpm2bSignatureCtx<'a>,
 }
 /// TPM2_SignSequenceStart (Response)
 #[doc(alias = "SignSequenceStart_Out")]
-#[derive(Clone, Copy, PartialEq, Debug, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct SignSequenceStartRsp {
-    pub sequence_handle: Handle,
+    pub sequence_handle: SequenceHandle,
 }
 
 impl Command for SignSequenceStart<'_> {
     const CMD_CODE: TpmCc = TpmCc::SignSequenceStart;
+    type Handles<'a>
+        = [EntityHandle<'a>; 1]
+    where
+        Self: 'a;
     type Response<'a> = SignSequenceStartRsp;
-}
-impl Message for SignSequenceStart<'_> {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.key_handle]
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.key_handle.into()]
     }
 }
 impl Marshal for SignSequenceStart<'_> {
@@ -175,23 +182,23 @@ impl Marshal for SignSequenceStart<'_> {
         marshal_helper(&self.context, dst, count)
     }
 }
-impl<'a> UnmarshalMessage<'a> for SignSequenceStart<'a> {
+impl<'a> UnmarshalCommand<'a> for SignSequenceStart<'a> {
     fn unmarshal_with_handles(
-        [key_handle]: Self::Handles,
+        [key_handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            key_handle,
+            key_handle: key_handle.try_into()?,
             auth: Unmarshal::unmarshal(src)?,
             context: Unmarshal::unmarshal(src)?,
         })
     }
 }
 
-impl Message for SignSequenceStartRsp {
+impl Response for SignSequenceStartRsp {
     type Handles = [Handle; 1];
     fn handles(&self) -> Self::Handles {
-        [self.sequence_handle]
+        [self.sequence_handle.0]
     }
 }
 impl Marshal for SignSequenceStartRsp {
@@ -201,40 +208,43 @@ impl Marshal for SignSequenceStartRsp {
         0
     }
 }
-impl<'a> UnmarshalMessage<'a> for SignSequenceStartRsp {
+impl<'a> UnmarshalResponse<'a> for SignSequenceStartRsp {
     fn unmarshal_with_handles(
         [sequence_handle]: Self::Handles,
         _: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
-        Ok(Self { sequence_handle })
+        Ok(Self {
+            sequence_handle: SequenceHandle(sequence_handle),
+        })
     }
 }
 
 /// TPM2_VerifySequenceStart (Command)
 #[doc(alias = "TPM2_VerifySequenceStart")]
 #[doc(alias = "VerifySequenceStart_In")]
-#[derive(Clone, Copy, PartialEq, Debug, Eq)]
+#[derive(Clone, Copy)]
 pub struct VerifySequenceStart<'a> {
-    pub key_handle: Handle,
+    pub key_handle: ObjectHandle<'a>,
     pub auth: Tpm2bAuth<'a>,
     pub hint: Tpm2bSignatureHint<'a>,
     pub context: Tpm2bSignatureCtx<'a>,
 }
 /// TPM2_VerifySequenceStart (Response)
 #[doc(alias = "VerifySequenceStart_Out")]
-#[derive(Clone, Copy, PartialEq, Debug, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct VerifySequenceStartRsp {
-    pub sequence_handle: Handle,
+    pub sequence_handle: SequenceHandle,
 }
 
 impl Command for VerifySequenceStart<'_> {
     const CMD_CODE: TpmCc = TpmCc::VerifySequenceStart;
+    type Handles<'a>
+        = [EntityHandle<'a>; 1]
+    where
+        Self: 'a;
     type Response<'a> = VerifySequenceStartRsp;
-}
-impl Message for VerifySequenceStart<'_> {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.key_handle]
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.key_handle.into()]
     }
 }
 impl Marshal for VerifySequenceStart<'_> {
@@ -247,13 +257,13 @@ impl Marshal for VerifySequenceStart<'_> {
         marshal_helper(&self.context, dst, count)
     }
 }
-impl<'a> UnmarshalMessage<'a> for VerifySequenceStart<'a> {
+impl<'a> UnmarshalCommand<'a> for VerifySequenceStart<'a> {
     fn unmarshal_with_handles(
-        [key_handle]: Self::Handles,
+        [key_handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            key_handle,
+            key_handle: key_handle.try_into()?,
             auth: Unmarshal::unmarshal(src)?,
             hint: Unmarshal::unmarshal(src)?,
             context: Unmarshal::unmarshal(src)?,
@@ -261,10 +271,10 @@ impl<'a> UnmarshalMessage<'a> for VerifySequenceStart<'a> {
     }
 }
 
-impl Message for VerifySequenceStartRsp {
+impl Response for VerifySequenceStartRsp {
     type Handles = [Handle; 1];
     fn handles(&self) -> Self::Handles {
-        [self.sequence_handle]
+        [self.sequence_handle.0]
     }
 }
 impl Marshal for VerifySequenceStartRsp {
@@ -274,32 +284,35 @@ impl Marshal for VerifySequenceStartRsp {
         0
     }
 }
-impl<'a> UnmarshalMessage<'a> for VerifySequenceStartRsp {
+impl<'a> UnmarshalResponse<'a> for VerifySequenceStartRsp {
     fn unmarshal_with_handles(
         [sequence_handle]: Self::Handles,
         _: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
-        Ok(Self { sequence_handle })
+        Ok(Self {
+            sequence_handle: SequenceHandle(sequence_handle),
+        })
     }
 }
 
 /// TPM2_SequenceUpdate (Command)
 #[doc(alias = "TPM2_SequenceUpdate")]
 #[doc(alias = "SequenceUpdate_In")]
-#[derive(Clone, Copy, PartialEq, Debug, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct SequenceUpdate<'a> {
-    pub sequence_handle: Handle,
+    pub sequence_handle: SequenceHandle,
     pub buffer: Tpm2bMaxBuffer<'a>,
 }
 
 impl Command for SequenceUpdate<'_> {
     const CMD_CODE: TpmCc = TpmCc::SequenceUpdate;
+    type Handles<'a>
+        = [EntityHandle<'a>; 1]
+    where
+        Self: 'a;
     type Response<'a> = ();
-}
-impl Message for SequenceUpdate<'_> {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.sequence_handle]
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.sequence_handle.into()]
     }
 }
 impl Marshal for SequenceUpdate<'_> {
@@ -309,13 +322,13 @@ impl Marshal for SequenceUpdate<'_> {
         self.buffer.marshal(dst)
     }
 }
-impl<'a> UnmarshalMessage<'a> for SequenceUpdate<'a> {
+impl<'a> UnmarshalCommand<'a> for SequenceUpdate<'a> {
     fn unmarshal_with_handles(
-        [sequence_handle]: Self::Handles,
+        [sequence_handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            sequence_handle,
+            sequence_handle: sequence_handle.try_into()?,
             buffer: Unmarshal::unmarshal(src)?,
         })
     }
@@ -324,9 +337,9 @@ impl<'a> UnmarshalMessage<'a> for SequenceUpdate<'a> {
 /// TPM2_SequenceComplete (Command)
 #[doc(alias = "TPM2_SequenceComplete")]
 #[doc(alias = "SequenceComplete_In")]
-#[derive(Clone, Copy, PartialEq, Debug, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct SequenceComplete<'a> {
-    pub sequence_handle: Handle,
+    pub sequence_handle: SequenceHandle,
     pub buffer: Tpm2bMaxBuffer<'a>,
     pub hierarchy: Handle,
 }
@@ -340,12 +353,13 @@ pub struct SequenceCompleteRsp<'a> {
 
 impl Command for SequenceComplete<'_> {
     const CMD_CODE: TpmCc = TpmCc::SequenceComplete;
+    type Handles<'a>
+        = [EntityHandle<'a>; 1]
+    where
+        Self: 'a;
     type Response<'a> = SequenceCompleteRsp<'a>;
-}
-impl Message for SequenceComplete<'_> {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.sequence_handle]
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.sequence_handle.into()]
     }
 }
 impl Marshal for SequenceComplete<'_> {
@@ -356,20 +370,20 @@ impl Marshal for SequenceComplete<'_> {
         marshal_helper(&self.hierarchy, dst, count)
     }
 }
-impl<'a> UnmarshalMessage<'a> for SequenceComplete<'a> {
+impl<'a> UnmarshalCommand<'a> for SequenceComplete<'a> {
     fn unmarshal_with_handles(
-        [sequence_handle]: Self::Handles,
+        [sequence_handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            sequence_handle,
+            sequence_handle: sequence_handle.try_into()?,
             buffer: Unmarshal::unmarshal(src)?,
             hierarchy: Unmarshal::unmarshal(src)?,
         })
     }
 }
 
-impl Message for SequenceCompleteRsp<'_> {
+impl Response for SequenceCompleteRsp<'_> {
     type Handles = [Handle; 0];
     fn handles(&self) -> Self::Handles {
         []
@@ -383,7 +397,7 @@ impl Marshal for SequenceCompleteRsp<'_> {
         marshal_helper(&self.validation, dst, count)
     }
 }
-impl<'a> UnmarshalMessage<'a> for SequenceCompleteRsp<'a> {
+impl<'a> UnmarshalResponse<'a> for SequenceCompleteRsp<'a> {
     fn unmarshal_with_handles(
         []: Self::Handles,
         src: &mut &'a [u8],
@@ -398,10 +412,10 @@ impl<'a> UnmarshalMessage<'a> for SequenceCompleteRsp<'a> {
 /// TPM2_EventSequenceComplete (Command)
 #[doc(alias = "TPM2_EventSequenceComplete")]
 #[doc(alias = "EventSequenceComplete_In")]
-#[derive(Clone, Copy, PartialEq, Debug, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct EventSequenceComplete<'a> {
     pub pcr_handle: Handle,
-    pub sequence_handle: Handle,
+    pub sequence_handle: SequenceHandle,
     pub buffer: Tpm2bMaxBuffer<'a>,
 }
 /// TPM2_EventSequenceComplete (Response)
@@ -413,12 +427,16 @@ pub struct EventSequenceCompleteRsp<'a> {
 
 impl Command for EventSequenceComplete<'_> {
     const CMD_CODE: TpmCc = TpmCc::EventSequenceComplete;
+    type Handles<'a>
+        = [EntityHandle<'a>; 2]
+    where
+        Self: 'a;
     type Response<'a> = EventSequenceCompleteRsp<'a>;
-}
-impl Message for EventSequenceComplete<'_> {
-    type Handles = [Handle; 2];
-    fn handles(&self) -> Self::Handles {
-        [self.pcr_handle, self.sequence_handle]
+    fn handles(&self) -> Self::Handles<'_> {
+        [
+            EntityHandle::Handle(self.pcr_handle),
+            self.sequence_handle.into(),
+        ]
     }
 }
 impl Marshal for EventSequenceComplete<'_> {
@@ -428,20 +446,20 @@ impl Marshal for EventSequenceComplete<'_> {
         self.buffer.marshal(dst)
     }
 }
-impl<'a> UnmarshalMessage<'a> for EventSequenceComplete<'a> {
+impl<'a> UnmarshalCommand<'a> for EventSequenceComplete<'a> {
     fn unmarshal_with_handles(
-        [pcr_handle, sequence_handle]: Self::Handles,
+        [pcr_handle, sequence_handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            pcr_handle,
-            sequence_handle,
+            pcr_handle: pcr_handle.try_into()?,
+            sequence_handle: sequence_handle.try_into()?,
             buffer: Unmarshal::unmarshal(src)?,
         })
     }
 }
 
-impl Message for EventSequenceCompleteRsp<'_> {
+impl Response for EventSequenceCompleteRsp<'_> {
     type Handles = [Handle; 0];
     fn handles(&self) -> Self::Handles {
         []
@@ -454,7 +472,7 @@ impl Marshal for EventSequenceCompleteRsp<'_> {
         self.results.marshal(dst)
     }
 }
-impl<'a> UnmarshalMessage<'a> for EventSequenceCompleteRsp<'a> {
+impl<'a> UnmarshalResponse<'a> for EventSequenceCompleteRsp<'a> {
     fn unmarshal_with_handles(
         []: Self::Handles,
         src: &mut &'a [u8],

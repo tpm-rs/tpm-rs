@@ -2,7 +2,7 @@
 //!
 //! This module implements the "Dictionary Attack Functions" commands defined in
 //! **Section 25** of the TPM 2.0 Specification.
-use super::{Command, Message, UnmarshalMessage};
+use super::{Command, UnmarshalCommand};
 use crate::{errors::UnmarshalError, marshal::marshal_helper, *};
 
 /// TPM2_DictionaryAttackLockReset (Command)
@@ -15,12 +15,13 @@ pub struct DictionaryAttackLockReset {
 
 impl Command for DictionaryAttackLockReset {
     const CMD_CODE: TpmCc = TpmCc::DictionaryAttackLockReset;
+    type Handles<'a>
+        = [EntityHandle<'a>; 1]
+    where
+        Self: 'a;
     type Response<'a> = ();
-}
-impl Message for DictionaryAttackLockReset {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.lock_handle]
+    fn handles(&self) -> Self::Handles<'_> {
+        [EntityHandle::Handle(self.lock_handle)]
     }
 }
 impl Marshal for DictionaryAttackLockReset {
@@ -30,12 +31,14 @@ impl Marshal for DictionaryAttackLockReset {
         0
     }
 }
-impl<'a> UnmarshalMessage<'a> for DictionaryAttackLockReset {
+impl<'a> UnmarshalCommand<'a> for DictionaryAttackLockReset {
     fn unmarshal_with_handles(
-        [lock_handle]: Self::Handles,
+        [lock_handle]: Self::Handles<'a>,
         _: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
-        Ok(Self { lock_handle })
+        Ok(Self {
+            lock_handle: lock_handle.try_into()?,
+        })
     }
 }
 
@@ -52,12 +55,13 @@ pub struct DictionaryAttackParameters {
 
 impl Command for DictionaryAttackParameters {
     const CMD_CODE: TpmCc = TpmCc::DictionaryAttackParameters;
+    type Handles<'a>
+        = [EntityHandle<'a>; 1]
+    where
+        Self: 'a;
     type Response<'a> = ();
-}
-impl Message for DictionaryAttackParameters {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.lock_handle]
+    fn handles(&self) -> Self::Handles<'_> {
+        [EntityHandle::Handle(self.lock_handle)]
     }
 }
 impl Marshal for DictionaryAttackParameters {
@@ -69,13 +73,13 @@ impl Marshal for DictionaryAttackParameters {
         marshal_helper(&self.lockout_recovery, dst, count)
     }
 }
-impl<'a> UnmarshalMessage<'a> for DictionaryAttackParameters {
+impl<'a> UnmarshalCommand<'a> for DictionaryAttackParameters {
     fn unmarshal_with_handles(
-        [lock_handle]: Self::Handles,
+        [lock_handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            lock_handle,
+            lock_handle: lock_handle.try_into()?,
             new_max_tries: Unmarshal::unmarshal(src)?,
             new_recovery_time: Unmarshal::unmarshal(src)?,
             lockout_recovery: Unmarshal::unmarshal(src)?,

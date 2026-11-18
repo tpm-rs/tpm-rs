@@ -147,12 +147,14 @@ pub mod commands;
 mod constants;
 pub mod crypto;
 pub mod errors;
+mod handles;
 pub mod limits;
 mod marshal;
 mod structures;
 
-pub use commands::{Command, Message, UnmarshalMessage};
+pub use commands::{Command, Response, UnmarshalCommand, UnmarshalResponse};
 pub use constants::*;
+pub use handles::*;
 pub use marshal::{Marshal, Unmarshal};
 pub use structures::*;
 

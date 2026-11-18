@@ -2,7 +2,7 @@
 //!
 //! This module implements the "Testing" commands defined in
 //! **Section 10** of the TPM 2.0 Specification.
-use super::{Command, Message, UnmarshalMessage};
+use super::{Command, Response, UnmarshalCommand, UnmarshalResponse};
 use crate::{errors::UnmarshalError, marshal::marshal_helper, *};
 
 /// TPM2_SelfTest (Command)
@@ -15,11 +15,12 @@ pub struct SelfTest {
 
 impl Command for SelfTest {
     const CMD_CODE: TpmCc = TpmCc::SelfTest;
+    type Handles<'a>
+        = [EntityHandle<'a>; 0]
+    where
+        Self: 'a;
     type Response<'a> = ();
-}
-impl Message for SelfTest {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -30,9 +31,9 @@ impl Marshal for SelfTest {
         self.full_test.marshal(dst)
     }
 }
-impl<'a> UnmarshalMessage<'a> for SelfTest {
+impl<'a> UnmarshalCommand<'a> for SelfTest {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -57,11 +58,12 @@ pub struct IncrementalSelfTestRsp {
 
 impl Command for IncrementalSelfTest {
     const CMD_CODE: TpmCc = TpmCc::IncrementalSelfTest;
+    type Handles<'a>
+        = [EntityHandle<'a>; 0]
+    where
+        Self: 'a;
     type Response<'a> = IncrementalSelfTestRsp;
-}
-impl Message for IncrementalSelfTest {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -72,9 +74,9 @@ impl Marshal for IncrementalSelfTest {
         self.to_test.marshal(dst)
     }
 }
-impl<'a> UnmarshalMessage<'a> for IncrementalSelfTest {
+impl<'a> UnmarshalCommand<'a> for IncrementalSelfTest {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -83,7 +85,7 @@ impl<'a> UnmarshalMessage<'a> for IncrementalSelfTest {
     }
 }
 
-impl Message for IncrementalSelfTestRsp {
+impl Response for IncrementalSelfTestRsp {
     type Handles = [Handle; 0];
     fn handles(&self) -> Self::Handles {
         []
@@ -96,7 +98,7 @@ impl Marshal for IncrementalSelfTestRsp {
         self.to_do_list.marshal(dst)
     }
 }
-impl<'a> UnmarshalMessage<'a> for IncrementalSelfTestRsp {
+impl<'a> UnmarshalResponse<'a> for IncrementalSelfTestRsp {
     fn unmarshal_with_handles(
         []: Self::Handles,
         src: &mut &'a [u8],
@@ -122,11 +124,12 @@ pub struct GetTestResultRsp<'a> {
 
 impl Command for GetTestResult {
     const CMD_CODE: TpmCc = TpmCc::GetTestResult;
+    type Handles<'a>
+        = [EntityHandle<'a>; 0]
+    where
+        Self: 'a;
     type Response<'a> = GetTestResultRsp<'a>;
-}
-impl Message for GetTestResult {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -137,13 +140,16 @@ impl Marshal for GetTestResult {
         0
     }
 }
-impl<'a> UnmarshalMessage<'a> for GetTestResult {
-    fn unmarshal_with_handles([]: Self::Handles, _: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
+impl<'a> UnmarshalCommand<'a> for GetTestResult {
+    fn unmarshal_with_handles(
+        []: Self::Handles<'a>,
+        _: &mut &'a [u8],
+    ) -> Result<Self, UnmarshalError> {
         Ok(Self)
     }
 }
 
-impl Message for GetTestResultRsp<'_> {
+impl Response for GetTestResultRsp<'_> {
     type Handles = [Handle; 0];
     fn handles(&self) -> Self::Handles {
         []
@@ -157,7 +163,7 @@ impl Marshal for GetTestResultRsp<'_> {
         marshal_helper(&self.test_result, dst, count)
     }
 }
-impl<'a> UnmarshalMessage<'a> for GetTestResultRsp<'a> {
+impl<'a> UnmarshalResponse<'a> for GetTestResultRsp<'a> {
     fn unmarshal_with_handles(
         []: Self::Handles,
         src: &mut &'a [u8],

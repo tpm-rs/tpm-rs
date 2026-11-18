@@ -65,11 +65,6 @@ macro_rules! impl_test_tpm2b_simple {
 }
 
 #[test]
-fn test_try_unmarshal_tpm2b_name() {
-    impl_test_tpm2b_simple! {Tpm2bName};
-}
-
-#[test]
 fn test_try_unmarshal_tpm2b_context_data() {
     impl_test_tpm2b_simple! {Tpm2bContextData};
 }
@@ -176,7 +171,6 @@ macro_rules! impl_stress_test_tpm2b_simple {
 
 #[test]
 fn test_all_tpm2b_simple_marshalling_bounds() {
-    impl_stress_test_tpm2b_simple! {Tpm2bName};
     impl_stress_test_tpm2b_simple! {Tpm2bContextData};
     impl_stress_test_tpm2b_simple! {Tpm2bData};
     impl_stress_test_tpm2b_simple! {Tpm2bDigest};

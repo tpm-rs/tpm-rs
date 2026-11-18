@@ -2,7 +2,7 @@
 //!
 //! This module implements the "Integrity Collection (PCR)" commands defined in
 //! **Section 22** of the TPM 2.0 Specification.
-use super::{Command, Message, UnmarshalMessage};
+use super::{Command, Response, UnmarshalCommand, UnmarshalResponse};
 use crate::{errors::UnmarshalError, marshal::marshal_helper, *};
 
 /// TPM2_PCR_Extend (Command)
@@ -16,12 +16,13 @@ pub struct PCRExtend<'a> {
 
 impl Command for PCRExtend<'_> {
     const CMD_CODE: TpmCc = TpmCc::PCRExtend;
+    type Handles<'a>
+        = [EntityHandle<'a>; 1]
+    where
+        Self: 'a;
     type Response<'a> = ();
-}
-impl Message for PCRExtend<'_> {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.pcr_handle]
+    fn handles(&self) -> Self::Handles<'_> {
+        [EntityHandle::Handle(self.pcr_handle)]
     }
 }
 impl Marshal for PCRExtend<'_> {
@@ -31,13 +32,13 @@ impl Marshal for PCRExtend<'_> {
         self.digests.marshal(dst)
     }
 }
-impl<'a> UnmarshalMessage<'a> for PCRExtend<'a> {
+impl<'a> UnmarshalCommand<'a> for PCRExtend<'a> {
     fn unmarshal_with_handles(
-        [pcr_handle]: Self::Handles,
+        [pcr_handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            pcr_handle,
+            pcr_handle: pcr_handle.try_into()?,
             digests: Unmarshal::unmarshal(src)?,
         })
     }
@@ -60,12 +61,13 @@ pub struct PCREventRsp<'a> {
 
 impl Command for PCREvent<'_> {
     const CMD_CODE: TpmCc = TpmCc::PCREvent;
+    type Handles<'a>
+        = [EntityHandle<'a>; 1]
+    where
+        Self: 'a;
     type Response<'a> = PCREventRsp<'a>;
-}
-impl Message for PCREvent<'_> {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.pcr_handle]
+    fn handles(&self) -> Self::Handles<'_> {
+        [EntityHandle::Handle(self.pcr_handle)]
     }
 }
 impl Marshal for PCREvent<'_> {
@@ -75,19 +77,19 @@ impl Marshal for PCREvent<'_> {
         self.event_data.marshal(dst)
     }
 }
-impl<'a> UnmarshalMessage<'a> for PCREvent<'a> {
+impl<'a> UnmarshalCommand<'a> for PCREvent<'a> {
     fn unmarshal_with_handles(
-        [pcr_handle]: Self::Handles,
+        [pcr_handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            pcr_handle,
+            pcr_handle: pcr_handle.try_into()?,
             event_data: Unmarshal::unmarshal(src)?,
         })
     }
 }
 
-impl Message for PCREventRsp<'_> {
+impl Response for PCREventRsp<'_> {
     type Handles = [Handle; 0];
     fn handles(&self) -> Self::Handles {
         []
@@ -100,7 +102,7 @@ impl Marshal for PCREventRsp<'_> {
         self.digests.marshal(dst)
     }
 }
-impl<'a> UnmarshalMessage<'a> for PCREventRsp<'a> {
+impl<'a> UnmarshalResponse<'a> for PCREventRsp<'a> {
     fn unmarshal_with_handles(
         []: Self::Handles,
         src: &mut &'a [u8],
@@ -129,11 +131,12 @@ pub struct PCRReadRsp<'a> {
 
 impl Command for PCRRead {
     const CMD_CODE: TpmCc = TpmCc::PCRRead;
+    type Handles<'a>
+        = [EntityHandle<'a>; 0]
+    where
+        Self: 'a;
     type Response<'a> = PCRReadRsp<'a>;
-}
-impl Message for PCRRead {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -144,9 +147,9 @@ impl Marshal for PCRRead {
         self.pcr_selection_in.marshal(dst)
     }
 }
-impl<'a> UnmarshalMessage<'a> for PCRRead {
+impl<'a> UnmarshalCommand<'a> for PCRRead {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -155,7 +158,7 @@ impl<'a> UnmarshalMessage<'a> for PCRRead {
     }
 }
 
-impl Message for PCRReadRsp<'_> {
+impl Response for PCRReadRsp<'_> {
     type Handles = [Handle; 0];
     fn handles(&self) -> Self::Handles {
         []
@@ -170,7 +173,7 @@ impl Marshal for PCRReadRsp<'_> {
         marshal_helper(&self.pcr_values, dst, count)
     }
 }
-impl<'a> UnmarshalMessage<'a> for PCRReadRsp<'a> {
+impl<'a> UnmarshalResponse<'a> for PCRReadRsp<'a> {
     fn unmarshal_with_handles(
         []: Self::Handles,
         src: &mut &'a [u8],
@@ -203,12 +206,13 @@ pub struct PCRAllocateRsp {
 
 impl Command for PCRAllocate {
     const CMD_CODE: TpmCc = TpmCc::PCRAllocate;
+    type Handles<'a>
+        = [EntityHandle<'a>; 1]
+    where
+        Self: 'a;
     type Response<'a> = PCRAllocateRsp;
-}
-impl Message for PCRAllocate {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.auth_handle]
+    fn handles(&self) -> Self::Handles<'_> {
+        [EntityHandle::Handle(self.auth_handle)]
     }
 }
 impl Marshal for PCRAllocate {
@@ -218,19 +222,19 @@ impl Marshal for PCRAllocate {
         self.pcr_allocation.marshal(dst)
     }
 }
-impl<'a> UnmarshalMessage<'a> for PCRAllocate {
+impl<'a> UnmarshalCommand<'a> for PCRAllocate {
     fn unmarshal_with_handles(
-        [auth_handle]: Self::Handles,
+        [auth_handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            auth_handle,
+            auth_handle: auth_handle.try_into()?,
             pcr_allocation: Unmarshal::unmarshal(src)?,
         })
     }
 }
 
-impl Message for PCRAllocateRsp {
+impl Response for PCRAllocateRsp {
     type Handles = [Handle; 0];
     fn handles(&self) -> Self::Handles {
         []
@@ -246,7 +250,7 @@ impl Marshal for PCRAllocateRsp {
         marshal_helper(&self.size_available, dst, count)
     }
 }
-impl<'a> UnmarshalMessage<'a> for PCRAllocateRsp {
+impl<'a> UnmarshalResponse<'a> for PCRAllocateRsp {
     fn unmarshal_with_handles(
         []: Self::Handles,
         src: &mut &'a [u8],
@@ -273,12 +277,13 @@ pub struct PCRSetAuthPolicy<'a> {
 
 impl Command for PCRSetAuthPolicy<'_> {
     const CMD_CODE: TpmCc = TpmCc::PCRSetAuthPolicy;
+    type Handles<'a>
+        = [EntityHandle<'a>; 1]
+    where
+        Self: 'a;
     type Response<'a> = ();
-}
-impl Message for PCRSetAuthPolicy<'_> {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.auth_handle]
+    fn handles(&self) -> Self::Handles<'_> {
+        [EntityHandle::Handle(self.auth_handle)]
     }
 }
 impl Marshal for PCRSetAuthPolicy<'_> {
@@ -291,13 +296,13 @@ impl Marshal for PCRSetAuthPolicy<'_> {
         marshal_helper(&self.pcr_num, dst, count)
     }
 }
-impl<'a> UnmarshalMessage<'a> for PCRSetAuthPolicy<'a> {
+impl<'a> UnmarshalCommand<'a> for PCRSetAuthPolicy<'a> {
     fn unmarshal_with_handles(
-        [auth_handle]: Self::Handles,
+        [auth_handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            auth_handle,
+            auth_handle: auth_handle.try_into()?,
             auth_policy: Unmarshal::unmarshal(src)?,
             hash_alg: Unmarshal::unmarshal(src)?,
             pcr_num: Unmarshal::unmarshal(src)?,
@@ -316,12 +321,13 @@ pub struct PCRSetAuthValue<'a> {
 
 impl Command for PCRSetAuthValue<'_> {
     const CMD_CODE: TpmCc = TpmCc::PCRSetAuthValue;
+    type Handles<'a>
+        = [EntityHandle<'a>; 1]
+    where
+        Self: 'a;
     type Response<'a> = ();
-}
-impl Message for PCRSetAuthValue<'_> {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.pcr_handle]
+    fn handles(&self) -> Self::Handles<'_> {
+        [EntityHandle::Handle(self.pcr_handle)]
     }
 }
 impl Marshal for PCRSetAuthValue<'_> {
@@ -331,13 +337,13 @@ impl Marshal for PCRSetAuthValue<'_> {
         self.auth.marshal(dst)
     }
 }
-impl<'a> UnmarshalMessage<'a> for PCRSetAuthValue<'a> {
+impl<'a> UnmarshalCommand<'a> for PCRSetAuthValue<'a> {
     fn unmarshal_with_handles(
-        [pcr_handle]: Self::Handles,
+        [pcr_handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            pcr_handle,
+            pcr_handle: pcr_handle.try_into()?,
             auth: Unmarshal::unmarshal(src)?,
         })
     }
@@ -353,12 +359,13 @@ pub struct PCRReset {
 
 impl Command for PCRReset {
     const CMD_CODE: TpmCc = TpmCc::PCRReset;
+    type Handles<'a>
+        = [EntityHandle<'a>; 1]
+    where
+        Self: 'a;
     type Response<'a> = ();
-}
-impl Message for PCRReset {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.pcr_handle]
+    fn handles(&self) -> Self::Handles<'_> {
+        [EntityHandle::Handle(self.pcr_handle)]
     }
 }
 impl Marshal for PCRReset {
@@ -368,11 +375,13 @@ impl Marshal for PCRReset {
         0
     }
 }
-impl<'a> UnmarshalMessage<'a> for PCRReset {
+impl<'a> UnmarshalCommand<'a> for PCRReset {
     fn unmarshal_with_handles(
-        [pcr_handle]: Self::Handles,
+        [pcr_handle]: Self::Handles<'a>,
         _: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
-        Ok(Self { pcr_handle })
+        Ok(Self {
+            pcr_handle: pcr_handle.try_into()?,
+        })
     }
 }

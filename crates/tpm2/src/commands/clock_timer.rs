@@ -2,7 +2,7 @@
 //!
 //! This module implements the "Clocks and Timers" commands defined in
 //! **Section 29** of the TPM 2.0 Specification.
-use super::{Command, Message, UnmarshalMessage};
+use super::{Command, Response, UnmarshalCommand, UnmarshalResponse};
 use crate::{errors::UnmarshalError, *};
 
 /// TPM2_ReadClock (Command)
@@ -19,11 +19,12 @@ pub struct ReadClockRsp {
 
 impl Command for ReadClock {
     const CMD_CODE: TpmCc = TpmCc::ReadClock;
+    type Handles<'a>
+        = [EntityHandle<'a>; 0]
+    where
+        Self: 'a;
     type Response<'a> = ReadClockRsp;
-}
-impl Message for ReadClock {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -34,13 +35,16 @@ impl Marshal for ReadClock {
         0
     }
 }
-impl<'a> UnmarshalMessage<'a> for ReadClock {
-    fn unmarshal_with_handles([]: Self::Handles, _: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
+impl<'a> UnmarshalCommand<'a> for ReadClock {
+    fn unmarshal_with_handles(
+        []: Self::Handles<'a>,
+        _: &mut &'a [u8],
+    ) -> Result<Self, UnmarshalError> {
         Ok(Self)
     }
 }
 
-impl Message for ReadClockRsp {
+impl Response for ReadClockRsp {
     type Handles = [Handle; 0];
     fn handles(&self) -> Self::Handles {
         []
@@ -53,7 +57,7 @@ impl Marshal for ReadClockRsp {
         self.current_time.marshal(dst)
     }
 }
-impl<'a> UnmarshalMessage<'a> for ReadClockRsp {
+impl<'a> UnmarshalResponse<'a> for ReadClockRsp {
     fn unmarshal_with_handles(
         []: Self::Handles,
         src: &mut &'a [u8],
@@ -75,12 +79,13 @@ pub struct ClockSet {
 
 impl Command for ClockSet {
     const CMD_CODE: TpmCc = TpmCc::ClockSet;
+    type Handles<'a>
+        = [EntityHandle<'a>; 1]
+    where
+        Self: 'a;
     type Response<'a> = ();
-}
-impl Message for ClockSet {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.auth]
+    fn handles(&self) -> Self::Handles<'_> {
+        [EntityHandle::Handle(self.auth)]
     }
 }
 impl Marshal for ClockSet {
@@ -90,13 +95,13 @@ impl Marshal for ClockSet {
         self.new_time.marshal(dst)
     }
 }
-impl<'a> UnmarshalMessage<'a> for ClockSet {
+impl<'a> UnmarshalCommand<'a> for ClockSet {
     fn unmarshal_with_handles(
-        [auth]: Self::Handles,
+        [auth]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            auth,
+            auth: auth.try_into()?,
             new_time: Unmarshal::unmarshal(src)?,
         })
     }
@@ -113,12 +118,13 @@ pub struct ClockRateAdjust {
 
 impl Command for ClockRateAdjust {
     const CMD_CODE: TpmCc = TpmCc::ClockRateAdjust;
+    type Handles<'a>
+        = [EntityHandle<'a>; 1]
+    where
+        Self: 'a;
     type Response<'a> = ();
-}
-impl Message for ClockRateAdjust {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.auth]
+    fn handles(&self) -> Self::Handles<'_> {
+        [EntityHandle::Handle(self.auth)]
     }
 }
 impl Marshal for ClockRateAdjust {
@@ -128,13 +134,13 @@ impl Marshal for ClockRateAdjust {
         self.rate_adjust.marshal(dst)
     }
 }
-impl<'a> UnmarshalMessage<'a> for ClockRateAdjust {
+impl<'a> UnmarshalCommand<'a> for ClockRateAdjust {
     fn unmarshal_with_handles(
-        [auth]: Self::Handles,
+        [auth]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            auth,
+            auth: auth.try_into()?,
             rate_adjust: Unmarshal::unmarshal(src)?,
         })
     }
@@ -151,12 +157,13 @@ pub struct ACTSetTimeout {
 
 impl Command for ACTSetTimeout {
     const CMD_CODE: TpmCc = TpmCc::ACTSetTimeout;
+    type Handles<'a>
+        = [EntityHandle<'a>; 1]
+    where
+        Self: 'a;
     type Response<'a> = ();
-}
-impl Message for ACTSetTimeout {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.act_handle]
+    fn handles(&self) -> Self::Handles<'_> {
+        [EntityHandle::Handle(self.act_handle)]
     }
 }
 impl Marshal for ACTSetTimeout {
@@ -166,13 +173,13 @@ impl Marshal for ACTSetTimeout {
         self.start_timeout.marshal(dst)
     }
 }
-impl<'a> UnmarshalMessage<'a> for ACTSetTimeout {
+impl<'a> UnmarshalCommand<'a> for ACTSetTimeout {
     fn unmarshal_with_handles(
-        [act_handle]: Self::Handles,
+        [act_handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            act_handle,
+            act_handle: act_handle.try_into()?,
             start_timeout: Unmarshal::unmarshal(src)?,
         })
     }
