@@ -4,10 +4,8 @@
 //! This code is unstable and there are no guarantees of stability at this time.
 //! </div>
 //!
-//! This client crate provides:
-//!   - A [`Connection`] trait for communicating with a TPM
-//!   - High-level abstractions for building and sending commands over the
-//!     interface.
+//! This client crate provides high-level abstractions for building TPM
+//! commands and sending them over a [`Connection`].
 //!
 //! Structs implementing [`Connection`] for specific transports live in their
 //! own crates, such as `tpm2-tcp` for the TCP-based TPM simulator.
@@ -34,14 +32,12 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![forbid(unsafe_code)]
 
-use connection::Connection;
 use core::fmt;
 use protocol::*;
 use sessions::{AuthError, AuthorizationArea};
-use tpm2::Command;
 use tpm2::errors::{TpmRc, UnmarshalError};
+use tpm2::{Command, Connection};
 
-pub mod connection;
 pub mod protocol;
 pub mod sessions;
 
