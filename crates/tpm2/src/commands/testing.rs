@@ -18,8 +18,12 @@ impl Command for SelfTest {
     type Response<'a> = ();
 }
 impl Message for SelfTest {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 0;
+    type Handles<'a>
+        = [NamedHandle<'a>; 0]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -32,7 +36,7 @@ impl Marshal for SelfTest {
 }
 impl<'a> UnmarshalMessage<'a> for SelfTest {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -60,8 +64,12 @@ impl Command for IncrementalSelfTest {
     type Response<'a> = IncrementalSelfTestRsp;
 }
 impl Message for IncrementalSelfTest {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 0;
+    type Handles<'a>
+        = [NamedHandle<'a>; 0]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -74,7 +82,7 @@ impl Marshal for IncrementalSelfTest {
 }
 impl<'a> UnmarshalMessage<'a> for IncrementalSelfTest {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -84,8 +92,12 @@ impl<'a> UnmarshalMessage<'a> for IncrementalSelfTest {
 }
 
 impl Message for IncrementalSelfTestRsp {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 0;
+    type Handles<'a>
+        = [NamedHandle<'a>; 0]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -98,7 +110,7 @@ impl Marshal for IncrementalSelfTestRsp {
 }
 impl<'a> UnmarshalMessage<'a> for IncrementalSelfTestRsp {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -125,8 +137,12 @@ impl Command for GetTestResult {
     type Response<'a> = GetTestResultRsp<'a>;
 }
 impl Message for GetTestResult {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 0;
+    type Handles<'a>
+        = [NamedHandle<'a>; 0]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -138,14 +154,21 @@ impl Marshal for GetTestResult {
     }
 }
 impl<'a> UnmarshalMessage<'a> for GetTestResult {
-    fn unmarshal_with_handles([]: Self::Handles, _: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles(
+        []: Self::Handles<'a>,
+        _: &mut &'a [u8],
+    ) -> Result<Self, UnmarshalError> {
         Ok(Self)
     }
 }
 
 impl Message for GetTestResultRsp<'_> {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 0;
+    type Handles<'a>
+        = [NamedHandle<'a>; 0]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -159,7 +182,7 @@ impl Marshal for GetTestResultRsp<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for GetTestResultRsp<'a> {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {

@@ -11,7 +11,7 @@ use crate::{errors::UnmarshalError, marshal::marshal_helper, *};
 #[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct FieldUpgradeStart<'a> {
     pub authorization: Handle,
-    pub key_handle: Handle,
+    pub key_handle: NamedHandle<'a>,
     pub fu_digest: Tpm2bDigest<'a>,
     pub manifest_signature: TpmtSignature<'a>,
 }
@@ -21,9 +21,13 @@ impl Command for FieldUpgradeStart<'_> {
     type Response<'a> = ();
 }
 impl Message for FieldUpgradeStart<'_> {
-    type Handles = [Handle; 2];
-    fn handles(&self) -> Self::Handles {
-        [self.authorization, self.key_handle]
+    const NUM_HANDLES: usize = 2;
+    type Handles<'a>
+        = [NamedHandle<'a>; 2]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.authorization.into(), self.key_handle]
     }
 }
 impl Marshal for FieldUpgradeStart<'_> {
@@ -36,11 +40,11 @@ impl Marshal for FieldUpgradeStart<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for FieldUpgradeStart<'a> {
     fn unmarshal_with_handles(
-        [authorization, key_handle]: Self::Handles,
+        [authorization, key_handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            authorization,
+            authorization: authorization.handle,
             key_handle,
             fu_digest: Unmarshal::unmarshal(src)?,
             manifest_signature: Unmarshal::unmarshal(src)?,
@@ -68,8 +72,12 @@ impl Command for FieldUpgradeData<'_> {
     type Response<'a> = FieldUpgradeDataRsp<'a>;
 }
 impl Message for FieldUpgradeData<'_> {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 0;
+    type Handles<'a>
+        = [NamedHandle<'a>; 0]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -82,7 +90,7 @@ impl Marshal for FieldUpgradeData<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for FieldUpgradeData<'a> {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -92,8 +100,12 @@ impl<'a> UnmarshalMessage<'a> for FieldUpgradeData<'a> {
 }
 
 impl Message for FieldUpgradeDataRsp<'_> {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 0;
+    type Handles<'a>
+        = [NamedHandle<'a>; 0]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -107,7 +119,7 @@ impl Marshal for FieldUpgradeDataRsp<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for FieldUpgradeDataRsp<'a> {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -136,8 +148,12 @@ impl Command for FirmwareRead {
     type Response<'a> = FirmwareReadRsp<'a>;
 }
 impl Message for FirmwareRead {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 0;
+    type Handles<'a>
+        = [NamedHandle<'a>; 0]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -150,7 +166,7 @@ impl Marshal for FirmwareRead {
 }
 impl<'a> UnmarshalMessage<'a> for FirmwareRead {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -160,8 +176,12 @@ impl<'a> UnmarshalMessage<'a> for FirmwareRead {
 }
 
 impl Message for FirmwareReadRsp<'_> {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 0;
+    type Handles<'a>
+        = [NamedHandle<'a>; 0]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -174,7 +194,7 @@ impl Marshal for FirmwareReadRsp<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for FirmwareReadRsp<'a> {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {

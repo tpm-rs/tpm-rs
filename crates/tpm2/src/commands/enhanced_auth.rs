@@ -10,7 +10,7 @@ use crate::{errors::UnmarshalError, marshal::marshal_helper, *};
 #[doc(alias = "PolicySigned_In")]
 #[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct PolicySigned<'a> {
-    pub auth_object: Handle,
+    pub auth_object: NamedHandle<'a>,
     pub policy_session: Handle,
     pub nonce_tpm: Tpm2bNonce<'a>,
     pub cp_hash_a: Tpm2bDigest<'a>,
@@ -31,9 +31,13 @@ impl Command for PolicySigned<'_> {
     type Response<'a> = PolicySignedRsp<'a>;
 }
 impl Message for PolicySigned<'_> {
-    type Handles = [Handle; 2];
-    fn handles(&self) -> Self::Handles {
-        [self.auth_object, self.policy_session]
+    const NUM_HANDLES: usize = 2;
+    type Handles<'a>
+        = [NamedHandle<'a>; 2]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.auth_object, self.policy_session.into()]
     }
 }
 impl Marshal for PolicySigned<'_> {
@@ -53,12 +57,12 @@ impl Marshal for PolicySigned<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for PolicySigned<'a> {
     fn unmarshal_with_handles(
-        [auth_object, policy_session]: Self::Handles,
+        [auth_object, policy_session]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
             auth_object,
-            policy_session,
+            policy_session: policy_session.handle,
             nonce_tpm: Unmarshal::unmarshal(src)?,
             cp_hash_a: Unmarshal::unmarshal(src)?,
             policy_ref: Unmarshal::unmarshal(src)?,
@@ -69,8 +73,12 @@ impl<'a> UnmarshalMessage<'a> for PolicySigned<'a> {
 }
 
 impl Message for PolicySignedRsp<'_> {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 0;
+    type Handles<'a>
+        = [NamedHandle<'a>; 0]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -84,7 +92,7 @@ impl Marshal for PolicySignedRsp<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for PolicySignedRsp<'a> {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -99,7 +107,7 @@ impl<'a> UnmarshalMessage<'a> for PolicySignedRsp<'a> {
 #[doc(alias = "PolicySecret_In")]
 #[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct PolicySecret<'a> {
-    pub auth_handle: Handle,
+    pub auth_handle: NamedHandle<'a>,
     pub policy_session: Handle,
     pub nonce_tpm: Tpm2bNonce<'a>,
     pub cp_hash_a: Tpm2bDigest<'a>,
@@ -119,9 +127,13 @@ impl Command for PolicySecret<'_> {
     type Response<'a> = PolicySecretRsp<'a>;
 }
 impl Message for PolicySecret<'_> {
-    type Handles = [Handle; 2];
-    fn handles(&self) -> Self::Handles {
-        [self.auth_handle, self.policy_session]
+    const NUM_HANDLES: usize = 2;
+    type Handles<'a>
+        = [NamedHandle<'a>; 2]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.auth_handle, self.policy_session.into()]
     }
 }
 impl Marshal for PolicySecret<'_> {
@@ -137,12 +149,12 @@ impl Marshal for PolicySecret<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for PolicySecret<'a> {
     fn unmarshal_with_handles(
-        [auth_handle, policy_session]: Self::Handles,
+        [auth_handle, policy_session]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
             auth_handle,
-            policy_session,
+            policy_session: policy_session.handle,
             nonce_tpm: Unmarshal::unmarshal(src)?,
             cp_hash_a: Unmarshal::unmarshal(src)?,
             policy_ref: Unmarshal::unmarshal(src)?,
@@ -152,8 +164,12 @@ impl<'a> UnmarshalMessage<'a> for PolicySecret<'a> {
 }
 
 impl Message for PolicySecretRsp<'_> {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 0;
+    type Handles<'a>
+        = [NamedHandle<'a>; 0]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -167,7 +183,7 @@ impl Marshal for PolicySecretRsp<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for PolicySecretRsp<'a> {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -195,9 +211,13 @@ impl Command for PolicyTicket<'_> {
     type Response<'a> = ();
 }
 impl Message for PolicyTicket<'_> {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.policy_session]
+    const NUM_HANDLES: usize = 1;
+    type Handles<'a>
+        = [NamedHandle<'a>; 1]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.policy_session.into()]
     }
 }
 impl Marshal for PolicyTicket<'_> {
@@ -217,11 +237,11 @@ impl Marshal for PolicyTicket<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for PolicyTicket<'a> {
     fn unmarshal_with_handles(
-        [policy_session]: Self::Handles,
+        [policy_session]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            policy_session,
+            policy_session: policy_session.handle,
             timeout: Unmarshal::unmarshal(src)?,
             cp_hash_a: Unmarshal::unmarshal(src)?,
             policy_ref: Unmarshal::unmarshal(src)?,
@@ -245,9 +265,13 @@ impl Command for PolicyOR<'_> {
     type Response<'a> = ();
 }
 impl Message for PolicyOR<'_> {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.policy_session]
+    const NUM_HANDLES: usize = 1;
+    type Handles<'a>
+        = [NamedHandle<'a>; 1]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.policy_session.into()]
     }
 }
 impl Marshal for PolicyOR<'_> {
@@ -259,7 +283,7 @@ impl Marshal for PolicyOR<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for PolicyOR<'a> {
     fn unmarshal_with_handles(
-        [policy_session]: Self::Handles,
+        [policy_session]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         let p_hash_list = TpmlDigest::unmarshal(src)?;
@@ -267,7 +291,7 @@ impl<'a> UnmarshalMessage<'a> for PolicyOR<'a> {
             return Err(UnmarshalError);
         }
         Ok(Self {
-            policy_session,
+            policy_session: policy_session.handle,
             p_hash_list,
         })
     }
@@ -288,9 +312,13 @@ impl Command for PolicyPCR<'_> {
     type Response<'a> = ();
 }
 impl Message for PolicyPCR<'_> {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.policy_session]
+    const NUM_HANDLES: usize = 1;
+    type Handles<'a>
+        = [NamedHandle<'a>; 1]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.policy_session.into()]
     }
 }
 impl Marshal for PolicyPCR<'_> {
@@ -303,11 +331,11 @@ impl Marshal for PolicyPCR<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for PolicyPCR<'a> {
     fn unmarshal_with_handles(
-        [policy_session]: Self::Handles,
+        [policy_session]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            policy_session,
+            policy_session: policy_session.handle,
             pcr_digest: Unmarshal::unmarshal(src)?,
             pcrs: Unmarshal::unmarshal(src)?,
         })
@@ -328,9 +356,13 @@ impl Command for PolicyLocality {
     type Response<'a> = ();
 }
 impl Message for PolicyLocality {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.policy_session]
+    const NUM_HANDLES: usize = 1;
+    type Handles<'a>
+        = [NamedHandle<'a>; 1]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.policy_session.into()]
     }
 }
 impl Marshal for PolicyLocality {
@@ -342,11 +374,11 @@ impl Marshal for PolicyLocality {
 }
 impl<'a> UnmarshalMessage<'a> for PolicyLocality {
     fn unmarshal_with_handles(
-        [policy_session]: Self::Handles,
+        [policy_session]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            policy_session,
+            policy_session: policy_session.handle,
             locality: Unmarshal::unmarshal(src)?,
         })
     }
@@ -357,8 +389,8 @@ impl<'a> UnmarshalMessage<'a> for PolicyLocality {
 #[doc(alias = "PolicyNV_In")]
 #[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct PolicyNV<'a> {
-    pub auth_handle: Handle,
-    pub nv_index: Handle,
+    pub auth_handle: NamedHandle<'a>,
+    pub nv_index: NamedHandle<'a>,
     pub policy_session: Handle,
     pub operand_b: Tpm2bOperand<'a>,
     pub offset: u16,
@@ -370,9 +402,13 @@ impl Command for PolicyNV<'_> {
     type Response<'a> = ();
 }
 impl Message for PolicyNV<'_> {
-    type Handles = [Handle; 3];
-    fn handles(&self) -> Self::Handles {
-        [self.auth_handle, self.nv_index, self.policy_session]
+    const NUM_HANDLES: usize = 3;
+    type Handles<'a>
+        = [NamedHandle<'a>; 3]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.auth_handle, self.nv_index, self.policy_session.into()]
     }
 }
 impl Marshal for PolicyNV<'_> {
@@ -386,13 +422,13 @@ impl Marshal for PolicyNV<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for PolicyNV<'a> {
     fn unmarshal_with_handles(
-        [auth_handle, nv_index, policy_session]: Self::Handles,
+        [auth_handle, nv_index, policy_session]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
             auth_handle,
             nv_index,
-            policy_session,
+            policy_session: policy_session.handle,
             operand_b: Unmarshal::unmarshal(src)?,
             offset: Unmarshal::unmarshal(src)?,
             operation: Unmarshal::unmarshal(src)?,
@@ -416,9 +452,13 @@ impl Command for PolicyCounterTimer<'_> {
     type Response<'a> = ();
 }
 impl Message for PolicyCounterTimer<'_> {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.policy_session]
+    const NUM_HANDLES: usize = 1;
+    type Handles<'a>
+        = [NamedHandle<'a>; 1]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.policy_session.into()]
     }
 }
 impl Marshal for PolicyCounterTimer<'_> {
@@ -432,11 +472,11 @@ impl Marshal for PolicyCounterTimer<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for PolicyCounterTimer<'a> {
     fn unmarshal_with_handles(
-        [policy_session]: Self::Handles,
+        [policy_session]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            policy_session,
+            policy_session: policy_session.handle,
             operand_b: Unmarshal::unmarshal(src)?,
             offset: Unmarshal::unmarshal(src)?,
             operation: Unmarshal::unmarshal(src)?,
@@ -458,9 +498,13 @@ impl Command for PolicyCommandCode {
     type Response<'a> = ();
 }
 impl Message for PolicyCommandCode {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.policy_session]
+    const NUM_HANDLES: usize = 1;
+    type Handles<'a>
+        = [NamedHandle<'a>; 1]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.policy_session.into()]
     }
 }
 impl Marshal for PolicyCommandCode {
@@ -472,11 +516,11 @@ impl Marshal for PolicyCommandCode {
 }
 impl<'a> UnmarshalMessage<'a> for PolicyCommandCode {
     fn unmarshal_with_handles(
-        [policy_session]: Self::Handles,
+        [policy_session]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            policy_session,
+            policy_session: policy_session.handle,
             code: Unmarshal::unmarshal(src)?,
         })
     }
@@ -495,9 +539,13 @@ impl Command for PolicyPhysicalPresence {
     type Response<'a> = ();
 }
 impl Message for PolicyPhysicalPresence {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.policy_session]
+    const NUM_HANDLES: usize = 1;
+    type Handles<'a>
+        = [NamedHandle<'a>; 1]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.policy_session.into()]
     }
 }
 impl Marshal for PolicyPhysicalPresence {
@@ -509,10 +557,12 @@ impl Marshal for PolicyPhysicalPresence {
 }
 impl<'a> UnmarshalMessage<'a> for PolicyPhysicalPresence {
     fn unmarshal_with_handles(
-        [policy_session]: Self::Handles,
+        [policy_session]: Self::Handles<'a>,
         _: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
-        Ok(Self { policy_session })
+        Ok(Self {
+            policy_session: policy_session.handle,
+        })
     }
 }
 
@@ -530,9 +580,13 @@ impl Command for PolicyCpHash<'_> {
     type Response<'a> = ();
 }
 impl Message for PolicyCpHash<'_> {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.policy_session]
+    const NUM_HANDLES: usize = 1;
+    type Handles<'a>
+        = [NamedHandle<'a>; 1]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.policy_session.into()]
     }
 }
 impl Marshal for PolicyCpHash<'_> {
@@ -544,11 +598,11 @@ impl Marshal for PolicyCpHash<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for PolicyCpHash<'a> {
     fn unmarshal_with_handles(
-        [policy_session]: Self::Handles,
+        [policy_session]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            policy_session,
+            policy_session: policy_session.handle,
             cp_hash_a: Unmarshal::unmarshal(src)?,
         })
     }
@@ -568,9 +622,13 @@ impl Command for PolicyNameHash<'_> {
     type Response<'a> = ();
 }
 impl Message for PolicyNameHash<'_> {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.policy_session]
+    const NUM_HANDLES: usize = 1;
+    type Handles<'a>
+        = [NamedHandle<'a>; 1]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.policy_session.into()]
     }
 }
 impl Marshal for PolicyNameHash<'_> {
@@ -582,11 +640,11 @@ impl Marshal for PolicyNameHash<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for PolicyNameHash<'a> {
     fn unmarshal_with_handles(
-        [policy_session]: Self::Handles,
+        [policy_session]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            policy_session,
+            policy_session: policy_session.handle,
             name_hash: Unmarshal::unmarshal(src)?,
         })
     }
@@ -608,9 +666,13 @@ impl Command for PolicyDuplicationSelect<'_> {
     type Response<'a> = ();
 }
 impl Message for PolicyDuplicationSelect<'_> {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.policy_session]
+    const NUM_HANDLES: usize = 1;
+    type Handles<'a>
+        = [NamedHandle<'a>; 1]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.policy_session.into()]
     }
 }
 impl Marshal for PolicyDuplicationSelect<'_> {
@@ -624,11 +686,11 @@ impl Marshal for PolicyDuplicationSelect<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for PolicyDuplicationSelect<'a> {
     fn unmarshal_with_handles(
-        [policy_session]: Self::Handles,
+        [policy_session]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            policy_session,
+            policy_session: policy_session.handle,
             object_name: Unmarshal::unmarshal(src)?,
             new_parent_name: Unmarshal::unmarshal(src)?,
             include_object: Unmarshal::unmarshal(src)?,
@@ -653,9 +715,13 @@ impl Command for PolicyAuthorize<'_> {
     type Response<'a> = ();
 }
 impl Message for PolicyAuthorize<'_> {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.policy_session]
+    const NUM_HANDLES: usize = 1;
+    type Handles<'a>
+        = [NamedHandle<'a>; 1]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.policy_session.into()]
     }
 }
 impl Marshal for PolicyAuthorize<'_> {
@@ -673,11 +739,11 @@ impl Marshal for PolicyAuthorize<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for PolicyAuthorize<'a> {
     fn unmarshal_with_handles(
-        [policy_session]: Self::Handles,
+        [policy_session]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            policy_session,
+            policy_session: policy_session.handle,
             approved_policy: Unmarshal::unmarshal(src)?,
             policy_ref: Unmarshal::unmarshal(src)?,
             key_sign: Unmarshal::unmarshal(src)?,
@@ -699,9 +765,13 @@ impl Command for PolicyAuthValue {
     type Response<'a> = ();
 }
 impl Message for PolicyAuthValue {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.policy_session]
+    const NUM_HANDLES: usize = 1;
+    type Handles<'a>
+        = [NamedHandle<'a>; 1]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.policy_session.into()]
     }
 }
 impl Marshal for PolicyAuthValue {
@@ -713,10 +783,12 @@ impl Marshal for PolicyAuthValue {
 }
 impl<'a> UnmarshalMessage<'a> for PolicyAuthValue {
     fn unmarshal_with_handles(
-        [policy_session]: Self::Handles,
+        [policy_session]: Self::Handles<'a>,
         _: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
-        Ok(Self { policy_session })
+        Ok(Self {
+            policy_session: policy_session.handle,
+        })
     }
 }
 
@@ -733,9 +805,13 @@ impl Command for PolicyPassword {
     type Response<'a> = ();
 }
 impl Message for PolicyPassword {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.policy_session]
+    const NUM_HANDLES: usize = 1;
+    type Handles<'a>
+        = [NamedHandle<'a>; 1]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.policy_session.into()]
     }
 }
 impl Marshal for PolicyPassword {
@@ -747,10 +823,12 @@ impl Marshal for PolicyPassword {
 }
 impl<'a> UnmarshalMessage<'a> for PolicyPassword {
     fn unmarshal_with_handles(
-        [policy_session]: Self::Handles,
+        [policy_session]: Self::Handles<'a>,
         _: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
-        Ok(Self { policy_session })
+        Ok(Self {
+            policy_session: policy_session.handle,
+        })
     }
 }
 
@@ -773,9 +851,13 @@ impl Command for PolicyGetDigest {
     type Response<'a> = PolicyGetDigestRsp<'a>;
 }
 impl Message for PolicyGetDigest {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.policy_session]
+    const NUM_HANDLES: usize = 1;
+    type Handles<'a>
+        = [NamedHandle<'a>; 1]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.policy_session.into()]
     }
 }
 impl Marshal for PolicyGetDigest {
@@ -787,16 +869,22 @@ impl Marshal for PolicyGetDigest {
 }
 impl<'a> UnmarshalMessage<'a> for PolicyGetDigest {
     fn unmarshal_with_handles(
-        [policy_session]: Self::Handles,
+        [policy_session]: Self::Handles<'a>,
         _: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
-        Ok(Self { policy_session })
+        Ok(Self {
+            policy_session: policy_session.handle,
+        })
     }
 }
 
 impl Message for PolicyGetDigestRsp<'_> {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 0;
+    type Handles<'a>
+        = [NamedHandle<'a>; 0]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -809,7 +897,7 @@ impl Marshal for PolicyGetDigestRsp<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for PolicyGetDigestRsp<'a> {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -832,9 +920,13 @@ impl Command for PolicyNvWritten {
     type Response<'a> = ();
 }
 impl Message for PolicyNvWritten {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.policy_session]
+    const NUM_HANDLES: usize = 1;
+    type Handles<'a>
+        = [NamedHandle<'a>; 1]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.policy_session.into()]
     }
 }
 impl Marshal for PolicyNvWritten {
@@ -846,11 +938,11 @@ impl Marshal for PolicyNvWritten {
 }
 impl<'a> UnmarshalMessage<'a> for PolicyNvWritten {
     fn unmarshal_with_handles(
-        [policy_session]: Self::Handles,
+        [policy_session]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            policy_session,
+            policy_session: policy_session.handle,
             written_set: Unmarshal::unmarshal(src)?,
         })
     }
@@ -870,9 +962,13 @@ impl Command for PolicyTemplate<'_> {
     type Response<'a> = ();
 }
 impl Message for PolicyTemplate<'_> {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.policy_session]
+    const NUM_HANDLES: usize = 1;
+    type Handles<'a>
+        = [NamedHandle<'a>; 1]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.policy_session.into()]
     }
 }
 impl Marshal for PolicyTemplate<'_> {
@@ -884,11 +980,11 @@ impl Marshal for PolicyTemplate<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for PolicyTemplate<'a> {
     fn unmarshal_with_handles(
-        [policy_session]: Self::Handles,
+        [policy_session]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            policy_session,
+            policy_session: policy_session.handle,
             template_hash: Unmarshal::unmarshal(src)?,
         })
     }
@@ -898,38 +994,42 @@ impl<'a> UnmarshalMessage<'a> for PolicyTemplate<'a> {
 #[doc(alias = "TPM2_PolicyAuthorizeNV")]
 #[doc(alias = "PolicyAuthorizeNV_In")]
 #[derive(Clone, Copy, PartialEq, Debug, Eq)]
-pub struct PolicyAuthorizeNV {
-    pub auth_handle: Handle,
-    pub nv_index: Handle,
+pub struct PolicyAuthorizeNV<'a> {
+    pub auth_handle: NamedHandle<'a>,
+    pub nv_index: NamedHandle<'a>,
     pub policy_session: Handle,
 }
 
-impl Command for PolicyAuthorizeNV {
+impl Command for PolicyAuthorizeNV<'_> {
     const CMD_CODE: TpmCc = TpmCc::PolicyAuthorizeNV;
     type Response<'a> = ();
 }
-impl Message for PolicyAuthorizeNV {
-    type Handles = [Handle; 3];
-    fn handles(&self) -> Self::Handles {
-        [self.auth_handle, self.nv_index, self.policy_session]
+impl Message for PolicyAuthorizeNV<'_> {
+    const NUM_HANDLES: usize = 3;
+    type Handles<'a>
+        = [NamedHandle<'a>; 3]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.auth_handle, self.nv_index, self.policy_session.into()]
     }
 }
-impl Marshal for PolicyAuthorizeNV {
+impl Marshal for PolicyAuthorizeNV<'_> {
     const MAX_SIZE: usize = 0;
     type MaxBuffer = [u8; 0];
     fn marshal(&self, _: &mut Self::MaxBuffer) -> usize {
         0
     }
 }
-impl<'a> UnmarshalMessage<'a> for PolicyAuthorizeNV {
+impl<'a> UnmarshalMessage<'a> for PolicyAuthorizeNV<'a> {
     fn unmarshal_with_handles(
-        [auth_handle, nv_index, policy_session]: Self::Handles,
+        [auth_handle, nv_index, policy_session]: Self::Handles<'a>,
         _: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
             auth_handle,
             nv_index,
-            policy_session,
+            policy_session: policy_session.handle,
         })
     }
 }
@@ -952,9 +1052,13 @@ impl Command for PolicyCapability<'_> {
     type Response<'a> = ();
 }
 impl Message for PolicyCapability<'_> {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.policy_session]
+    const NUM_HANDLES: usize = 1;
+    type Handles<'a>
+        = [NamedHandle<'a>; 1]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.policy_session.into()]
     }
 }
 impl Marshal for PolicyCapability<'_> {
@@ -971,11 +1075,11 @@ impl Marshal for PolicyCapability<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for PolicyCapability<'a> {
     fn unmarshal_with_handles(
-        [policy_session]: Self::Handles,
+        [policy_session]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            policy_session,
+            policy_session: policy_session.handle,
             operand_b: Unmarshal::unmarshal(src)?,
             offset: Unmarshal::unmarshal(src)?,
             operation: Unmarshal::unmarshal(src)?,
@@ -999,9 +1103,13 @@ impl Command for PolicyParameters<'_> {
     type Response<'a> = ();
 }
 impl Message for PolicyParameters<'_> {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.policy_session]
+    const NUM_HANDLES: usize = 1;
+    type Handles<'a>
+        = [NamedHandle<'a>; 1]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.policy_session.into()]
     }
 }
 impl Marshal for PolicyParameters<'_> {
@@ -1013,11 +1121,11 @@ impl Marshal for PolicyParameters<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for PolicyParameters<'a> {
     fn unmarshal_with_handles(
-        [policy_session]: Self::Handles,
+        [policy_session]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            policy_session,
+            policy_session: policy_session.handle,
             p_hash: Unmarshal::unmarshal(src)?,
         })
     }
@@ -1038,9 +1146,13 @@ impl Command for PolicyTransportSPDM<'_> {
     type Response<'a> = ();
 }
 impl Message for PolicyTransportSPDM<'_> {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.policy_session]
+    const NUM_HANDLES: usize = 1;
+    type Handles<'a>
+        = [NamedHandle<'a>; 1]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.policy_session.into()]
     }
 }
 impl Marshal for PolicyTransportSPDM<'_> {
@@ -1053,11 +1165,11 @@ impl Marshal for PolicyTransportSPDM<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for PolicyTransportSPDM<'a> {
     fn unmarshal_with_handles(
-        [policy_session]: Self::Handles,
+        [policy_session]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            policy_session,
+            policy_session: policy_session.handle,
             req_key_name: Unmarshal::unmarshal(src)?,
             tpm_key_name: Unmarshal::unmarshal(src)?,
         })

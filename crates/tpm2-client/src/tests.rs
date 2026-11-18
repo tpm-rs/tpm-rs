@@ -25,8 +25,9 @@ impl Connection for ErrorTpm {
 #[derive(Debug, PartialEq, Eq)]
 struct TestCommand(u32);
 impl Message for TestCommand {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 0;
+    type Handles<'a> = [NamedHandle<'a>; Self::NUM_HANDLES];
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -39,7 +40,7 @@ impl Marshal for TestCommand {
 }
 impl<'a> UnmarshalMessage<'a> for TestCommand {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         let val = u32::unmarshal(src)?;
@@ -190,8 +191,9 @@ impl FakeTpm {
 
 struct TestSessionsCommand();
 impl Message for TestSessionsCommand {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 0;
+    type Handles<'a> = [NamedHandle<'a>; Self::NUM_HANDLES];
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -203,7 +205,10 @@ impl Marshal for TestSessionsCommand {
     }
 }
 impl<'a> UnmarshalMessage<'a> for TestSessionsCommand {
-    fn unmarshal_with_handles([]: Self::Handles, _: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles(
+        []: Self::Handles<'a>,
+        _: &mut &'a [u8],
+    ) -> Result<Self, UnmarshalError> {
         Ok(Self())
     }
 }
@@ -244,4 +249,50 @@ fn test_response_session_fails_validation() {
         run_command_with_sessions(&cmd, session, &mut fake_tpm, &mut resp_buffer),
         Err(ClientError::Auth(validation_failure.err().unwrap()))
     );
+}
+
+#[test]
+fn test_marshal_named_handle_and_unmarshal_response_handle() {
+    use crate::protocol::{CMD_BUFFER_SIZE, marshal_command, unmarshal_response};
+    use tpm2::commands::{ReadPublic, responses};
+
+    // Marshal a command carrying a NamedHandle with a digest Name; the wire
+    // format must contain only the 4-byte handle value, not the Name bytes.
+    let raw_handle = Handle(0x8000_0042);
+    let name = Tpm2bName::new(&[0x00, 0x0b, 0x11, 0x22, 0x33, 0x44]).unwrap();
+    let cmd = ReadPublic {
+        object_handle: NamedHandle::new(raw_handle, name),
+    };
+    let mut cmd_buf = [0u8; CMD_BUFFER_SIZE];
+    let written = marshal_command(&cmd, &(), &mut cmd_buf);
+    assert_eq!(written, CommandHeader::MAX_SIZE + Handle::MAX_SIZE);
+
+    let mut slice = &cmd_buf[..written];
+    let header = CommandHeader::unmarshal(&mut slice).unwrap();
+    assert_eq!(header.tag, TpmiStCommandTag::NoSessions);
+    assert_eq!(header.size as usize, written);
+    assert_eq!(header.code, TpmCc::ReadPublic);
+    assert_eq!(Handle::unmarshal(&mut slice).unwrap(), raw_handle);
+    assert!(slice.is_empty());
+
+    // Unmarshal Load response and verify named_handle() pairs wire handle + Name.
+    let mut fake_tpm = FakeTpm::default();
+    fake_tpm.add_to_response(&raw_handle);
+    fake_tpm.add_to_response(&name);
+    let mut resp_buf = [0u8; RESP_BUFFER_SIZE];
+    let raw_resp = fake_tpm.transact(&[], &mut resp_buf).unwrap();
+    let load_rsp: responses::Load<'_> = unmarshal_response::<_, !>(&(), raw_resp).unwrap();
+    assert_eq!(load_rsp.object_handle, raw_handle);
+    assert_eq!(load_rsp.name, name);
+    assert_eq!(load_rsp.named_handle(), NamedHandle::new(raw_handle, name));
+
+    // Unmarshal HashSequenceStart response into SequenceHandle.
+    let seq_handle = Handle(0x8000_0099);
+    let mut fake_seq_tpm = FakeTpm::default();
+    fake_seq_tpm.add_to_response(&seq_handle);
+    let mut seq_buf = [0u8; RESP_BUFFER_SIZE];
+    let raw_seq_resp = fake_seq_tpm.transact(&[], &mut seq_buf).unwrap();
+    let seq_rsp: responses::HashSequenceStart =
+        unmarshal_response::<_, !>(&(), raw_seq_resp).unwrap();
+    assert_eq!(seq_rsp.sequence_handle, SequenceHandle(seq_handle));
 }

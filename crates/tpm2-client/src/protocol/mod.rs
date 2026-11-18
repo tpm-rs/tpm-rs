@@ -1,6 +1,5 @@
 use crate::ClientError;
 use crate::sessions::AuthorizationArea;
-use core::mem::size_of;
 use tpm2::errors::UnmarshalError;
 use tpm2::*;
 
@@ -34,8 +33,9 @@ pub const RESP_BUFFER_SIZE: usize = 4096;
 /// #     type Response<'a> = ();
 /// # }
 /// # impl Message for TooBig {
-/// #     type Handles = [Handle; 0];
-/// #     fn handles(&self) -> Self::Handles {
+/// #     const NUM_HANDLES: usize = 0;
+/// #     type Handles<'a> = [NamedHandle<'a>; Self::NUM_HANDLES];
+/// #     fn handles(&self) -> Self::Handles<'_> {
 /// #         []
 /// #     }
 /// # }
@@ -59,9 +59,8 @@ pub fn marshal_command<C: Command<MaxBuffer = [u8; N]>, const N: usize>(
     dst: &mut [u8; CMD_BUFFER_SIZE],
 ) -> usize {
     const {
-        // Note: size_of::<Handle>() == Handle::MAX_SIZE (4 bytes).
         let max_size = CommandHeader::MAX_SIZE
-            + size_of::<C::Handles>()
+            + C::NUM_HANDLES * Handle::MAX_SIZE
             + (u32::MAX_SIZE + 3 * TpmsAuthCommand::MAX_SIZE)
             + C::MAX_SIZE;
         assert!(max_size <= CMD_BUFFER_SIZE, "command is too big for buffer");
@@ -75,10 +74,10 @@ pub fn marshal_command<C: Command<MaxBuffer = [u8; N]>, const N: usize>(
     let mut bytes_written = CommandHeader::MAX_SIZE;
 
     // Marshal Handles
-    for handle in cmd.handles().as_ref() {
+    for named_handle in cmd.handles().as_ref() {
         let handle_buf: &mut [u8; Handle::MAX_SIZE];
         (handle_buf, remaining_buf) = remaining_buf.split_first_chunk_mut().unwrap();
-        bytes_written += handle.marshal(handle_buf);
+        bytes_written += named_handle.handle.marshal(handle_buf);
     }
 
     // Marshal Sessions
@@ -137,9 +136,9 @@ pub fn unmarshal_response<'a, R: UnmarshalMessage<'a>, E>(
     }
 
     // Unmarshal Handles
-    let mut rsp_handles = R::Handles::default();
+    let mut rsp_handles: R::Handles<'a> = Default::default();
     for handle in rsp_handles.as_mut() {
-        *handle = Handle::unmarshal(&mut remaining)?;
+        *handle = Handle::unmarshal(&mut remaining)?.into();
     }
 
     // If sessions are present, split `remaining` into parameters and sessions.
