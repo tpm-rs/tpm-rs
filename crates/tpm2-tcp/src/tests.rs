@@ -63,6 +63,36 @@ fn connection_speaks_the_simulator_protocol() {
 }
 
 #[test]
+fn transact_recovers_from_a_small_response_buffer() {
+    let tpm = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let platform = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let mut connection =
+        TcpConnection::connect(tpm.local_addr().unwrap(), platform.local_addr().unwrap()).unwrap();
+
+    // Answers two 1-byte commands with 3-byte responses.
+    let simulator = thread::spawn(move || {
+        let (mut tpm, _) = tpm.accept().unwrap();
+        for response in [[4, 5, 6], [7, 8, 9]] {
+            let _command: [u8; 10] = read_bytes(&mut tpm);
+            tpm.write_all(&[0, 0, 0, 3]).unwrap();
+            tpm.write_all(&response).unwrap();
+            tpm.write_all(&[0; 4]).unwrap();
+        }
+    });
+
+    let mut too_small = [0; 2];
+    let err = connection.transact(&[1], &mut too_small).unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::InvalidInput, "{err}");
+
+    // The connection is still in step with the simulator.
+    let mut response = [0; 3];
+    let response = connection.transact(&[1], &mut response).unwrap();
+    assert_eq!(response, [7, 8, 9]);
+
+    simulator.join().unwrap();
+}
+
+#[test]
 fn launch_needs_an_absolute_path() {
     let err = TcpSimulator::launch_in(Path::new("simulator"), Path::new("unused")).unwrap_err();
     assert_eq!(err.kind(), ErrorKind::InvalidInput, "{err}");

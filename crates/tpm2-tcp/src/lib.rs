@@ -379,18 +379,23 @@ impl Connection for TcpConnection {
 
         let mut resp_hdr: SendCommandResponseHeader = SendCommandResponseHeader::default();
         self.tpm_tcp.read_exact(resp_hdr.as_mut_bytes())?;
-        if resp_hdr.length.get() as usize > response.len() {
+        let resp_len = resp_hdr.length.get() as usize;
+        if resp_len > response.len() {
+            // Skip the response and its terminator, to stay in step with the
+            // simulator.
+            let unread = (resp_len + size_of::<U32>()) as u64;
+            io::copy(&mut (&self.tpm_tcp).take(unread), &mut io::sink())?;
             return Err(Error::new(
                 ErrorKind::InvalidInput,
                 "response buffer too small",
             ));
         }
-        self.tpm_tcp
-            .read_exact(&mut response[..resp_hdr.length.get() as usize])?;
+        let response = &mut response[..resp_len];
+        self.tpm_tcp.read_exact(response)?;
 
         // The TPM simulator completes each command with a u32 `0`.
         Self::check_response_end(&mut self.tpm_tcp)?;
-        Ok(&mut response[..resp_hdr.length.get() as usize])
+        Ok(response)
     }
 }
 
