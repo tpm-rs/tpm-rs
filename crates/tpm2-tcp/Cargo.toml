@@ -1,0 +1,19 @@
+[package]
+name = "tpm2-tcp"
+description = "TCP connection to the TCG TPM 2.0 Simulator"
+publish = false
+
+# Inherit from Workspace Settings
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+readme.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories = ["development-tools::testing"]
+
+[dependencies]
+tpm2 = { workspace = true }
+zerocopy = { version = "0.8", features = ["derive"] }

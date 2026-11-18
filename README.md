@@ -13,7 +13,7 @@ TPM 2.0 Implementation in Rust, consisting of:
   - marshalling and unmarshalling code
   - cryptographic interfaces
 - [`tpm2-client`](./crates/tpm2-client/): client-side code for running TPM commands
-  - Includes bindings to the TCP-based simulator.
+- [`tpm2-tcp`](./crates/tpm2-tcp/): TCP connection to the TCG TPM simulator
 - [`tpm2-impl`](./crates/tpm2-impl/): engine code implementing the TPM's core logic
   - Currently _quite_ incomplete.
 - [`tpm2-rustcrypto`](./crates/tpm2-rustcrypto/): [RustCrypto] cryptography backend for `tpm2`

@@ -8,6 +8,7 @@ members = [
     "crates/tpm2-impl",
     "crates/tpm2-openssl",
     "crates/tpm2-rustcrypto",
+    "crates/tpm2-tcp",
     "testing/crypto",
 ]
 # tpm2-boringssl requires BoringSSL to be built first (see its README), so it is
@@ -18,6 +19,7 @@ default-members = [
     "crates/tpm2-impl",
     "crates/tpm2-openssl",
     "crates/tpm2-rustcrypto",
+    "crates/tpm2-tcp",
     "testing/crypto",
 ]
 
@@ -43,6 +45,7 @@ bitflags = "2.13"
 
 # Workspace crates used by other workspace crates.
 tpm2 = { path = "crates/tpm2", version = "0.2.0" }
+tpm2-tcp = { path = "crates/tpm2-tcp", version = "0.2.0" }
 
 [profile.release]
 lto = true        # default is lto = false

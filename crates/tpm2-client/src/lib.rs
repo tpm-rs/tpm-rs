@@ -6,15 +6,18 @@
 //!
 //! This client crate provides:
 //!   - A [`Connection`] trait for communicating with a TPM
-//!   - Various structs implementing [`Connection`] for specific transports.
 //!   - High-level abstractions for building and sending commands over the
 //!     interface.
+//!
+//! Structs implementing [`Connection`] for specific transports live in their
+//! own crates, such as `tpm2-tcp` for the TCP-based TPM simulator.
 //!
 //! ## Example
 //!
 //! ```rust,no_run
-//! use tpm2_client::{run_command, connection::tcp::TcpConnection, protocol::RESP_BUFFER_SIZE};
+//! use tpm2_client::{run_command, protocol::RESP_BUFFER_SIZE};
 //! use tpm2::commands::GetRandom;
+//! use tpm2_tcp::TcpConnection;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let mut tpm = TcpConnection::connect("127.0.0.1", None, None)?;

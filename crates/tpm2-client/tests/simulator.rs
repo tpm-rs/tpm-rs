@@ -14,8 +14,8 @@ use std::path::PathBuf;
 use tempfile::tempdir;
 use tpm2::TpmSu;
 use tpm2::commands::Startup;
-use tpm2_client::connection::tcp::TcpSimulator;
 use tpm2_client::run_command;
+use tpm2_tcp::TcpSimulator;
 
 // Include the command-specific tests
 mod commands;

@@ -1,25 +1,26 @@
 //! A connection to the TCG TPM 2.0 Simulator over TCP.
 //!
-//! This module provides two types for communicating with the TPM over TCP:
+//! This crate provides two types for communicating with the TPM over TCP:
 //!
 //! - The [`TcpConnection`] struct, which implements the [`Connection`] trait.
 //! - A [`TcpSimulator`] struct that manages the lifetime of a TPM simulator
 //!   process and a [`TcpConnection`] to it.
-#![cfg(feature = "connection-tcp")]
-extern crate std;
+#![forbid(unsafe_code)]
 
 use std::ffi::OsStr;
-use std::format;
 use std::io::{self, Error, ErrorKind, IoSlice, Read, Write};
 use std::net::TcpStream;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
-use std::vec::Vec;
 
+use tpm2::Connection;
 use zerocopy::network_endian::U32;
 use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
-use crate::connection::Connection;
+/// Compiles the examples in the README as doctests.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;
 
 /// The default TPM port of the TPM simulator
 const SIMULATOR_DEFAULT_TPM_PORT: u16 = 2321;
