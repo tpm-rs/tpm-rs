@@ -5,7 +5,7 @@ use core::ffi::CStr;
 use super::{
     CryptoError, SignatureBuffer,
     backend::{PrivateKey, Rsa, RsaKey},
-    left_pad_be, match_rsa_bits,
+    match_rsa_bits,
 };
 use crate::{
     Tpm2bPrivateKeyRsa, Tpm2bPublicKeyRsa, TpmiAlgHash, TpmiRsaKeyBits, TpmtRsaDecrypt,
@@ -159,7 +159,7 @@ impl<R: Rsa> RsaPublicKey<R> {
         };
         match_rsa_bits!(match bits {
             TpmiRsaKeyBits::$Alg => {
-                let Some(m) = left_pad_be(modulus.as_slice()) else {
+                let Ok(m) = modulus.as_slice().try_into() else {
                     return Ok(None);
                 };
                 Ok(R::$Alg::load_public(exponent, &m)?.map(Self::$Alg))
@@ -274,7 +274,7 @@ impl<R: Rsa> RsaPrivateKey<R> {
     ) -> Result<Option<Self>, CryptoError> {
         match_rsa_bits!(match public {
             RsaPublicKey::$Alg(pub_k) => {
-                let Some(p) = left_pad_be(prime_p.as_slice()) else {
+                let Ok(p) = prime_p.as_slice().try_into() else {
                     return Ok(None);
                 };
                 Ok(R::$Alg::load(pub_k, &p)?.map(Self::$Alg))

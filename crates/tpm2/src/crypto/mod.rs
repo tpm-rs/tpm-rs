@@ -130,9 +130,9 @@ pub trait Crypto:
 /// Left-pads a non-empty big-endian integer slice (`1 <= src.len() <= N`) with
 /// `0x00` bytes into an `N`-byte array, returning `None` if `src` is empty or
 /// longer than `N`.
-#[cfg(any(feature = "rsa", feature = "ecc"))]
-// Unused if `ecc` is enabled without `rsa` or any Weierstrass curve.
-#[cfg_attr(not(feature = "rsa"), allow(dead_code))]
+#[cfg(feature = "ecc")]
+// Unused if `ecc` is enabled without any Weierstrass curve.
+#[allow(dead_code)]
 pub(crate) fn left_pad_be<const N: usize>(src: &[u8]) -> Option<[u8; N]> {
     if src.is_empty() || src.len() > N {
         return None;

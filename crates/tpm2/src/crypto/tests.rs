@@ -1493,7 +1493,7 @@ fn rsa_key_roundtrip_and_encrypt_schemes() {
     // Unsupported RSA key size (`Rsa2048 = !` on TestBackend) returns CryptoError::Unsupported.
     #[cfg(feature = "rsa2048")]
     {
-        let dummy_mod = crate::Tpm2bPublicKeyRsa::new(&[0x81; 128]).unwrap();
+        let dummy_mod = crate::Tpm2bPublicKeyRsa::new(&[0x81; 256]).unwrap();
         assert_eq!(
             RsaPublicKey::<TestBackend>::load(TpmiRsaKeyBits::Rsa2048, 0, dummy_mod).err(),
             Some(CryptoError::Unsupported)
