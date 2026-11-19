@@ -22,9 +22,9 @@ use tpm2::crypto::hash;
 use tpm2::errors::{Position, TpmRc};
 use tpm2::*;
 use tpm2_client::ClientError::Tpm;
-use tpm2_client::connection::tcp::{SimulatorPlatformSignal, TcpSimulator};
 use tpm2_client::sessions::{AuthorizationArea, PasswordSession, PolicyDigest, PolicySession};
 use tpm2_client::{CryptoBackend, nv_name, run_command, run_command_with_sessions};
+use tpm2_tcp::{SimulatorPlatformSignal, TcpSimulator};
 
 use crate::{ALG, DIGEST_SIZE, NV_DATA_SIZE, NV_INDEX, RESP_BUFFER_SIZE, get_lockout_counter, nonce_unchanged, nv_public, read_nv_index, start, start_hmac_session, stop, tpm_result, write_nv_index};
 
@@ -57,7 +57,7 @@ fn try_start_policy_session(simulator: &mut TcpSimulator, alg: TpmiAlgHash) -> R
         symmetric: None,
         auth_hash: alg,
     };
-    let start_auth_session_rsp = match run_command(&start_auth_session, simulator.connection_mut(), resp_buffer) {
+    let start_auth_session_rsp = match run_command(&start_auth_session, &mut simulator.connection, resp_buffer) {
         Ok(rsp) => rsp,
         Err(Tpm(rc)) => return Err(rc),
         Err(e) => panic!("unexpected error: {e:?}"),
@@ -79,7 +79,7 @@ fn assert_policy_digest(simulator: &mut TcpSimulator, session: &PolicySession) {
     let policy_get_digest = PolicyGetDigest {
         policy_session: session.handle(),
     };
-    let policy_get_digest_rsp = run_command(&policy_get_digest, simulator.connection_mut(), resp_buffer).unwrap();
+    let policy_get_digest_rsp = run_command(&policy_get_digest, &mut simulator.connection, resp_buffer).unwrap();
     assert_eq!(policy_get_digest_rsp.policy_digest, session.policy().digest());
 }
 
@@ -100,7 +100,7 @@ fn run_policy_command<C: Command<MaxBuffer = [u8; N]>, const N: usize>(
 ) -> Result<(), TpmRc> {
     let resp_buffer: &mut [u8; RESP_BUFFER_SIZE] = &mut [0u8; RESP_BUFFER_SIZE];
 
-    let rsp = tpm_result(run_command_with_sessions(cmd, &[], cmd_sessions, simulator.connection_mut(), resp_buffer));
+    let rsp = tpm_result(run_command_with_sessions(cmd, &[], cmd_sessions, &mut simulator.connection, resp_buffer));
     if rsp.is_ok() {
         update(session);
     }
@@ -121,14 +121,14 @@ fn define_and_write_nv_index(simulator: &mut TcpSimulator, nv_public: &mut TpmsN
         auth_handle: Handle::RH_OWNER,
         nv_index: nv_public.nv_index,
     };
-    let _ = run_command_with_sessions(&nv_undefine_space, &[], &mut owner, simulator.connection_mut(), resp_buffer);
+    let _ = run_command_with_sessions(&nv_undefine_space, &[], &mut owner, &mut simulator.connection, resp_buffer);
 
     let nv_define_space = NVDefineSpace {
         auth_handle: Handle::RH_OWNER,
         auth: Tpm2bAuth::default(),
         public_info: Tpm2b(*nv_public),
     };
-    assert!(run_command_with_sessions(&nv_define_space, &[], &mut owner, simulator.connection_mut(), resp_buffer).is_ok());
+    assert!(run_command_with_sessions(&nv_define_space, &[], &mut owner, &mut simulator.connection, resp_buffer).is_ok());
 
     assert!(write_nv_index(simulator, nv_public, Handle::RH_OWNER, &mut owner).is_ok());
 }
@@ -221,7 +221,7 @@ fn read_pcr_digest(simulator: &mut TcpSimulator, pcr: Handle) -> [u8; DIGEST_SIZ
     let pcr_read = PCRRead {
         pcr_selection_in: pcr_selection(pcr),
     };
-    let pcr_read_rsp = run_command(&pcr_read, simulator.connection_mut(), resp_buffer).unwrap();
+    let pcr_read_rsp = run_command(&pcr_read, &mut simulator.connection, resp_buffer).unwrap();
     assert_eq!(pcr_read_rsp.pcr_selection_out, pcr_selection(pcr));
 
     let mut out = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
@@ -238,7 +238,7 @@ fn extend_pcr(simulator: &mut TcpSimulator, pcr: Handle, session: &mut impl Auth
         pcr_handle: pcr,
         digests: TpmlDigestValues::new(&[TpmtHa::Sha256(&[42u8; DIGEST_SIZE])]).unwrap(),
     };
-    tpm_result(run_command_with_sessions(&pcr_extend, &[], session, simulator.connection_mut(), resp_buffer))
+    tpm_result(run_command_with_sessions(&pcr_extend, &[], session, &mut simulator.connection, resp_buffer))
 }
 
 /// Like `read_nv_index()` (on the index itself), but retries once on
@@ -263,7 +263,7 @@ fn change_nv_auth(simulator: &mut TcpSimulator, nv_public: &TpmsNvPublic, sessio
         nv_index: nv_public.nv_index,
         new_auth: Tpm2bAuth::new(&[42u8; DIGEST_SIZE]).unwrap(),
     };
-    tpm_result(run_command_with_sessions(&nv_change_auth, &[Some(name)], session, simulator.connection_mut(), resp_buffer))
+    tpm_result(run_command_with_sessions(&nv_change_auth, &[Some(name)], session, &mut simulator.connection, resp_buffer))
 }
 
 //
@@ -387,9 +387,9 @@ fn failed_use_keeps_policy() {
         offset: NV_DATA_SIZE / 2,
     };
     // Unlike OWNER authorisation, which is exempt from DA, this might need to wait for its startup.
-    let mut nv_read_rsp = tpm_result(run_command_with_sessions(&nv_read, &[Some(name), Some(name)], &mut session, simulator.connection_mut(), resp_buffer));
+    let mut nv_read_rsp = tpm_result(run_command_with_sessions(&nv_read, &[Some(name), Some(name)], &mut session, &mut simulator.connection, resp_buffer));
     if nv_read_rsp == Err(TpmRc::RETRY) {
-        nv_read_rsp = tpm_result(run_command_with_sessions(&nv_read, &[Some(name), Some(name)], &mut session, simulator.connection_mut(), resp_buffer));
+        nv_read_rsp = tpm_result(run_command_with_sessions(&nv_read, &[Some(name), Some(name)], &mut session, &mut simulator.connection, resp_buffer));
     }
     assert_eq!(nv_read_rsp, Err(TpmRc::NV_RANGE));
     // Failure doesn't update the nonce, nor reset the policy.
@@ -580,7 +580,7 @@ fn policy_digest_algorithm(index_alg: TpmiAlgHash, session_alg: TpmiAlgHash) {
         Ok(session) => session,
         Err(rc) if rc.to_fmt1().is_some_and(|(fmt1, _)| fmt1 == TpmRc::HASH) => {
             println!("Skipped: the TPM doesn't implement {session_alg:?}.");
-            assert!(simulator.stop_nicely().is_ok());
+            assert!(simulator.stop().is_ok());
             return;
         }
         Err(rc) => panic!("unexpected error: {rc:?}"),
@@ -681,27 +681,27 @@ fn timeout_expires(after: TimeoutEvent) {
                 save_handle: session.handle(),
             };
             let context_buffer: &mut [u8; RESP_BUFFER_SIZE] = &mut [0u8; RESP_BUFFER_SIZE];
-            let context_save_rsp = run_command(&context_save, simulator.connection_mut(), context_buffer).unwrap();
+            let context_save_rsp = run_command(&context_save, &mut simulator.connection, context_buffer).unwrap();
 
             let shutdown = Shutdown {
                 shutdown_type: TpmSu::State,
             };
-            assert!(run_command(&shutdown, simulator.connection_mut(), resp_buffer).is_ok());
+            assert!(run_command(&shutdown, &mut simulator.connection, resp_buffer).is_ok());
 
-            assert!(simulator.connection_mut().reinit().is_ok());
+            assert!(simulator.connection.reinit().is_ok());
 
             let startup = Startup {
                 startup_type: TpmSu::State,
             };
-            assert!(run_command(&startup, simulator.connection_mut(), resp_buffer).is_ok());
+            assert!(run_command(&startup, &mut simulator.connection, resp_buffer).is_ok());
 
             let context_load = ContextLoad {
                 context: context_save_rsp.context,
             };
-            assert!(run_command(&context_load, simulator.connection_mut(), resp_buffer).is_ok());
+            assert!(run_command(&context_load, &mut simulator.connection, resp_buffer).is_ok());
         }
         TimeoutEvent::TimerStopped => {
-            assert!(simulator.connection_mut().platform_signal(SimulatorPlatformSignal::Restart).is_ok());
+            assert!(simulator.connection.platform_signal(SimulatorPlatformSignal::Restart).is_ok());
         }
     }
 
@@ -738,7 +738,7 @@ fn use_resets_timeout() {
 
     // Pass the old timeout, and start a new epoch.
     sleep(Duration::from_secs(2));
-    assert!(simulator.connection_mut().platform_signal(SimulatorPlatformSignal::Restart).is_ok());
+    assert!(simulator.connection.platform_signal(SimulatorPlatformSignal::Restart).is_ok());
 
     // Without an expiration, so that this only depends on the old timeout
     // having been reset. Without a timeout, the epoch isn't checked.

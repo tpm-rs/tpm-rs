@@ -29,7 +29,7 @@ fn minimum_viable_test_case(is_loaded_session_test: bool) {
         let context_save = ContextSave {
             save_handle: session.handle(),
         };
-        assert!(run_command(&context_save, simulator.connection_mut(), resp_buffer).is_ok());
+        assert!(run_command(&context_save, &mut simulator.connection, resp_buffer).is_ok());
 
         // This command doesn't take a session.
         assert!(nonce_unchanged(&mut last_nonce_bytes, &session.nonce_tpm()) == true);
@@ -193,7 +193,7 @@ fn load_stale_context() {
         save_handle: session.handle(),
     };
     let context_buffer: &mut [u8; RESP_BUFFER_SIZE] = &mut [0u8; RESP_BUFFER_SIZE];
-    let context_save_rsp = run_command(&context_save, simulator.connection_mut(), context_buffer).unwrap();
+    let context_save_rsp = run_command(&context_save, &mut simulator.connection, context_buffer).unwrap();
 
     // This command doesn't take a session.
     assert!(nonce_unchanged(&mut last_nonce_bytes, &session.nonce_tpm()) == true);
@@ -201,7 +201,7 @@ fn load_stale_context() {
     let context_load = ContextLoad {
         context: context_save_rsp.context,
     };
-    assert!(run_command(&context_load, simulator.connection_mut(), resp_buffer).is_ok());
+    assert!(run_command(&context_load, &mut simulator.connection, resp_buffer).is_ok());
 
     // This command doesn't take a session.
     assert!(nonce_unchanged(&mut last_nonce_bytes, &session.nonce_tpm()) == true);
@@ -212,7 +212,7 @@ fn load_stale_context() {
     let context_load = ContextLoad {
         context: context_save_rsp.context,
     };
-    assert!(run_command(&context_load, simulator.connection_mut(), resp_buffer).is_err());
+    assert!(run_command(&context_load, &mut simulator.connection, resp_buffer).is_err());
 
     // This command doesn't take a session, and failures don't update the nonce anyways.
     assert!(nonce_unchanged(&mut last_nonce_bytes, &session.nonce_tpm()) == true);

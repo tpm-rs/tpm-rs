@@ -21,6 +21,7 @@ rustcrypto = ["dep:tpm2-rustcrypto"]
 
 [dependencies]
 tpm2 = { workspace = true }
+tpm2-tcp = { workspace = true }
 tpm2-rustcrypto = { path = "../tpm2-rustcrypto", optional = true }
 
 [dev-dependencies]

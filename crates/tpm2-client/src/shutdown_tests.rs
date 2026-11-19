@@ -27,7 +27,7 @@ fn only_resume_maintains_internal_tracking(is_resume_test: bool) {
         save_handle: session.handle(),
     };
     let context_buffer: &mut [u8; RESP_BUFFER_SIZE] = &mut [0u8; RESP_BUFFER_SIZE];
-    let context_save_rsp = run_command(&context_save, simulator.connection_mut(), context_buffer).unwrap();
+    let context_save_rsp = run_command(&context_save, &mut simulator.connection, context_buffer).unwrap();
 
     // This command doesn't take a session.
     assert!(nonce_unchanged(&mut last_nonce_bytes, &session.nonce_tpm()) == true);
@@ -41,17 +41,17 @@ fn only_resume_maintains_internal_tracking(is_resume_test: bool) {
     let shutdown = Shutdown {
         shutdown_type,
     };
-    assert!(run_command(&shutdown, simulator.connection_mut(), resp_buffer).is_ok());
+    assert!(run_command(&shutdown, &mut simulator.connection, resp_buffer).is_ok());
 
     // This command doesn't take a session.
     assert!(nonce_unchanged(&mut last_nonce_bytes, &session.nonce_tpm()) == true);
 
-    assert!(simulator.connection_mut().reinit().is_ok());
+    assert!(simulator.connection.reinit().is_ok());
 
     let startup = Startup {
         startup_type: shutdown_type,
     };
-    assert!(run_command(&startup, simulator.connection_mut(), resp_buffer).is_ok());
+    assert!(run_command(&startup, &mut simulator.connection, resp_buffer).is_ok());
 
     // This command doesn't take a session.
     assert!(nonce_unchanged(&mut last_nonce_bytes, &session.nonce_tpm()) == true);
@@ -59,7 +59,7 @@ fn only_resume_maintains_internal_tracking(is_resume_test: bool) {
     let context_load = ContextLoad {
         context: context_save_rsp.context,
     };
-    let context_load_rsp = run_command(&context_load, simulator.connection_mut(), resp_buffer);
+    let context_load_rsp = run_command(&context_load, &mut simulator.connection, resp_buffer);
     if is_resume_test {
         assert!(context_load_rsp.is_ok());
     } else {
@@ -85,17 +85,17 @@ fn active_sessions_are_never_saved() {
     let shutdown = Shutdown {
         shutdown_type: TpmSu::State,
     };
-    assert!(run_command(&shutdown, simulator.connection_mut(), resp_buffer).is_ok());
+    assert!(run_command(&shutdown, &mut simulator.connection, resp_buffer).is_ok());
 
     // This command doesn't take a session.
     assert!(nonce_unchanged(&mut last_nonce_bytes, &session.nonce_tpm()) == true);
 
-    assert!(simulator.connection_mut().reinit().is_ok());
+    assert!(simulator.connection.reinit().is_ok());
 
     let startup = Startup {
         startup_type: TpmSu::State,
     };
-    assert!(run_command(&startup, simulator.connection_mut(), resp_buffer).is_ok());
+    assert!(run_command(&startup, &mut simulator.connection, resp_buffer).is_ok());
 
     // This command doesn't take a session.
     assert!(nonce_unchanged(&mut last_nonce_bytes, &session.nonce_tpm()) == true);

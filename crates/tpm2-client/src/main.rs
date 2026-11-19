@@ -27,9 +27,8 @@ mod shutdown_tests;
 mod policy_tests;
 
 use std::io;
-use std::net::Ipv4Addr;
+use std::path::{Path, PathBuf};
 
-use tempfile::tempdir;
 use tpm2::commands::{
     FlushContext, GetCapability, NVDefineSpace, NVRead, NVUndefineSpace, NVWrite,
     StartAuthSession, Startup,
@@ -38,10 +37,10 @@ use tpm2::errors::TpmRc;
 use tpm2::*;
 use tpm2_client::ClientError;
 use tpm2_client::ClientError::Tpm;
-use tpm2_client::connection::tcp::TcpSimulator;
 use tpm2_client::protocol::RESP_BUFFER_SIZE;
 use tpm2_client::sessions::{AuthorizationArea, HmacSession};
 use tpm2_client::{CryptoBackend, nv_name, run_command, run_command_with_sessions};
+use tpm2_tcp::TcpSimulator;
 
 pub const ALG: TpmiAlgHash = TpmiAlgHash::Sha256;
 pub const DIGEST_SIZE: usize = ALG.digest_size();
@@ -59,26 +58,20 @@ const ENV_VAR_SIMULATOR_PROGRAM: &str = "SIMULATOR_BIN";
 /// ```shell
 /// SIMULATOR_BIN="/my/custom/simulator" cargo test
 /// ```
-fn get_simulator_path() -> String {
+fn get_simulator_path() -> PathBuf {
     if let Ok(s) = std::env::var(ENV_VAR_SIMULATOR_PROGRAM) {
-        return s;
+        return PathBuf::from(s);
     }
-    if std::path::Path::new("/tpm2-simulator").exists() {
-        return "/tpm2-simulator".to_string();
+    if let path = Path::new("/tpm2-simulator") && path.exists() {
+        return path.to_path_buf();
     }
     panic!("TPM Simulator not found!");
 }
 
 /// Convenience function to spawn a TPM simulator and establish a TCP connection.
 pub fn spawn_simulator_and_connect() -> io::Result<TcpSimulator> {
-    let tempdir = tempdir()?;
-    let mut simulator = TcpSimulator::new(
-        get_simulator_path(),
-        &["--pick_ports"],
-        tempdir.keep(), // cwd
-        &Ipv4Addr::LOCALHOST.to_string(),
-    )?;
-    simulator.connection_mut().reinit()?;
+    let mut simulator = TcpSimulator::launch(get_simulator_path().as_path())?;
+    simulator.connection.reinit()?;
 
     Ok(simulator)
 }
@@ -97,7 +90,7 @@ pub fn start(name: &str) -> TcpSimulator {
     let startup = Startup {
         startup_type: TpmSu::Clear,
     };
-    assert!(run_command(&startup, simulator.connection_mut(), resp_buffer).is_ok());
+    assert!(run_command(&startup, &mut simulator.connection, resp_buffer).is_ok());
 
     simulator
 }
@@ -114,9 +107,9 @@ pub fn stop(mut simulator: TcpSimulator, session_handle: Handle) -> Result<(), T
     let flush_context = FlushContext {
         flush_handle: session_handle,
     };
-    let flush_context_rsp = tpm_result(run_command(&flush_context, simulator.connection_mut(), resp_buffer));
+    let flush_context_rsp = tpm_result(run_command(&flush_context, &mut simulator.connection, resp_buffer));
 
-    assert!(simulator.stop_nicely().is_ok());
+    assert!(simulator.stop().is_ok());
 
     flush_context_rsp
 }
@@ -134,7 +127,7 @@ pub fn start_hmac_session(simulator: &mut TcpSimulator) -> HmacSession {
         symmetric: None,
         auth_hash: ALG,
     };
-    let start_auth_session_rsp = run_command(&start_auth_session, simulator.connection_mut(), resp_buffer).unwrap();
+    let start_auth_session_rsp = run_command(&start_auth_session, &mut simulator.connection, resp_buffer).unwrap();
 
     HmacSession::new(start_auth_session_rsp.session_handle, start_auth_session.auth_hash, start_auth_session.nonce_caller, start_auth_session_rsp.nonce_tpm)
 }
@@ -176,7 +169,7 @@ pub fn get_lockout_counter(simulator: &mut TcpSimulator) -> u32 {
         property: TpmPt::LockoutCounter.into(),
         property_count: 1,
     };
-    let get_capability_rsp = run_command(&get_capability, simulator.connection_mut(), resp_buffer).unwrap();
+    let get_capability_rsp = run_command(&get_capability, &mut simulator.connection, resp_buffer).unwrap();
 
     let TpmsCapabilityData::TpmProperties(properties) = get_capability_rsp.capability_data else {
         panic!("Unexpected capability data: {:?}", get_capability_rsp.capability_data);
@@ -220,7 +213,7 @@ pub fn define_nv_index(simulator: &mut TcpSimulator, nv_public: &TpmsNvPublic, a
         auth_handle: Handle::RH_OWNER,
         nv_index: nv_public.nv_index,
     };
-    let _ = run_command_with_sessions(&nv_undefine_space, &nv_names(nv_public, Handle::RH_OWNER, &mut name_buf), session, simulator.connection_mut(), resp_buffer);
+    let _ = run_command_with_sessions(&nv_undefine_space, &nv_names(nv_public, Handle::RH_OWNER, &mut name_buf), session, &mut simulator.connection, resp_buffer);
 
     // Reload the nonce, don't assert anything.
     nonce_unchanged(last_nonce_bytes, &session.nonce_tpm());
@@ -230,7 +223,7 @@ pub fn define_nv_index(simulator: &mut TcpSimulator, nv_public: &TpmsNvPublic, a
         auth,
         public_info: Tpm2b(*nv_public),
     };
-    assert!(run_command_with_sessions(&nv_define_space, &[], session, simulator.connection_mut(), resp_buffer).is_ok());
+    assert!(run_command_with_sessions(&nv_define_space, &[], session, &mut simulator.connection, resp_buffer).is_ok());
 
     assert!(nonce_unchanged(last_nonce_bytes, &session.nonce_tpm()) == false);
 }
@@ -248,7 +241,7 @@ pub fn write_nv_index(simulator: &mut TcpSimulator, nv_public: &mut TpmsNvPublic
         data: Tpm2bSized::new(&[42u8; NV_DATA_SIZE as usize]).unwrap(),
         offset: 0,
     };
-    let nv_write_rsp = tpm_result(run_command_with_sessions(&nv_write, &nv_names(nv_public, auth_handle, &mut name_buf), session, simulator.connection_mut(), resp_buffer));
+    let nv_write_rsp = tpm_result(run_command_with_sessions(&nv_write, &nv_names(nv_public, auth_handle, &mut name_buf), session, &mut simulator.connection, resp_buffer));
     if nv_write_rsp.is_ok() {
         nv_public.attributes |= TpmaNv::WRITTEN;
     }
@@ -267,7 +260,7 @@ pub fn read_nv_index(simulator: &mut TcpSimulator, nv_public: &TpmsNvPublic, aut
         size: NV_DATA_SIZE,
         offset: 0,
     };
-    tpm_result(run_command_with_sessions(&nv_read, &nv_names(nv_public, auth_handle, &mut name_buf), session, simulator.connection_mut(), resp_buffer))
+    tpm_result(run_command_with_sessions(&nv_read, &nv_names(nv_public, auth_handle, &mut name_buf), session, &mut simulator.connection, resp_buffer))
 }
 
 fn main() {
