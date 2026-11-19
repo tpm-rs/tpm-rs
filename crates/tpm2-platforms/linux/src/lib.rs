@@ -27,6 +27,12 @@ compile_error!("Features 'crux' and 'bssl' are mutually exclusive.");
 #[cfg(feature = "ntc2-vendor-commands")]
 pub mod ntc2;
 
+pub mod firmware;
+pub use firmware::{
+    REFERENCE_FIRMWARE_HASH, REFERENCE_FIRMWARE_MAX_SVN, REFERENCE_FIRMWARE_SVN,
+    reference_firmware_secret, reference_firmware_svn_secret,
+};
+
 /// Whether [`LinuxPlatform`] implements the Nuvoton `NTC2_PreConfig`, `NTC2_LockPreConfig` and
 /// `NTC2_GetConfig` vendor commands of `ibmswtpm2` (the `ntc2-vendor-commands` feature) in
 /// addition to the engine's `TPM2_Vendor_TCG_Test`.
@@ -42,10 +48,7 @@ use tpm2::crypto::{Crypto, CryptoError, Random, Rng};
 #[cfg(feature = "ntc2-vendor-commands")]
 use tpm2::errors::TpmRc;
 use tpm2::platform::SecureChannel;
-use tpm2::platform::firmware::{
-    FirmwareSecretUnavailable, REFERENCE_FIRMWARE_HASH, REFERENCE_FIRMWARE_MAX_SVN,
-    REFERENCE_FIRMWARE_SVN, reference_firmware_secret, reference_firmware_svn_secret,
-};
+use tpm2::platform::firmware::FirmwareSecretUnavailable;
 use tpm2_engine::storage::IndexState;
 use tpm2_engine::timer::TpmTimer;
 use tpm2_engine::{Firmware, Nv, Platform, PlatformInfo, VendorCommand};

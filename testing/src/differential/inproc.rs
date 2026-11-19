@@ -52,7 +52,7 @@ use super::Implementation;
 use super::protocol::FirmwareSetting;
 use super::server::{self, Backend, Signal};
 use crate::seed::ReferenceSeed;
-use tpm2::platform::firmware::{REFERENCE_FIRMWARE_HASH, REFERENCE_FIRMWARE_SVN};
+use tpm2_platform_linux::{REFERENCE_FIRMWARE_HASH, REFERENCE_FIRMWARE_SVN};
 
 /// The entry points of one linked C reference (see the reference patches
 /// `harness-difftest-entry-points.patch`).

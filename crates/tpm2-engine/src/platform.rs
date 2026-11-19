@@ -53,7 +53,7 @@ pub struct Firmware {
     /// vendor-specific firmware version.
     pub version_2: u32,
     /// The hash identifying the firmware image (the reference platform derives its dummy
-    /// Firmware Secret from it, [`tpm2::platform::firmware::reference_firmware_secret`]).
+    /// Firmware Secret from it, `tpm2_platform_linux::reference_firmware_secret`).
     pub hash: u32,
     /// `TPM_PT_FIRMWARE_SVN` (TPM 2.0 Part 2: "the current Security Version Number of the TPM
     /// firmware"). SVN-limited hierarchies of a larger SVN are unavailable

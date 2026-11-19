@@ -12,12 +12,15 @@ use common::{
 use tpm2::commands::{CreatePrimary, GetCapability, Hash};
 use tpm2::crypto::kdfa_bits;
 use tpm2::errors::{Position, TpmRc};
-use tpm2::platform::firmware::{REFERENCE_FIRMWARE_MAX_SVN, REFERENCE_FIRMWARE_SVN};
 use tpm2::{
     Handle, Tpm2b, Tpm2bMaxBuffer, TpmCap, TpmEccCurve, TpmPt, TpmaObject, TpmiAlgHash,
     TpmsCapabilityData, TpmsEccParms, TpmsEccPoint, TpmtPublic,
 };
 use tpm2_engine::Firmware;
+
+/// The firmware SVN and maximum SVN of the TCG reference platform (`currentSvn`, `MAX_SVN`).
+const REFERENCE_FIRMWARE_SVN: u16 = 10;
+const REFERENCE_FIRMWARE_MAX_SVN: u16 = 255;
 
 /// The context integrity hash of this build (SHA-512, or SHA-384 without SHA-512).
 fn context_hash() -> TpmiAlgHash {

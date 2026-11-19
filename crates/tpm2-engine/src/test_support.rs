@@ -426,10 +426,7 @@ where
         if !self.limited_hierarchies {
             return Err(tpm2::platform::FirmwareSecretUnavailable);
         }
-        Ok(tpm2::platform::firmware::reference_firmware_secret(
-            self.info.firmware.hash,
-            out,
-        ))
+        Ok(dummy_firmware_secret(self.info.firmware.hash, out))
     }
 
     fn firmware_svn_secret(
@@ -440,7 +437,7 @@ where
         if !self.limited_hierarchies {
             return Err(tpm2::platform::FirmwareSecretUnavailable);
         }
-        tpm2::platform::firmware::reference_firmware_svn_secret(self.info.firmware.svn, svn, out)
+        dummy_firmware_svn_secret(self.info.firmware.svn, svn, out)
     }
 
     fn secure_channel(&self) -> Option<&(dyn SecureChannel + Sync)> {
@@ -451,3 +448,32 @@ where
 use crate::storage::IndexState;
 use core::marker::PhantomData;
 use tpm2::platform::SecureChannel;
+
+/// The *insecure* dummy Firmware Secret of the test platform (that of the TCG reference platform,
+/// `_plat__GetTpmFirmwareSecret`): the firmware `hash` repeated in little-endian byte order,
+/// filling `out`.
+fn dummy_firmware_secret(hash: u32, out: &mut [u8]) -> usize {
+    let pattern = hash.to_le_bytes();
+    for (i, byte) in out.iter_mut().enumerate() {
+        *byte = pattern[i % pattern.len()];
+    }
+    out.len()
+}
+
+/// The *insecure* dummy Firmware SVN Secret of `svn` of the test platform (that of the TCG
+/// reference platform, `_plat__GetTpmFirmwareSvnSecret`): `svn` repeated in little-endian byte
+/// order, filling `out`; available only for `svn <= current_svn`.
+fn dummy_firmware_svn_secret(
+    current_svn: u16,
+    svn: u16,
+    out: &mut [u8],
+) -> Result<usize, tpm2::platform::FirmwareSecretUnavailable> {
+    if svn > current_svn {
+        return Err(tpm2::platform::FirmwareSecretUnavailable);
+    }
+    let pattern = svn.to_le_bytes();
+    for (i, byte) in out.iter_mut().enumerate() {
+        *byte = pattern[i % pattern.len()];
+    }
+    Ok(out.len())
+}

@@ -15,7 +15,7 @@
 //! - [`timer`]: Monotonic clock/timer interface.
 //! - [`pcr`]: Structure containing platform configuration register banks.
 //! - [`firmware`]: Firmware secrets (Firmware Secret, Firmware SVN Secrets) of the
-//!   firmware-limited and SVN-limited hierarchies, and the reference platform's dummy ones.
+//!   firmware-limited and SVN-limited hierarchies.
 //! - [`secure_channel`]: Secure channel (SPDM) information of the TPM's secure transport layer.
 //!
 //! The `Platform` trait that combines these components for the TPM engine is defined by
