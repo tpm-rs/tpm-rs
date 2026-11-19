@@ -25,6 +25,7 @@
 mod basic_and_auth_tests;
 mod shutdown_tests;
 mod policy_tests;
+mod bound_and_salted_tests;
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -183,12 +184,12 @@ pub fn get_lockout_counter(simulator: &mut TcpSimulator) -> u32 {
 // NV indices.
 //
 
-/// Returns an `NV_INDEX` with `attributes` and `auth_policy`, holding
-/// `NV_DATA_SIZE` bytes.
-pub fn nv_public<'a>(attributes: TpmaNv, auth_policy: Tpm2bDigest<'a>) -> TpmsNvPublic<'a> {
+/// Returns an `NV_INDEX` with `name_alg`, `attributes` and `auth_policy`,
+/// holding `NV_DATA_SIZE` bytes.
+pub fn nv_public<'a>(name_alg: TpmiAlgHash, attributes: TpmaNv, auth_policy: Tpm2bDigest<'a>) -> TpmsNvPublic<'a> {
     TpmsNvPublic {
         nv_index: NV_INDEX,
-        name_alg: ALG,
+        name_alg,
         attributes: TpmaNv::from(TpmNt::Ordinary) | attributes,
         auth_policy,
         data_size: NV_DATA_SIZE,
@@ -267,6 +268,7 @@ fn main() {
     basic_and_auth_tests::run();
     shutdown_tests::run();
     policy_tests::run();
+    bound_and_salted_tests::run();
 
     todo!();
 }

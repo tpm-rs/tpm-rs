@@ -8,7 +8,7 @@ use tpm2::errors::TpmRc;
 use tpm2::*;
 use tpm2_client::run_command;
 
-use crate::{DIGEST_SIZE, NV_INDEX, RESP_BUFFER_SIZE, define_nv_index, get_lockout_counter, nonce_unchanged, nv_public, read_nv_index, start, start_hmac_session, stop, write_nv_index};
+use crate::{ALG, DIGEST_SIZE, NV_INDEX, RESP_BUFFER_SIZE, define_nv_index, get_lockout_counter, nonce_unchanged, nv_public, read_nv_index, start, start_hmac_session, stop, write_nv_index};
 
 //
 // Tests.
@@ -54,6 +54,7 @@ fn continue_session_testing(command_should_fail: bool) {
     assert!(nonce_unchanged(&mut last_nonce_bytes, &session.nonce_tpm()) == false);
 
     let mut nv_public = nv_public(
+        ALG,
         TpmaNv::OWNERREAD | TpmaNv::OWNERWRITE | TpmaNv::AUTHREAD | TpmaNv::AUTHWRITE,
         Tpm2bDigest::default(), // session auth only
     );
@@ -98,6 +99,7 @@ fn valid_and_invalid_authorisation() {
     let incorrect_auth_value = Tpm2bAuth::new(&[0u8; DIGEST_SIZE]).unwrap();
 
     let mut nv_public = nv_public(
+        ALG,
         TpmaNv::AUTHREAD | TpmaNv::AUTHWRITE,
         Tpm2bDigest::default(), // session auth only
     );
@@ -146,6 +148,7 @@ fn nonce_length_changes() {
     assert!(nonce_unchanged(&mut last_nonce_bytes, &session.nonce_tpm()) == false);
 
     let mut nv_public = nv_public(
+        ALG,
         TpmaNv::OWNERREAD | TpmaNv::OWNERWRITE | TpmaNv::AUTHREAD | TpmaNv::AUTHWRITE,
         Tpm2bDigest::default(), // session auth only
     );
@@ -184,6 +187,7 @@ fn load_stale_context() {
     assert!(nonce_unchanged(&mut last_nonce_bytes, &session.nonce_tpm()) == false);
 
     let mut nv_public = nv_public(
+        ALG,
         TpmaNv::OWNERREAD | TpmaNv::OWNERWRITE | TpmaNv::AUTHREAD | TpmaNv::AUTHWRITE,
         Tpm2bDigest::default(), // session auth only
     );

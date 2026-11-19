@@ -284,7 +284,7 @@ fn policy_construction_and_usage() {
     let mut auth_policy: PolicyDigest = PolicyDigest::new(ALG);
     auth_policy.policy_command_code(TpmCc::NVRead).unwrap();
     auth_policy.policy_auth_value().unwrap();
-    let mut nv_public = nv_public(TpmaNv::OWNERWRITE | TpmaNv::POLICYREAD, auth_policy.digest());
+    let mut nv_public = nv_public(ALG, TpmaNv::OWNERWRITE | TpmaNv::POLICYREAD, auth_policy.digest());
     define_and_write_nv_index(&mut simulator, &mut nv_public);
 
     // This checks that policyDigest begins as a Zero Digest.
@@ -327,7 +327,7 @@ fn valid_and_invalid_policy() {
     let mut auth_policy: PolicyDigest = PolicyDigest::new(ALG);
     auth_policy.policy_auth_value().unwrap();
     auth_policy.policy_command_code(TpmCc::NVRead).unwrap();
-    let mut nv_public = nv_public(TpmaNv::OWNERWRITE | TpmaNv::POLICYREAD, auth_policy.digest());
+    let mut nv_public = nv_public(ALG, TpmaNv::OWNERWRITE | TpmaNv::POLICYREAD, auth_policy.digest());
     define_and_write_nv_index(&mut simulator, &mut nv_public);
 
     let mut session = start_policy_session(&mut simulator);
@@ -366,7 +366,7 @@ fn failed_use_keeps_policy() {
     let mut auth_policy: PolicyDigest = PolicyDigest::new(ALG);
     auth_policy.policy_command_code(TpmCc::NVRead).unwrap();
     auth_policy.policy_auth_value().unwrap();
-    let mut nv_public = nv_public(TpmaNv::OWNERWRITE | TpmaNv::POLICYREAD, auth_policy.digest());
+    let mut nv_public = nv_public(ALG, TpmaNv::OWNERWRITE | TpmaNv::POLICYREAD, auth_policy.digest());
     define_and_write_nv_index(&mut simulator, &mut nv_public);
 
     let mut session = start_policy_session(&mut simulator);
@@ -415,7 +415,7 @@ fn repeated_command_code() {
     let mut auth_policy: PolicyDigest = PolicyDigest::new(ALG);
     auth_policy.policy_command_code(TpmCc::NVRead).unwrap();
     auth_policy.policy_command_code(TpmCc::NVRead).unwrap(); // Compatible repeated assertion.
-    let mut nv_public = nv_public(TpmaNv::OWNERWRITE | TpmaNv::POLICYREAD, auth_policy.digest());
+    let mut nv_public = nv_public(ALG, TpmaNv::OWNERWRITE | TpmaNv::POLICYREAD, auth_policy.digest());
     define_and_write_nv_index(&mut simulator, &mut nv_public);
 
     let mut session = start_policy_session(&mut simulator);
@@ -449,7 +449,7 @@ fn pcr_requires_policy(use_policy_session: bool) {
     auth_policy
         .policy_pcr(Tpm2bDigest::new(&pcr_digest).unwrap(), &pcr_selection(PCR))
         .unwrap();
-    let mut nv_public = nv_public(TpmaNv::OWNERWRITE | TpmaNv::POLICYREAD, auth_policy.digest());
+    let mut nv_public = nv_public(ALG, TpmaNv::OWNERWRITE | TpmaNv::POLICYREAD, auth_policy.digest());
     define_and_write_nv_index(&mut simulator, &mut nv_public);
 
     let session_handle = if use_policy_session {
@@ -481,7 +481,7 @@ fn admin_role_requires_policy_session() {
 
     let mut auth_policy: PolicyDigest = PolicyDigest::new(ALG);
     auth_policy.policy_command_code(TpmCc::NVChangeAuth).unwrap();
-    let mut nv_public = nv_public(TpmaNv::OWNERWRITE | TpmaNv::AUTHREAD, auth_policy.digest());
+    let mut nv_public = nv_public(ALG, TpmaNv::OWNERWRITE | TpmaNv::AUTHREAD, auth_policy.digest());
     define_and_write_nv_index(&mut simulator, &mut nv_public);
 
     // Unlike OWNER authorisation, which is exempt from DA, this might need to wait for its startup.
@@ -512,7 +512,7 @@ fn admin_role_requires_command_code(set: bool) {
     if set {
         auth_policy.policy_command_code(TpmCc::NVChangeAuth).unwrap();
     }
-    let mut nv_public = nv_public(TpmaNv::OWNERWRITE | TpmaNv::AUTHREAD, auth_policy.digest());
+    let mut nv_public = nv_public(ALG, TpmaNv::OWNERWRITE | TpmaNv::AUTHREAD, auth_policy.digest());
     define_and_write_nv_index(&mut simulator, &mut nv_public);
 
     let mut session = start_policy_session(&mut simulator);
@@ -541,9 +541,9 @@ fn nv_auth_policy_unavailable(empty_policy: bool) {
     let mut auth_policy: PolicyDigest = PolicyDigest::new(ALG);
     auth_policy.policy_command_code(TpmCc::NVRead).unwrap();
     let mut nv_public = if empty_policy {
-        nv_public(TpmaNv::OWNERWRITE | TpmaNv::POLICYREAD, Tpm2bDigest::default())
+        nv_public(ALG, TpmaNv::OWNERWRITE | TpmaNv::POLICYREAD, Tpm2bDigest::default())
     } else {
-        nv_public(TpmaNv::OWNERWRITE | TpmaNv::AUTHREAD, auth_policy.digest())
+        nv_public(ALG, TpmaNv::OWNERWRITE | TpmaNv::AUTHREAD, auth_policy.digest())
     };
     define_and_write_nv_index(&mut simulator, &mut nv_public);
 
@@ -567,13 +567,11 @@ fn policy_digest_algorithm(index_alg: TpmiAlgHash, session_alg: TpmiAlgHash) {
     let mut simulator = start(&format!("policy_digest_algorithm(index_alg: {index_alg:?}, session_alg: {session_alg:?})"));
 
     let zero_digest = [0u8; TpmiAlgHash::MAX_DIGEST_BYTES];
-    let mut nv_public = TpmsNvPublic {
-        name_alg: index_alg,
-        ..nv_public(
-            TpmaNv::OWNERWRITE | TpmaNv::POLICYREAD,
-            Tpm2bDigest::new(&zero_digest[..index_alg.digest_size()]).unwrap(),
-        )
-    };
+    let mut nv_public = nv_public(
+        index_alg,
+        TpmaNv::OWNERWRITE | TpmaNv::POLICYREAD,
+        Tpm2bDigest::new(&zero_digest[..index_alg.digest_size()]).unwrap(),
+    );
     define_and_write_nv_index(&mut simulator, &mut nv_public);
 
     let mut session = match try_start_policy_session(&mut simulator, session_alg) {
@@ -616,7 +614,7 @@ fn pcr_changed(after_policy_pcr: bool) {
     auth_policy
         .policy_pcr(Tpm2bDigest::new(&pcr_digest).unwrap(), &pcr_selection(PCR))
         .unwrap();
-    let mut nv_public = nv_public(TpmaNv::OWNERWRITE | TpmaNv::POLICYREAD, auth_policy.digest());
+    let mut nv_public = nv_public(ALG, TpmaNv::OWNERWRITE | TpmaNv::POLICYREAD, auth_policy.digest());
     define_and_write_nv_index(&mut simulator, &mut nv_public);
 
     assert!(policy_pcr(&mut simulator, &mut session, PCR, &pcr_digest).is_ok());
@@ -662,7 +660,7 @@ fn timeout_expires(after: TimeoutEvent) {
     let resp_buffer: &mut [u8; RESP_BUFFER_SIZE] = &mut [0u8; RESP_BUFFER_SIZE];
 
     let auth_policy = owner_policy_secret_digest(2);
-    let mut nv_public = nv_public(TpmaNv::OWNERWRITE | TpmaNv::POLICYREAD, auth_policy.digest());
+    let mut nv_public = nv_public(ALG, TpmaNv::OWNERWRITE | TpmaNv::POLICYREAD, auth_policy.digest());
     define_and_write_nv_index(&mut simulator, &mut nv_public);
 
     let mut session = start_policy_session(&mut simulator);
@@ -727,7 +725,7 @@ fn use_resets_timeout() {
     let mut simulator = start("use_resets_timeout()");
 
     let auth_policy = owner_policy_secret_digest(1);
-    let mut nv_public = nv_public(TpmaNv::OWNERWRITE | TpmaNv::POLICYREAD, auth_policy.digest());
+    let mut nv_public = nv_public(ALG, TpmaNv::OWNERWRITE | TpmaNv::POLICYREAD, auth_policy.digest());
     define_and_write_nv_index(&mut simulator, &mut nv_public);
 
     let mut session = start_policy_session(&mut simulator);
@@ -765,7 +763,7 @@ fn policy_failure_is_not_da_failure() {
     let mut auth_policy: PolicyDigest = PolicyDigest::new(ALG);
     auth_policy.policy_auth_value().unwrap();
     auth_policy.policy_command_code(TpmCc::NVRead).unwrap();
-    let mut nv_public = nv_public(TpmaNv::OWNERWRITE | TpmaNv::POLICYREAD, auth_policy.digest());
+    let mut nv_public = nv_public(ALG, TpmaNv::OWNERWRITE | TpmaNv::POLICYREAD, auth_policy.digest());
     define_and_write_nv_index(&mut simulator, &mut nv_public);
 
     let mut session = start_policy_session(&mut simulator);
