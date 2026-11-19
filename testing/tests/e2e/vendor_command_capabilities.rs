@@ -19,19 +19,13 @@ const CC_SET_COMMAND_CODE_AUDIT_STATUS: u32 = 0x140;
 const CC_GET_RANDOM: u32 = 0x17B;
 /// `TPMA_CC.V`.
 const TPMA_CC_V: u32 = 1 << 29;
-/// `TPMA_CC.nv`.
-const TPMA_CC_NV: u32 = 1 << 22;
 /// `TPM_ALG_NULL`.
 const ALG_NULL: u16 = 0x0010;
 
-/// The vendor commands of this TPM, in ascending order: `TPM2_Vendor_TCG_Test` and, in an
-/// `ibmswtpm2` profile, the Nuvoton `NTC2_*` commands.
+/// The vendor commands of this TPM, in ascending order: `TPM2_Vendor_TCG_Test` only (the
+/// `tpm-rs` simulator's platform adds none, and every reference implements just that one).
 fn vendor_commands() -> Vec<u32> {
-    let mut commands = vec![CC_VENDOR_TCG_TEST];
-    if tpm2_platform_linux::NTC2_VENDOR_COMMANDS {
-        commands.extend([0x2000_0211, 0x2000_0212, 0x2000_0213]);
-    }
-    commands
+    vec![CC_VENDOR_TCG_TEST]
 }
 
 /// Returns `(moreData, TPMA_CC list)` of `TPM2_GetCapability(TPM_CAP_COMMANDS, property,
@@ -84,8 +78,8 @@ fn command_counts_include_vendor_commands() {
 ///
 /// The full list is in ascending `commandIndex` order with the library commands first; it
 /// ends with the vendor commands, whose `TPMA_CC` has `V` SET and the low 16 bits of the
-/// command code as `commandIndex` (`TPM2_Vendor_TCG_Test`: `V` only; the Nuvoton commands
-/// also `nv`). No library command has `V` SET.
+/// command code as `commandIndex` (`TPM2_Vendor_TCG_Test`: `V` only). No library command has
+/// `V` SET.
 #[test]
 fn vendor_commands_follow_library_commands() {
     let mut sim = Tpm::new();
@@ -96,9 +90,6 @@ fn vendor_commands_follow_library_commands() {
     assert!(library.windows(2).all(|w| w[0] & 0xFFFF < w[1] & 0xFFFF));
     assert_eq!(tail.iter().map(|&a| code_of(a)).collect::<Vec<_>>(), vendor);
     assert_eq!(tail[0], TPMA_CC_V);
-    for &attr in &tail[1..] {
-        assert_eq!(attr & !0xFFFF, TPMA_CC_V | TPMA_CC_NV);
-    }
 }
 
 /// A library property beyond the last library command continues with the vendor commands
@@ -132,7 +123,7 @@ fn library_property_continues_with_vendor_commands() {
 /// A vendor property lists only the vendor commands from that index
 ///
 /// `property = CC_VEND` lists every vendor command; `CC_VEND + 1` lists the vendor commands
-/// with a larger `commandIndex` (none without the Nuvoton commands); `CC_VEND + 0xFFFF`
+/// with a larger `commandIndex` (none here); `CC_VEND + 0xFFFF`
 /// lists none. `propertyCount = 1` at `CC_VEND` reports `moreData` iff more vendor commands
 /// follow.
 #[test]

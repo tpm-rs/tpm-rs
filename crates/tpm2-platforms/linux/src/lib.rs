@@ -24,34 +24,22 @@ compile_error!("Features 'rust' and 'bssl' are mutually exclusive.");
 #[cfg(all(feature = "crux", feature = "bssl"))]
 compile_error!("Features 'crux' and 'bssl' are mutually exclusive.");
 
-#[cfg(feature = "ntc2-vendor-commands")]
-pub mod ntc2;
-
 pub mod firmware;
 pub use firmware::{
     REFERENCE_FIRMWARE_HASH, REFERENCE_FIRMWARE_MAX_SVN, REFERENCE_FIRMWARE_SVN,
     reference_firmware_secret, reference_firmware_svn_secret,
 };
 
-/// Whether [`LinuxPlatform`] implements the Nuvoton `NTC2_PreConfig`, `NTC2_LockPreConfig` and
-/// `NTC2_GetConfig` vendor commands of `ibmswtpm2` (the `ntc2-vendor-commands` feature) in
-/// addition to the engine's `TPM2_Vendor_TCG_Test`.
-pub const NTC2_VENDOR_COMMANDS: bool = cfg!(feature = "ntc2-vendor-commands");
-
 use std::fs::File;
 use std::marker::PhantomData;
 use std::sync::{LazyLock, Mutex, OnceLock};
 use std::time::Instant;
-#[cfg(feature = "ntc2-vendor-commands")]
-use tpm2::TpmCc;
 use tpm2::crypto::{Crypto, CryptoError, Random, Rng};
-#[cfg(feature = "ntc2-vendor-commands")]
-use tpm2::errors::TpmRc;
 use tpm2::platform::SecureChannel;
 use tpm2::platform::firmware::FirmwareSecretUnavailable;
 use tpm2_engine::storage::IndexState;
 use tpm2_engine::timer::TpmTimer;
-use tpm2_engine::{Firmware, Nv, Platform, PlatformInfo, VendorCommand};
+use tpm2_engine::{Firmware, Nv, Platform, PlatformInfo};
 
 #[cfg(feature = "rust")]
 pub use tpm2_crypto_rust::RustCryptoProvider as PlatformCryptoProvider;
@@ -305,10 +293,6 @@ pub struct LinuxPlatform<'a, C: Crypto, I: IndexState> {
     /// The platform information ([`Platform::info`]); [`DEFAULT_INFO`] by
     /// default.
     pub info: PlatformInfo,
-    /// The state of the Nuvoton `NTC2_*` vendor commands (the `ntc2-vendor-commands` feature):
-    /// RAM only, kept across `_TPM_Init`.
-    #[cfg(feature = "ntc2-vendor-commands")]
-    pub ntc2: ntc2::Ntc2State,
     /// The TPM's random number generator that the next [`Platform::crypto_rng`] returns
     /// ([`LinuxPlatform::set_crypto_rng`]); `None` (by default) for a new one of the backend
     /// ([`Random::from_entropy`]).
@@ -326,19 +310,8 @@ impl<'a, C: Crypto, I: IndexState> LinuxPlatform<'a, C, I> {
             timer,
             secure_channel: None,
             info: DEFAULT_INFO,
-            #[cfg(feature = "ntc2-vendor-commands")]
-            ntc2: ntc2::Ntc2State::default(),
             crypto_rng: None,
             index: PhantomData,
-        }
-    }
-
-    /// Returns the state of the platform's vendor commands to that of a new platform (a new
-    /// simulator).
-    pub fn reset_vendor_state(&mut self) {
-        #[cfg(feature = "ntc2-vendor-commands")]
-        {
-            self.ntc2 = ntc2::Ntc2State::default();
         }
     }
 
@@ -420,27 +393,6 @@ impl<C: Crypto, I: IndexState> Platform for LinuxPlatform<'_, C, I> {
 
     fn secure_channel(&self) -> Option<&(dyn SecureChannel + Sync)> {
         self.secure_channel
-    }
-
-    fn vendor_commands(&self) -> &[VendorCommand] {
-        #[cfg(feature = "ntc2-vendor-commands")]
-        {
-            &ntc2::NTC2_VENDOR_COMMANDS
-        }
-        #[cfg(not(feature = "ntc2-vendor-commands"))]
-        {
-            &[]
-        }
-    }
-
-    #[cfg(feature = "ntc2-vendor-commands")]
-    fn execute_vendor_command(
-        &mut self,
-        code: TpmCc,
-        parameters: &[u8],
-        response: &mut [u8],
-    ) -> Result<usize, TpmRc> {
-        self.ntc2.execute(code, parameters, response)
     }
 
     fn load_nv(&mut self, _nv: &mut Nv<Self>) {}

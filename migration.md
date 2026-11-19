@@ -119,10 +119,9 @@ These are features, not mismatches: a state converts soundly while the feature i
 | `tpm-rs` | F3. Read-only mode (`cc-read-only-control`), PolicyParameters (`cc-policy-parameters`), secure channel (`cc-policy-transport-spdm`) | `clear.read_only`, session `is_parameters_hash_defined`, `sec_channel` | `false` / empty. |
 | `tpm-rs` | F4. CMAC (`cmac`), Sign and Verify sequences (`cc-sign-sequence-*`, `cc-verify-sequence-*`), ML-DSA `mu_state` | `loaded.sequences` | None loaded. |
 | `tpm-rs` | F5. SHA-512, SM3 and SHA-3 PCR banks | `pcrs` | Features off. |
-| `tpm-rs` | F6. Nuvoton NTC2 configuration (`ntc2-vendor-commands`) | `vendor.ntc2_config` | `None`. |
-| `tpm-rs` | F7. ECDAA commit state | `reset.commit` | ECDAA unused (the counter, array and nonce are then never read). |
-| `tpm-rs` | F8. Self-test bits above `0x47` (ML-KEM, ML-DSA, ...); v974's `g_toTest` covers algorithm IDs up to `0x47` | `self_test.untested_algorithms` | Features off. |
-| `tpm-rs` | F9. Audit and ppList bits of commands v974 lacks | NV hierarchy and platform-settings records | Clear. |
+| `tpm-rs` | F6. ECDAA commit state | `reset.commit` | ECDAA unused (the counter, array and nonce are then never read). |
+| `tpm-rs` | F7. Self-test bits above `0x47` (ML-KEM, ML-DSA, ...); v974's `g_toTest` covers algorithm IDs up to `0x47` | `self_test.untested_algorithms` | Features off. |
+| `tpm-rs` | F8. Audit and ppList bits of commands v974 lacks | NV hierarchy and platform-settings records | Clear. |
 | v974 | TDES (`ALG_TDES`) | none | No TDES object or session. |
 | v974 | Orderly-index NV copy | none | See D6. |
 | v974 | `s_isCanceled`, `g_forceFailureMode` | none | `FALSE` (the vTPM never cancels). |
@@ -139,7 +138,7 @@ Refuse to migrate unless all of these hold.
 
 - [ ] The `tpm-rs` build has v974's algorithm and command sets (D5): no `sha512`, `ecdaa`, `bn_p256`; with `cc-pp-commands`, `cc-policy-physical-presence`, `cc-set-algorithm-set`.
 - [ ] No ticket, saved context or ECDAA commit is outstanding (D3, D7), and clients will not re-create and compare primary keys (D7).
-- [ ] The Rust-only features F1-F9 are at their harmless values.
+- [ ] The Rust-only features F1-F8 are at their harmless values.
 - [ ] The TPM is not in Failure mode.
 - [ ] The NV orderly state is not orderly (D4), or the converter is known to handle the orderly window.
 

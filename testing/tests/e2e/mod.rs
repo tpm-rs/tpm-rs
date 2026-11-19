@@ -115,7 +115,6 @@ mod mlkem_keys;
 #[cfg(feature = "mlkem")]
 mod mlkem_storage_parent;
 mod no_sessions_commands;
-mod ntc2_vendor_commands;
 mod nv_authorization;
 mod nv_availability;
 mod nv_capacity;

@@ -168,7 +168,6 @@ impl<'a, C: Crypto> Simulator<'a, C> {
         let platform = &mut self.context.platform;
         *platform.timer = timer;
         platform.set_crypto_rng(crypto_rng);
-        platform.reset_vendor_state();
         *self.context.state.nv.index = RamStorageMock::new();
         // The firmware of a new simulator.
         platform.info.firmware = tpm2_platform_linux::DEFAULT_FIRMWARE;

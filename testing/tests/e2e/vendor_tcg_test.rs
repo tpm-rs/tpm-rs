@@ -12,7 +12,7 @@ use crate::_common::{
 };
 use testing::tpm::Tpm;
 use tpm2::commands::VendorTcgTest;
-use tpm2::{Handle, Marshal, Tpm2bData, TpmSe, TpmaSession, TpmiAlgHash};
+use tpm2::{Handle, Marshal, Tpm2bData, TpmCc, TpmSe, TpmaSession, TpmiAlgHash};
 
 /// `TPM_CC_Vendor_TCG_Test`.
 const CC_VENDOR_TCG_TEST: u32 = 0x2000_0000;
@@ -139,6 +139,28 @@ fn unimplemented_vendor_codes_are_rejected() {
             &build_raw_cmd(ST_NO_SESSIONS, cc, &[], None, &tpm2b(b"x")),
         );
         assert_eq!(rc(&rsp), RC_COMMAND_CODE, "cc {cc:#x}");
+    }
+}
+
+/// The Nuvoton NTC2 vendor command codes are not implemented
+///
+/// `NTC2_PreConfig`, `NTC2_LockPreConfig` and `NTC2_GetConfig` (`CC_VEND + 0x211..=0x213`,
+/// configuration commands of Nuvoton TPMs outside the TPM 2.0 specification, which
+/// `ibmswtpm2` emulates only when built with `TPM_NUVOTON`) fail with `TPM_RC_COMMAND_CODE`
+/// like any other unimplemented vendor command, also with well-formed parameters.
+#[test]
+fn nuvoton_ntc2_codes_are_rejected() {
+    let mut sim = Tpm::new();
+    for (cc, params) in [
+        (TpmCc::NTC2PreConfig, &[0x55u8; 18][..]),
+        (TpmCc::NTC2LockPreConfig, &[][..]),
+        (TpmCc::NTC2GetConfig, &[][..]),
+    ] {
+        let rsp = send_raw(
+            &mut sim,
+            &build_raw_cmd(ST_NO_SESSIONS, cc.code(), &[], None, params),
+        );
+        assert_eq!(rc(&rsp), RC_COMMAND_CODE, "cc {:#x}", cc.code());
     }
 }
 

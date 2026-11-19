@@ -13,16 +13,13 @@ delivers the once-per-second ACT ticks (_plat__ACT_Tick()) of the whole
 seconds of the virtual clock since the last power on that the advance
 crossed, as tpm-rs counts them (the TCP simulator's ACT timer thread is not
 run; the platform reads the virtual clock directly, see
-harness-virtual-clock.patch). difftest_init() also restores the
-configuration of the Nuvoton NTC2_* vendor commands (a static RAM variable of
-ntc2.c that _TPM_Init does not reset) to its initial value, so that a
-re-initialized reference (Request::Reinit) behaves like a new process.
+harness-virtual-clock.patch).
 
 diff --git a/src/TPMCmdp.c b/src/TPMCmdp.c
 index 9a3dfe8..d30f6b4 100644
 --- a/src/TPMCmdp.c
 +++ b/src/TPMCmdp.c
-@@ -301,6 +301,156 @@ void _rpc__SetTpmFirmwareSvn(uint16_t svn)
+@@ -301,6 +301,153 @@ void _rpc__SetTpmFirmwareSvn(uint16_t svn)
      _plat__SetTpmFirmwareSvn(svn);
  #endif
  }
@@ -43,12 +40,9 @@ index 9a3dfe8..d30f6b4 100644
 +// TPMCmds.c (not linked): tracing stays off.
 +int verbose = 0;
 +
-+void NTC2_DifftestInit(void);
-+
 +void difftest_init(void);
 +void difftest_init(void)
 +{
-+    NTC2_DifftestInit();
 +    s_isPowerOn = false;
 +    _plat__SetNvAvail();
 +    _plat__ClearCancel();
@@ -179,51 +173,3 @@ index 9a3dfe8..d30f6b4 100644
  #if 0
  /* D.4 TPMCmdp.c */
  /* D.4.1. Description */
-diff --git a/src/ntc2.c b/src/ntc2.c
-index 1966488..40b34ca 100644
---- a/src/ntc2.c
-+++ b/src/ntc2.c
-@@ -44,6 +44,27 @@
- 
- /* config state has some required or default values */
- 
-+static const NTC2_CFG_STRUCT ntc2initial = {
-+    .i2cLoc1_2  =	0xff,
-+    .i2cLoc3_4  =	0xff,
-+    .AltCfg 	= 	0x13,
-+    .Direction 	=  	0x00,
-+    .PullUp 	=   	0xff,
-+    .PushPull 	=   	0xff,
-+    .CFG_A 	=   	0xff,
-+    .CFG_B 	=   	0xff,
-+    .CFG_C 	=   	0xff,
-+    .CFG_D 	=   	0xff,
-+    .CFG_E 	=   	0xff,
-+    .CFG_F 	=   	0xff,
-+    .CFG_G 	=   	0xff,
-+    .CFG_H 	=   	0xff,
-+    .CFG_I 	=   	0xff,
-+    .CFG_J 	=   	0xff,
-+    .IsValid 	=   	0xaa,
-+    .IsLocked 	= 	0xff
-+};
-+
- static NTC2_CFG_STRUCT ntc2state = {
-     .i2cLoc1_2  =	0xff,
-     .i2cLoc3_4  =	0xff,
-@@ -65,6 +86,15 @@ static NTC2_CFG_STRUCT ntc2state = {
-     .IsLocked 	= 	0xff
- };
- 
-+// tpm-rs differential testing: difftest_init() restores the configuration of a
-+// new process (the initializer above), so that a re-initialized reference
-+// matches a new one.
-+void NTC2_DifftestInit(void);
-+void NTC2_DifftestInit(void)
-+{
-+    ntc2state = ntc2initial;
-+}
-+
- TPM_RC
- NTC2_PreConfig(NTC2_PreConfig_In *in)
- {

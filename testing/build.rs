@@ -150,8 +150,9 @@ const REFERENCES: [Reference; 2] = [
                 "-std=gnu11",
                 "-DTPM_POSIX",
                 "-D_POSIX_",
-                // As in ibmswtpm2's makefile: the Nuvoton NTC2_* vendor commands.
-                "-DTPM_NUVOTON",
+                // Unlike ibmswtpm2's makefile, without `-DTPM_NUVOTON` (the
+                // non-standard Nuvoton NTC2_* vendor commands), see
+                // `IBMSWTPM2_EXCLUDED_OBJECTS`.
                 "-DUSE_BIT_FIELD_STRUCTURES=NO",
                 "-DSYM_LIB=Ossl",
                 "-DHASH_LIB=Ossl",
@@ -755,9 +756,16 @@ fn tcgtpm_v185_include_dirs(repo: &Path) -> Vec<PathBuf> {
     dirs
 }
 
+/// The object files of `ibmswtpm2`'s Linux makefile that are not compiled:
+/// the TCP server and `main()` (`TPMCmds.c`), and the emulation of the
+/// non-standard Nuvoton vendor commands `NTC2_*` (`ntc2lib.c`, `ntc2.c`),
+/// which its makefile enables with `-DTPM_NUVOTON`. Without them and that
+/// define, the reference implements no vendor command but
+/// `TPM2_Vendor_TCG_Test`, like `tpm-rs` and the TCG references.
+const IBMSWTPM2_EXCLUDED_OBJECTS: [&str; 3] = ["TPMCmds", "ntc2lib", "ntc2"];
+
 /// The IBM TPM's object files of its Linux makefile (`OBJFILES` of
-/// `src/makefile-common`), without the TCP server and `main()`
-/// (`TPMCmds.c`).
+/// `src/makefile-common`), without [`IBMSWTPM2_EXCLUDED_OBJECTS`].
 fn ibmswtpm2_sources(repo: &Path) -> Vec<PathBuf> {
     let src = repo.join("src");
     let makefile = std::fs::read_to_string(src.join("makefile-common"))
@@ -773,7 +781,7 @@ fn ibmswtpm2_sources(repo: &Path) -> Vec<PathBuf> {
         let continued = raw.trim_end().ends_with('\\');
         let line = raw.trim().trim_end_matches('\\').trim();
         if let Some(stem) = line.strip_suffix(".o")
-            && stem != "TPMCmds"
+            && !IBMSWTPM2_EXCLUDED_OBJECTS.contains(&stem)
         {
             c_files.push(src.join(format!("{stem}.c")));
         }
