@@ -26,8 +26,8 @@ fn start_bound_hmac_session(simulator: &mut TcpSimulator, bind: Handle, bind_aut
     let resp_buffer: &mut [u8; RESP_BUFFER_SIZE] = &mut [0u8; RESP_BUFFER_SIZE];
 
     let start_auth_session = StartAuthSession {
-        tpm_key: Handle::RH_NULL,
-        bind,
+        tpm_key: Handle::RH_NULL.into(),
+        bind: bind.into(),
         nonce_caller: Tpm2bNonce::new(&[42u8; DIGEST_SIZE]).unwrap(),
         encrypted_salt: Tpm2bEncryptedSecret::default(),
         session_type: TpmSe::HMAC,

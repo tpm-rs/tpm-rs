@@ -49,8 +49,8 @@ fn try_start_policy_session(simulator: &mut TcpSimulator, alg: TpmiAlgHash) -> R
     let resp_buffer: &mut [u8; RESP_BUFFER_SIZE] = &mut [0u8; RESP_BUFFER_SIZE];
 
     let start_auth_session = StartAuthSession {
-        tpm_key: Handle::RH_NULL,
-        bind: Handle::RH_NULL,
+        tpm_key: Handle::RH_NULL.into(),
+        bind: Handle::RH_NULL.into(),
         nonce_caller: Tpm2bNonce::new(&[42u8; TpmiAlgHash::MAX_DIGEST_BYTES][..alg.digest_size()]).unwrap(),
         encrypted_salt: Tpm2bEncryptedSecret::default(),
         session_type: TpmSe::Policy,
@@ -100,7 +100,7 @@ fn run_policy_command<C: Command<MaxBuffer = [u8; N]>, const N: usize>(
 ) -> Result<(), TpmRc> {
     let resp_buffer: &mut [u8; RESP_BUFFER_SIZE] = &mut [0u8; RESP_BUFFER_SIZE];
 
-    let rsp = tpm_result(run_command_with_sessions(cmd, &[], cmd_sessions, &mut simulator.connection, resp_buffer));
+    let rsp = tpm_result(run_command_with_sessions(cmd, cmd_sessions, &mut simulator.connection, resp_buffer));
     if rsp.is_ok() {
         update(session);
     }
@@ -117,18 +117,19 @@ fn define_and_write_nv_index(simulator: &mut TcpSimulator, nv_public: &mut TpmsN
     let mut owner = PasswordSession::default();
 
     // To make this test idempotent, undefine the space, but ignore the return value.
+    // Password authorization doesn't need the index's Name.
     let nv_undefine_space = NVUndefineSpace {
-        auth_handle: Handle::RH_OWNER,
-        nv_index: nv_public.nv_index,
+        auth_handle: Handle::RH_OWNER.into(),
+        nv_index: nv_public.nv_index.into(),
     };
-    let _ = run_command_with_sessions(&nv_undefine_space, &[], &mut owner, &mut simulator.connection, resp_buffer);
+    let _ = run_command_with_sessions(&nv_undefine_space, &mut owner, &mut simulator.connection, resp_buffer);
 
     let nv_define_space = NVDefineSpace {
-        auth_handle: Handle::RH_OWNER,
+        auth_handle: Handle::RH_OWNER.into(),
         auth: Tpm2bAuth::default(),
         public_info: Tpm2b(*nv_public),
     };
-    assert!(run_command_with_sessions(&nv_define_space, &[], &mut owner, &mut simulator.connection, resp_buffer).is_ok());
+    assert!(run_command_with_sessions(&nv_define_space, &mut owner, &mut simulator.connection, resp_buffer).is_ok());
 
     assert!(write_nv_index(simulator, nv_public, Handle::RH_OWNER, &mut owner).is_ok());
 }
@@ -173,7 +174,7 @@ fn policy_secret(simulator: &mut TcpSimulator, session: &mut PolicySession, expi
     nonce_tpm.copy_from_slice(session.nonce_tpm().as_slice());
 
     let policy_secret = PolicySecret {
-        auth_handle: Handle::RH_OWNER,
+        auth_handle: Handle::RH_OWNER.into(),
         policy_session: session.handle(),
         nonce_tpm: Tpm2bNonce::new(&nonce_tpm).unwrap(),
         cp_hash_a: Tpm2bDigest::default(),
@@ -238,7 +239,7 @@ fn extend_pcr(simulator: &mut TcpSimulator, pcr: Handle, session: &mut impl Auth
         pcr_handle: pcr,
         digests: TpmlDigestValues::new(&[TpmtHa::Sha256(&[42u8; DIGEST_SIZE])]).unwrap(),
     };
-    tpm_result(run_command_with_sessions(&pcr_extend, &[], session, &mut simulator.connection, resp_buffer))
+    tpm_result(run_command_with_sessions(&pcr_extend, session, &mut simulator.connection, resp_buffer))
 }
 
 /// Like `read_nv_index()` (on the index itself), but retries once on
@@ -260,10 +261,10 @@ fn change_nv_auth(simulator: &mut TcpSimulator, nv_public: &TpmsNvPublic, sessio
     let name = nv_name::<CryptoBackend>(nv_public, &mut name_buf).unwrap();
 
     let nv_change_auth = NVChangeAuth {
-        nv_index: nv_public.nv_index,
+        nv_index: NamedHandle::new(nv_public.nv_index, name),
         new_auth: Tpm2bAuth::new(&[42u8; DIGEST_SIZE]).unwrap(),
     };
-    tpm_result(run_command_with_sessions(&nv_change_auth, &[Some(name)], session, &mut simulator.connection, resp_buffer))
+    tpm_result(run_command_with_sessions(&nv_change_auth, session, &mut simulator.connection, resp_buffer))
 }
 
 //
@@ -380,16 +381,17 @@ fn failed_use_keeps_policy() {
     // Authorization succeeds, but the read is out of range.
     let mut name_buf = [0u8; Tpm2bName::CAP];
     let name = nv_name::<CryptoBackend>(&nv_public, &mut name_buf).unwrap();
+    let nv_index = NamedHandle::new(NV_INDEX, name);
     let nv_read = NVRead {
-        auth_handle: NV_INDEX,
-        nv_index: NV_INDEX,
+        auth_handle: nv_index,
+        nv_index,
         size: NV_DATA_SIZE,
         offset: NV_DATA_SIZE / 2,
     };
     // Unlike OWNER authorisation, which is exempt from DA, this might need to wait for its startup.
-    let mut nv_read_rsp = tpm_result(run_command_with_sessions(&nv_read, &[Some(name), Some(name)], &mut session, &mut simulator.connection, resp_buffer));
+    let mut nv_read_rsp = tpm_result(run_command_with_sessions(&nv_read, &mut session, &mut simulator.connection, resp_buffer));
     if nv_read_rsp == Err(TpmRc::RETRY) {
-        nv_read_rsp = tpm_result(run_command_with_sessions(&nv_read, &[Some(name), Some(name)], &mut session, &mut simulator.connection, resp_buffer));
+        nv_read_rsp = tpm_result(run_command_with_sessions(&nv_read, &mut session, &mut simulator.connection, resp_buffer));
     }
     assert_eq!(nv_read_rsp, Err(TpmRc::NV_RANGE));
     // Failure doesn't update the nonce, nor reset the policy.

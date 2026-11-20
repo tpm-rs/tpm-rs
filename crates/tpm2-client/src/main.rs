@@ -120,8 +120,8 @@ pub fn start_hmac_session(simulator: &mut TcpSimulator) -> HmacSession {
     let resp_buffer: &mut [u8; RESP_BUFFER_SIZE] = &mut [0u8; RESP_BUFFER_SIZE];
 
     let start_auth_session = StartAuthSession {
-        tpm_key: Handle::RH_NULL,
-        bind: Handle::RH_NULL,
+        tpm_key: Handle::RH_NULL.into(),
+        bind: Handle::RH_NULL.into(),
         nonce_caller: Tpm2bNonce::new(&[42u8; DIGEST_SIZE]).unwrap(),
         encrypted_salt: Tpm2bEncryptedSecret::default(),
         session_type: TpmSe::HMAC,
@@ -196,11 +196,13 @@ pub fn nv_public<'a>(name_alg: TpmiAlgHash, attributes: TpmaNv, auth_policy: Tpm
     }
 }
 
-/// Returns the Names of an NV command's handles (`authHandle`, then
-/// `nvIndex`), where `auth_handle` is either the index itself or a hierarchy.
-fn nv_names<'a>(nv_public: &TpmsNvPublic, auth_handle: Handle, name_buf: &'a mut [u8; Tpm2bName::CAP]) -> [Option<Tpm2bName<'a>>; 2] {
+/// Returns an NV command's handles (`authHandle`, then `nvIndex`) with their
+/// Names, where `auth_handle` is either the index itself or a hierarchy.
+fn nv_handles<'a>(nv_public: &TpmsNvPublic, auth_handle: Handle, name_buf: &'a mut [u8; Tpm2bName::CAP]) -> (NamedHandle<'a>, NamedHandle<'a>) {
     let name = nv_name::<CryptoBackend>(nv_public, name_buf).unwrap();
-    [(auth_handle == nv_public.nv_index).then_some(name), Some(name)]
+    let nv_index = NamedHandle::new(nv_public.nv_index, name);
+    let auth_handle = if auth_handle == nv_public.nv_index { nv_index } else { auth_handle.into() };
+    (auth_handle, nv_index)
 }
 
 /// Defines `nv_public` with `auth`, using OWNER authorization from `session`,
@@ -210,11 +212,12 @@ pub fn define_nv_index(simulator: &mut TcpSimulator, nv_public: &TpmsNvPublic, a
     let mut name_buf = [0u8; Tpm2bName::CAP];
 
     // To make this test idempotent, undefine the space, but ignore the return value.
+    let (_, nv_index) = nv_handles(nv_public, Handle::RH_OWNER, &mut name_buf);
     let nv_undefine_space = NVUndefineSpace {
         auth_handle: Handle::RH_OWNER,
-        nv_index: nv_public.nv_index,
+        nv_index,
     };
-    let _ = run_command_with_sessions(&nv_undefine_space, &nv_names(nv_public, Handle::RH_OWNER, &mut name_buf), session, &mut simulator.connection, resp_buffer);
+    let _ = run_command_with_sessions(&nv_undefine_space, session, &mut simulator.connection, resp_buffer);
 
     // Reload the nonce, don't assert anything.
     nonce_unchanged(last_nonce_bytes, &session.nonce_tpm());
@@ -224,7 +227,7 @@ pub fn define_nv_index(simulator: &mut TcpSimulator, nv_public: &TpmsNvPublic, a
         auth,
         public_info: Tpm2b(*nv_public),
     };
-    assert!(run_command_with_sessions(&nv_define_space, &[], session, &mut simulator.connection, resp_buffer).is_ok());
+    assert!(run_command_with_sessions(&nv_define_space, session, &mut simulator.connection, resp_buffer).is_ok());
 
     assert!(nonce_unchanged(last_nonce_bytes, &session.nonce_tpm()) == false);
 }
@@ -236,13 +239,14 @@ pub fn write_nv_index(simulator: &mut TcpSimulator, nv_public: &mut TpmsNvPublic
     let resp_buffer: &mut [u8; RESP_BUFFER_SIZE] = &mut [0u8; RESP_BUFFER_SIZE];
     let mut name_buf = [0u8; Tpm2bName::CAP];
 
+    let (auth_handle, nv_index) = nv_handles(nv_public, auth_handle, &mut name_buf);
     let nv_write = NVWrite {
         auth_handle,
-        nv_index: nv_public.nv_index,
+        nv_index,
         data: Tpm2bSized::new(&[42u8; NV_DATA_SIZE as usize]).unwrap(),
         offset: 0,
     };
-    let nv_write_rsp = tpm_result(run_command_with_sessions(&nv_write, &nv_names(nv_public, auth_handle, &mut name_buf), session, &mut simulator.connection, resp_buffer));
+    let nv_write_rsp = tpm_result(run_command_with_sessions(&nv_write, session, &mut simulator.connection, resp_buffer));
     if nv_write_rsp.is_ok() {
         nv_public.attributes |= TpmaNv::WRITTEN;
     }
@@ -255,13 +259,14 @@ pub fn read_nv_index(simulator: &mut TcpSimulator, nv_public: &TpmsNvPublic, aut
     let resp_buffer: &mut [u8; RESP_BUFFER_SIZE] = &mut [0u8; RESP_BUFFER_SIZE];
     let mut name_buf = [0u8; Tpm2bName::CAP];
 
+    let (auth_handle, nv_index) = nv_handles(nv_public, auth_handle, &mut name_buf);
     let nv_read = NVRead {
         auth_handle,
-        nv_index: nv_public.nv_index,
+        nv_index,
         size: NV_DATA_SIZE,
         offset: 0,
     };
-    tpm_result(run_command_with_sessions(&nv_read, &nv_names(nv_public, auth_handle, &mut name_buf), session, &mut simulator.connection, resp_buffer))
+    tpm_result(run_command_with_sessions(&nv_read, session, &mut simulator.connection, resp_buffer))
 }
 
 fn main() {
