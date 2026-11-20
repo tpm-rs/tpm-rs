@@ -11,7 +11,7 @@ use crate::{errors::UnmarshalError, marshal::marshal_helper, *};
 #[deprecated]
 #[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct VerifySignature<'a> {
-    pub key_handle: Handle,
+    pub key_handle: NamedHandle<'a>,
     pub digest: Tpm2bDigest<'a>,
     pub signature: TpmtSignature<'a>,
 }
@@ -28,8 +28,12 @@ impl Command for VerifySignature<'_> {
     type Response<'a> = VerifySignatureRsp<'a>;
 }
 impl Message for VerifySignature<'_> {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 1;
+    type Handles<'a>
+        = [NamedHandle<'a>; 1]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         [self.key_handle]
     }
 }
@@ -43,7 +47,7 @@ impl Marshal for VerifySignature<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for VerifySignature<'a> {
     fn unmarshal_with_handles(
-        [key_handle]: Self::Handles,
+        [key_handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -55,8 +59,12 @@ impl<'a> UnmarshalMessage<'a> for VerifySignature<'a> {
 }
 
 impl Message for VerifySignatureRsp<'_> {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 0;
+    type Handles<'a>
+        = [NamedHandle<'a>; 0]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -69,7 +77,7 @@ impl Marshal for VerifySignatureRsp<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for VerifySignatureRsp<'a> {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -84,7 +92,7 @@ impl<'a> UnmarshalMessage<'a> for VerifySignatureRsp<'a> {
 #[deprecated]
 #[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct Sign<'a> {
-    pub key_handle: Handle,
+    pub key_handle: NamedHandle<'a>,
     pub digest: Tpm2bDigest<'a>,
     pub in_scheme: Option<TpmtSigScheme>,
     pub validation: TpmtTkHashcheck<'a>,
@@ -102,8 +110,12 @@ impl Command for Sign<'_> {
     type Response<'a> = SignRsp<'a>;
 }
 impl Message for Sign<'_> {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 1;
+    type Handles<'a>
+        = [NamedHandle<'a>; 1]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         [self.key_handle]
     }
 }
@@ -119,7 +131,7 @@ impl Marshal for Sign<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for Sign<'a> {
     fn unmarshal_with_handles(
-        [key_handle]: Self::Handles,
+        [key_handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -132,8 +144,12 @@ impl<'a> UnmarshalMessage<'a> for Sign<'a> {
 }
 
 impl Message for SignRsp<'_> {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 0;
+    type Handles<'a>
+        = [NamedHandle<'a>; 0]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -146,7 +162,7 @@ impl Marshal for SignRsp<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for SignRsp<'a> {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -160,8 +176,8 @@ impl<'a> UnmarshalMessage<'a> for SignRsp<'a> {
 #[doc(alias = "SignSequenceComplete_In")]
 #[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct SignSequenceComplete<'a> {
-    pub sequence_handle: Handle,
-    pub key_handle: Handle,
+    pub sequence_handle: SequenceHandle,
+    pub key_handle: NamedHandle<'a>,
     pub buffer: Tpm2bMaxBuffer<'a>,
 }
 /// TPM2_SignSequenceComplete (Response)
@@ -176,9 +192,13 @@ impl Command for SignSequenceComplete<'_> {
     type Response<'a> = SignSequenceCompleteRsp<'a>;
 }
 impl Message for SignSequenceComplete<'_> {
-    type Handles = [Handle; 2];
-    fn handles(&self) -> Self::Handles {
-        [self.sequence_handle, self.key_handle]
+    const NUM_HANDLES: usize = 2;
+    type Handles<'a>
+        = [NamedHandle<'a>; 2]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.sequence_handle.into(), self.key_handle]
     }
 }
 impl Marshal for SignSequenceComplete<'_> {
@@ -190,11 +210,11 @@ impl Marshal for SignSequenceComplete<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for SignSequenceComplete<'a> {
     fn unmarshal_with_handles(
-        [sequence_handle, key_handle]: Self::Handles,
+        [sequence_handle, key_handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            sequence_handle,
+            sequence_handle: SequenceHandle(sequence_handle.handle),
             key_handle,
             buffer: Unmarshal::unmarshal(src)?,
         })
@@ -202,8 +222,12 @@ impl<'a> UnmarshalMessage<'a> for SignSequenceComplete<'a> {
 }
 
 impl Message for SignSequenceCompleteRsp<'_> {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 0;
+    type Handles<'a>
+        = [NamedHandle<'a>; 0]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -216,7 +240,7 @@ impl Marshal for SignSequenceCompleteRsp<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for SignSequenceCompleteRsp<'a> {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -230,8 +254,8 @@ impl<'a> UnmarshalMessage<'a> for SignSequenceCompleteRsp<'a> {
 #[doc(alias = "VerifySequenceComplete_In")]
 #[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct VerifySequenceComplete<'a> {
-    pub sequence_handle: Handle,
-    pub key_handle: Handle,
+    pub sequence_handle: SequenceHandle,
+    pub key_handle: NamedHandle<'a>,
     pub signature: TpmtSignature<'a>,
 }
 /// TPM2_VerifySequenceComplete (Response)
@@ -246,9 +270,13 @@ impl Command for VerifySequenceComplete<'_> {
     type Response<'a> = VerifySequenceCompleteRsp<'a>;
 }
 impl Message for VerifySequenceComplete<'_> {
-    type Handles = [Handle; 2];
-    fn handles(&self) -> Self::Handles {
-        [self.sequence_handle, self.key_handle]
+    const NUM_HANDLES: usize = 2;
+    type Handles<'a>
+        = [NamedHandle<'a>; 2]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.sequence_handle.into(), self.key_handle]
     }
 }
 impl Marshal for VerifySequenceComplete<'_> {
@@ -260,11 +288,11 @@ impl Marshal for VerifySequenceComplete<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for VerifySequenceComplete<'a> {
     fn unmarshal_with_handles(
-        [sequence_handle, key_handle]: Self::Handles,
+        [sequence_handle, key_handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            sequence_handle,
+            sequence_handle: SequenceHandle(sequence_handle.handle),
             key_handle,
             signature: Unmarshal::unmarshal(src)?,
         })
@@ -272,8 +300,12 @@ impl<'a> UnmarshalMessage<'a> for VerifySequenceComplete<'a> {
 }
 
 impl Message for VerifySequenceCompleteRsp<'_> {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 0;
+    type Handles<'a>
+        = [NamedHandle<'a>; 0]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -286,7 +318,7 @@ impl Marshal for VerifySequenceCompleteRsp<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for VerifySequenceCompleteRsp<'a> {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -300,7 +332,7 @@ impl<'a> UnmarshalMessage<'a> for VerifySequenceCompleteRsp<'a> {
 #[doc(alias = "SignDigest_In")]
 #[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct SignDigest<'a> {
-    pub key_handle: Handle,
+    pub key_handle: NamedHandle<'a>,
     pub context: Tpm2bSignatureCtx<'a>,
     pub digest: Tpm2bDigest<'a>,
     pub validation: TpmtTkHashcheck<'a>,
@@ -317,8 +349,12 @@ impl Command for SignDigest<'_> {
     type Response<'a> = SignDigestRsp<'a>;
 }
 impl Message for SignDigest<'_> {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 1;
+    type Handles<'a>
+        = [NamedHandle<'a>; 1]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         [self.key_handle]
     }
 }
@@ -334,7 +370,7 @@ impl Marshal for SignDigest<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for SignDigest<'a> {
     fn unmarshal_with_handles(
-        [key_handle]: Self::Handles,
+        [key_handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -347,8 +383,12 @@ impl<'a> UnmarshalMessage<'a> for SignDigest<'a> {
 }
 
 impl Message for SignDigestRsp<'_> {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 0;
+    type Handles<'a>
+        = [NamedHandle<'a>; 0]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -361,7 +401,7 @@ impl Marshal for SignDigestRsp<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for SignDigestRsp<'a> {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -375,7 +415,7 @@ impl<'a> UnmarshalMessage<'a> for SignDigestRsp<'a> {
 #[doc(alias = "VerifyDigestSignature_In")]
 #[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct VerifyDigestSignature<'a> {
-    pub key_handle: Handle,
+    pub key_handle: NamedHandle<'a>,
     pub context: Tpm2bSignatureCtx<'a>,
     pub digest: Tpm2bDigest<'a>,
     pub signature: TpmtSignature<'a>,
@@ -392,8 +432,12 @@ impl Command for VerifyDigestSignature<'_> {
     type Response<'a> = VerifyDigestSignatureRsp<'a>;
 }
 impl Message for VerifyDigestSignature<'_> {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 1;
+    type Handles<'a>
+        = [NamedHandle<'a>; 1]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         [self.key_handle]
     }
 }
@@ -409,7 +453,7 @@ impl Marshal for VerifyDigestSignature<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for VerifyDigestSignature<'a> {
     fn unmarshal_with_handles(
-        [key_handle]: Self::Handles,
+        [key_handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -422,8 +466,12 @@ impl<'a> UnmarshalMessage<'a> for VerifyDigestSignature<'a> {
 }
 
 impl Message for VerifyDigestSignatureRsp<'_> {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 0;
+    type Handles<'a>
+        = [NamedHandle<'a>; 0]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -436,7 +484,7 @@ impl Marshal for VerifyDigestSignatureRsp<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for VerifyDigestSignatureRsp<'a> {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {

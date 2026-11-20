@@ -27,8 +27,12 @@ impl Command for GetCapability {
     type Response<'a> = GetCapabilityRsp<'a>;
 }
 impl Message for GetCapability {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 0;
+    type Handles<'a>
+        = [NamedHandle<'a>; 0]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -43,7 +47,7 @@ impl Marshal for GetCapability {
 }
 impl<'a> UnmarshalMessage<'a> for GetCapability {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -55,8 +59,12 @@ impl<'a> UnmarshalMessage<'a> for GetCapability {
 }
 
 impl Message for GetCapabilityRsp<'_> {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 0;
+    type Handles<'a>
+        = [NamedHandle<'a>; 0]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -70,7 +78,7 @@ impl Marshal for GetCapabilityRsp<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for GetCapabilityRsp<'a> {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -93,8 +101,12 @@ impl Command for TestParms {
     type Response<'a> = ();
 }
 impl Message for TestParms {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 0;
+    type Handles<'a>
+        = [NamedHandle<'a>; 0]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -107,7 +119,7 @@ impl Marshal for TestParms {
 }
 impl<'a> UnmarshalMessage<'a> for TestParms {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {

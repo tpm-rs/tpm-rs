@@ -20,9 +20,13 @@ impl Command for PPCommands {
     type Response<'a> = ();
 }
 impl Message for PPCommands {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.auth]
+    const NUM_HANDLES: usize = 1;
+    type Handles<'a>
+        = [NamedHandle<'a>; 1]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.auth.into()]
     }
 }
 impl Marshal for PPCommands {
@@ -35,11 +39,11 @@ impl Marshal for PPCommands {
 }
 impl<'a> UnmarshalMessage<'a> for PPCommands {
     fn unmarshal_with_handles(
-        [auth]: Self::Handles,
+        [auth]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            auth,
+            auth: auth.handle,
             set_list: Unmarshal::unmarshal(src)?,
             clear_list: Unmarshal::unmarshal(src)?,
         })
@@ -60,9 +64,13 @@ impl Command for SetAlgorithmSet {
     type Response<'a> = ();
 }
 impl Message for SetAlgorithmSet {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.auth_handle]
+    const NUM_HANDLES: usize = 1;
+    type Handles<'a>
+        = [NamedHandle<'a>; 1]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.auth_handle.into()]
     }
 }
 impl Marshal for SetAlgorithmSet {
@@ -74,11 +82,11 @@ impl Marshal for SetAlgorithmSet {
 }
 impl<'a> UnmarshalMessage<'a> for SetAlgorithmSet {
     fn unmarshal_with_handles(
-        [auth_handle]: Self::Handles,
+        [auth_handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            auth_handle,
+            auth_handle: auth_handle.handle,
             algorithm_set: Unmarshal::unmarshal(src)?,
         })
     }

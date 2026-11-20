@@ -11,7 +11,7 @@ use crate::{errors::UnmarshalError, marshal::marshal_helper, *};
 #[deprecated]
 #[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct EncryptDecrypt<'a> {
-    pub key_handle: Handle,
+    pub key_handle: NamedHandle<'a>,
     pub decrypt: bool,
     pub mode: Option<TpmiAlgCipherMode>,
     pub iv_in: Tpm2bIv<'a>,
@@ -31,8 +31,12 @@ impl Command for EncryptDecrypt<'_> {
     type Response<'a> = EncryptDecryptRsp<'a>;
 }
 impl Message for EncryptDecrypt<'_> {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 1;
+    type Handles<'a>
+        = [NamedHandle<'a>; 1]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         [self.key_handle]
     }
 }
@@ -51,7 +55,7 @@ impl Marshal for EncryptDecrypt<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for EncryptDecrypt<'a> {
     fn unmarshal_with_handles(
-        [key_handle]: Self::Handles,
+        [key_handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -65,8 +69,12 @@ impl<'a> UnmarshalMessage<'a> for EncryptDecrypt<'a> {
 }
 
 impl Message for EncryptDecryptRsp<'_> {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 0;
+    type Handles<'a>
+        = [NamedHandle<'a>; 0]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -80,7 +88,7 @@ impl Marshal for EncryptDecryptRsp<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for EncryptDecryptRsp<'a> {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -95,7 +103,7 @@ impl<'a> UnmarshalMessage<'a> for EncryptDecryptRsp<'a> {
 #[doc(alias = "EncryptDecrypt2_In")]
 #[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct EncryptDecrypt2<'a> {
-    pub key_handle: Handle,
+    pub key_handle: NamedHandle<'a>,
     pub in_data: Tpm2bMaxBuffer<'a>,
     pub decrypt: bool,
     pub mode: Option<TpmiAlgCipherMode>,
@@ -114,8 +122,12 @@ impl Command for EncryptDecrypt2<'_> {
     type Response<'a> = EncryptDecrypt2Rsp<'a>;
 }
 impl Message for EncryptDecrypt2<'_> {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 1;
+    type Handles<'a>
+        = [NamedHandle<'a>; 1]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         [self.key_handle]
     }
 }
@@ -134,7 +146,7 @@ impl Marshal for EncryptDecrypt2<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for EncryptDecrypt2<'a> {
     fn unmarshal_with_handles(
-        [key_handle]: Self::Handles,
+        [key_handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -148,8 +160,12 @@ impl<'a> UnmarshalMessage<'a> for EncryptDecrypt2<'a> {
 }
 
 impl Message for EncryptDecrypt2Rsp<'_> {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 0;
+    type Handles<'a>
+        = [NamedHandle<'a>; 0]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -163,7 +179,7 @@ impl Marshal for EncryptDecrypt2Rsp<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for EncryptDecrypt2Rsp<'a> {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -195,8 +211,12 @@ impl Command for Hash<'_> {
     type Response<'a> = HashRsp<'a>;
 }
 impl Message for Hash<'_> {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 0;
+    type Handles<'a>
+        = [NamedHandle<'a>; 0]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -211,7 +231,7 @@ impl Marshal for Hash<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for Hash<'a> {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -223,8 +243,12 @@ impl<'a> UnmarshalMessage<'a> for Hash<'a> {
 }
 
 impl Message for HashRsp<'_> {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 0;
+    type Handles<'a>
+        = [NamedHandle<'a>; 0]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -238,7 +262,7 @@ impl Marshal for HashRsp<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for HashRsp<'a> {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -253,7 +277,7 @@ impl<'a> UnmarshalMessage<'a> for HashRsp<'a> {
 #[doc(alias = "HMAC_In")]
 #[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct HMAC<'a> {
-    pub handle: Handle,
+    pub handle: NamedHandle<'a>,
     pub buffer: Tpm2bMaxBuffer<'a>,
     pub hash_alg: Option<TpmiAlgHash>,
 }
@@ -269,8 +293,12 @@ impl Command for HMAC<'_> {
     type Response<'a> = HMACRsp<'a>;
 }
 impl Message for HMAC<'_> {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 1;
+    type Handles<'a>
+        = [NamedHandle<'a>; 1]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         [self.handle]
     }
 }
@@ -284,7 +312,7 @@ impl Marshal for HMAC<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for HMAC<'a> {
     fn unmarshal_with_handles(
-        [handle]: Self::Handles,
+        [handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -296,8 +324,12 @@ impl<'a> UnmarshalMessage<'a> for HMAC<'a> {
 }
 
 impl Message for HMACRsp<'_> {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 0;
+    type Handles<'a>
+        = [NamedHandle<'a>; 0]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -310,7 +342,7 @@ impl Marshal for HMACRsp<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for HMACRsp<'a> {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {

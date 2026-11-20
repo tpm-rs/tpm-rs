@@ -30,8 +30,12 @@ impl Command for GetRandom {
     type Response<'a> = GetRandomRsp<'a>;
 }
 impl Message for GetRandom {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 0;
+    type Handles<'a>
+        = [NamedHandle<'a>; 0]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -44,7 +48,7 @@ impl Marshal for GetRandom {
 }
 impl<'a> UnmarshalMessage<'a> for GetRandom {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -54,8 +58,12 @@ impl<'a> UnmarshalMessage<'a> for GetRandom {
 }
 
 impl Message for GetRandomRsp<'_> {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 0;
+    type Handles<'a>
+        = [NamedHandle<'a>; 0]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -68,7 +76,7 @@ impl Marshal for GetRandomRsp<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for GetRandomRsp<'a> {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -90,8 +98,12 @@ impl Command for StirRandom<'_> {
     type Response<'a> = ();
 }
 impl Message for StirRandom<'_> {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 0;
+    type Handles<'a>
+        = [NamedHandle<'a>; 0]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -104,7 +116,7 @@ impl Marshal for StirRandom<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for StirRandom<'a> {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {

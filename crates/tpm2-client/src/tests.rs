@@ -1,5 +1,5 @@
 use super::*;
-use crate::sessions::{PasswordSession, Session};
+use crate::sessions::{PasswordSession, ResponseData, Session};
 use tpm2::*;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -25,8 +25,9 @@ impl Connection for ErrorTpm {
 #[derive(Debug, PartialEq, Eq)]
 struct TestCommand(u32);
 impl Message for TestCommand {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 0;
+    type Handles<'a> = [NamedHandle<'a>; Self::NUM_HANDLES];
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -39,7 +40,7 @@ impl Marshal for TestCommand {
 }
 impl<'a> UnmarshalMessage<'a> for TestCommand {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         let val = u32::unmarshal(src)?;
@@ -190,8 +191,9 @@ impl FakeTpm {
 
 struct TestSessionsCommand();
 impl Message for TestSessionsCommand {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 0;
+    type Handles<'a> = [NamedHandle<'a>; Self::NUM_HANDLES];
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -203,7 +205,10 @@ impl Marshal for TestSessionsCommand {
     }
 }
 impl<'a> UnmarshalMessage<'a> for TestSessionsCommand {
-    fn unmarshal_with_handles([]: Self::Handles, _: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles(
+        []: Self::Handles<'a>,
+        _: &mut &'a [u8],
+    ) -> Result<Self, UnmarshalError> {
         Ok(Self())
     }
 }
@@ -216,10 +221,10 @@ impl Command for TestSessionsCommand {
 fn test_response_missing_sessions() {
     let mut fake_tpm = FakeTpm::default();
     let cmd = TestSessionsCommand();
-    let session = PasswordSession::default();
+    let mut session = PasswordSession::default();
     let mut resp_buffer = [0u8; RESP_BUFFER_SIZE];
     assert_eq!(
-        run_command_with_sessions(&cmd, session, &mut fake_tpm, &mut resp_buffer),
+        run_command_with_sessions(&cmd, &mut session, &mut fake_tpm, &mut resp_buffer),
         Err(ClientError::UnexpectedTag)
     );
 }
@@ -233,15 +238,89 @@ fn test_response_session_fails_validation() {
         session_attributes: TpmaSession(0xf),
         ..Default::default()
     };
-    let validation_failure = PasswordSession::default().validate_auth_response(&invalid_auth);
+    let rsp_data = ResponseData {
+        code: TestSessionsCommand::CMD_CODE,
+        params: &[],
+    };
+    let validation_failure =
+        PasswordSession::default().validate_auth_response(&rsp_data, &invalid_auth);
     assert!(validation_failure.is_err());
     fake_tpm.add_to_response(&invalid_auth);
 
     let cmd = TestSessionsCommand();
-    let session = PasswordSession::default();
+    let mut session = PasswordSession::default();
     let mut resp_buffer = [0u8; RESP_BUFFER_SIZE];
     assert_eq!(
-        run_command_with_sessions(&cmd, session, &mut fake_tpm, &mut resp_buffer),
+        run_command_with_sessions(&cmd, &mut session, &mut fake_tpm, &mut resp_buffer),
         Err(ClientError::Auth(validation_failure.err().unwrap()))
     );
+}
+
+#[test]
+fn test_marshal_named_handle_and_unmarshal_response_handle() {
+    use crate::protocol::{CMD_BUFFER_SIZE, marshal_command, unmarshal_response};
+    use tpm2::commands::{ReadPublic, responses};
+
+    // Marshal a command carrying a NamedHandle with a digest Name; the wire
+    // format must contain only the 4-byte handle value, not the Name bytes.
+    let raw_handle = Handle(0x8000_0042);
+    let name = Tpm2bName::new(&[0x00, 0x0b, 0x11, 0x22, 0x33, 0x44]).unwrap();
+    let cmd = ReadPublic {
+        object_handle: NamedHandle::new(raw_handle, name),
+    };
+    let mut cmd_buf = [0u8; CMD_BUFFER_SIZE];
+    let written = marshal_command(&cmd, &mut (), &mut cmd_buf).unwrap();
+    assert_eq!(written, CommandHeader::MAX_SIZE + Handle::MAX_SIZE);
+
+    let mut slice = &cmd_buf[..written];
+    let header = CommandHeader::unmarshal(&mut slice).unwrap();
+    assert_eq!(header.tag, TpmiStCommandTag::NoSessions);
+    assert_eq!(header.size as usize, written);
+    assert_eq!(header.code, TpmCc::ReadPublic);
+    assert_eq!(Handle::unmarshal(&mut slice).unwrap(), raw_handle);
+    assert!(slice.is_empty());
+
+    // Unmarshal Load response and verify named_handle() pairs wire handle + Name.
+    let mut fake_tpm = FakeTpm::default();
+    fake_tpm.add_to_response(&raw_handle);
+    fake_tpm.add_to_response(&name);
+    let mut resp_buf = [0u8; RESP_BUFFER_SIZE];
+    let raw_resp = fake_tpm.transact(&[], &mut resp_buf).unwrap();
+    let load_rsp: responses::Load<'_> = unmarshal_response::<_, !>(TpmCc::Load, &mut (), raw_resp).unwrap();
+    assert_eq!(load_rsp.object_handle, raw_handle);
+    assert_eq!(load_rsp.name, name);
+    assert_eq!(load_rsp.named_handle(), NamedHandle::new(raw_handle, name));
+
+    // Unmarshal HashSequenceStart response into SequenceHandle.
+    let seq_handle = Handle(0x8000_0099);
+    let mut fake_seq_tpm = FakeTpm::default();
+    fake_seq_tpm.add_to_response(&seq_handle);
+    let mut seq_buf = [0u8; RESP_BUFFER_SIZE];
+    let raw_seq_resp = fake_seq_tpm.transact(&[], &mut seq_buf).unwrap();
+    let seq_rsp: responses::HashSequenceStart =
+        unmarshal_response::<_, !>(TpmCc::HashSequenceStart, &mut (), raw_seq_resp).unwrap();
+    assert_eq!(seq_rsp.sequence_handle, SequenceHandle(seq_handle));
+}
+
+#[test]
+fn test_marshal_command_with_sessions() {
+    let cmd = TestCommand(0x11223344);
+    let mut session = PasswordSession::new("pw").unwrap();
+    let mut buf = [0u8; CMD_BUFFER_SIZE];
+    let written = marshal_command(&cmd, &mut session, &mut buf).unwrap();
+
+    // TPMS_AUTH_COMMAND: handle (4) + nonce (2 + 0) + attributes (1) + hmac (2 + 2)
+    let auth_size = 4 + 2 + 1 + 2 + 2;
+    assert_eq!(written, CommandHeader::MAX_SIZE + 4 + auth_size + 4);
+
+    let mut src = &buf[..written];
+    let header = CommandHeader::unmarshal(&mut src).unwrap();
+    assert_eq!(header.tag, TpmiStCommandTag::Sessions);
+    assert_eq!(header.size as usize, written);
+    assert_eq!(u32::unmarshal(&mut src).unwrap() as usize, auth_size);
+    let auth = TpmsAuthCommand::unmarshal(&mut src).unwrap();
+    assert_eq!(auth.session_handle, Handle::RS_PW);
+    assert_eq!(auth.hmac.as_slice(), b"pw");
+    // The parameters directly follow the authorization area.
+    assert_eq!(src, 0x11223344u32.to_be_bytes());
 }

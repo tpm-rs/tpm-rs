@@ -20,9 +20,13 @@ impl Command for NVDefineSpace<'_> {
     type Response<'a> = ();
 }
 impl Message for NVDefineSpace<'_> {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.auth_handle]
+    const NUM_HANDLES: usize = 1;
+    type Handles<'a>
+        = [NamedHandle<'a>; 1]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.auth_handle.into()]
     }
 }
 impl Marshal for NVDefineSpace<'_> {
@@ -35,11 +39,11 @@ impl Marshal for NVDefineSpace<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for NVDefineSpace<'a> {
     fn unmarshal_with_handles(
-        [auth_handle]: Self::Handles,
+        [auth_handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            auth_handle,
+            auth_handle: auth_handle.handle,
             auth: Unmarshal::unmarshal(src)?,
             public_info: Unmarshal::unmarshal(src)?,
         })
@@ -50,35 +54,39 @@ impl<'a> UnmarshalMessage<'a> for NVDefineSpace<'a> {
 #[doc(alias = "TPM2_NV_UndefineSpace")]
 #[doc(alias = "NV_UndefineSpace_In")]
 #[derive(Clone, Copy, PartialEq, Debug, Eq)]
-pub struct NVUndefineSpace {
+pub struct NVUndefineSpace<'a> {
     pub auth_handle: Handle,
-    pub nv_index: Handle,
+    pub nv_index: NamedHandle<'a>,
 }
 
-impl Command for NVUndefineSpace {
+impl Command for NVUndefineSpace<'_> {
     const CMD_CODE: TpmCc = TpmCc::NVUndefineSpace;
     type Response<'a> = ();
 }
-impl Message for NVUndefineSpace {
-    type Handles = [Handle; 2];
-    fn handles(&self) -> Self::Handles {
-        [self.auth_handle, self.nv_index]
+impl Message for NVUndefineSpace<'_> {
+    const NUM_HANDLES: usize = 2;
+    type Handles<'a>
+        = [NamedHandle<'a>; 2]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.auth_handle.into(), self.nv_index]
     }
 }
-impl Marshal for NVUndefineSpace {
+impl Marshal for NVUndefineSpace<'_> {
     const MAX_SIZE: usize = 0;
     type MaxBuffer = [u8; 0];
     fn marshal(&self, _: &mut Self::MaxBuffer) -> usize {
         0
     }
 }
-impl<'a> UnmarshalMessage<'a> for NVUndefineSpace {
+impl<'a> UnmarshalMessage<'a> for NVUndefineSpace<'a> {
     fn unmarshal_with_handles(
-        [auth_handle, nv_index]: Self::Handles,
+        [auth_handle, nv_index]: Self::Handles<'a>,
         _: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            auth_handle,
+            auth_handle: auth_handle.handle,
             nv_index,
         })
     }
@@ -88,34 +96,41 @@ impl<'a> UnmarshalMessage<'a> for NVUndefineSpace {
 #[doc(alias = "TPM2_NV_UndefineSpaceSpecial")]
 #[doc(alias = "NV_UndefineSpaceSpecial_In")]
 #[derive(Clone, Copy, PartialEq, Debug, Eq)]
-pub struct NVUndefineSpaceSpecial {
-    pub nv_index: Handle,
+pub struct NVUndefineSpaceSpecial<'a> {
+    pub nv_index: NamedHandle<'a>,
     pub platform: Handle,
 }
 
-impl Command for NVUndefineSpaceSpecial {
+impl Command for NVUndefineSpaceSpecial<'_> {
     const CMD_CODE: TpmCc = TpmCc::NVUndefineSpaceSpecial;
     type Response<'a> = ();
 }
-impl Message for NVUndefineSpaceSpecial {
-    type Handles = [Handle; 2];
-    fn handles(&self) -> Self::Handles {
-        [self.nv_index, self.platform]
+impl Message for NVUndefineSpaceSpecial<'_> {
+    const NUM_HANDLES: usize = 2;
+    type Handles<'a>
+        = [NamedHandle<'a>; 2]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.nv_index, self.platform.into()]
     }
 }
-impl Marshal for NVUndefineSpaceSpecial {
+impl Marshal for NVUndefineSpaceSpecial<'_> {
     const MAX_SIZE: usize = 0;
     type MaxBuffer = [u8; 0];
     fn marshal(&self, _: &mut Self::MaxBuffer) -> usize {
         0
     }
 }
-impl<'a> UnmarshalMessage<'a> for NVUndefineSpaceSpecial {
+impl<'a> UnmarshalMessage<'a> for NVUndefineSpaceSpecial<'a> {
     fn unmarshal_with_handles(
-        [nv_index, platform]: Self::Handles,
+        [nv_index, platform]: Self::Handles<'a>,
         _: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
-        Ok(Self { nv_index, platform })
+        Ok(Self {
+            nv_index,
+            platform: platform.handle,
+        })
     }
 }
 
@@ -123,8 +138,8 @@ impl<'a> UnmarshalMessage<'a> for NVUndefineSpaceSpecial {
 #[doc(alias = "TPM2_NV_ReadPublic")]
 #[doc(alias = "NV_ReadPublic_In")]
 #[derive(Clone, Copy, PartialEq, Debug, Eq)]
-pub struct NVReadPublic {
-    pub nv_index: Handle,
+pub struct NVReadPublic<'a> {
+    pub nv_index: NamedHandle<'a>,
 }
 /// TPM2_NV_ReadPublic (Response)
 #[doc(alias = "NV_ReadPublic_Out")]
@@ -134,26 +149,30 @@ pub struct NVReadPublicRsp<'a> {
     pub nv_name: Tpm2bName<'a>,
 }
 
-impl Command for NVReadPublic {
+impl Command for NVReadPublic<'_> {
     const CMD_CODE: TpmCc = TpmCc::NVReadPublic;
     type Response<'a> = NVReadPublicRsp<'a>;
 }
-impl Message for NVReadPublic {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
+impl Message for NVReadPublic<'_> {
+    const NUM_HANDLES: usize = 1;
+    type Handles<'a>
+        = [NamedHandle<'a>; 1]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         [self.nv_index]
     }
 }
-impl Marshal for NVReadPublic {
+impl Marshal for NVReadPublic<'_> {
     const MAX_SIZE: usize = 0;
     type MaxBuffer = [u8; 0];
     fn marshal(&self, _: &mut Self::MaxBuffer) -> usize {
         0
     }
 }
-impl<'a> UnmarshalMessage<'a> for NVReadPublic {
+impl<'a> UnmarshalMessage<'a> for NVReadPublic<'a> {
     fn unmarshal_with_handles(
-        [nv_index]: Self::Handles,
+        [nv_index]: Self::Handles<'a>,
         _: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self { nv_index })
@@ -161,8 +180,12 @@ impl<'a> UnmarshalMessage<'a> for NVReadPublic {
 }
 
 impl Message for NVReadPublicRsp<'_> {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 0;
+    type Handles<'a>
+        = [NamedHandle<'a>; 0]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -176,7 +199,7 @@ impl Marshal for NVReadPublicRsp<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for NVReadPublicRsp<'a> {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -191,8 +214,8 @@ impl<'a> UnmarshalMessage<'a> for NVReadPublicRsp<'a> {
 #[doc(alias = "NV_Write_In")]
 #[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct NVWrite<'a> {
-    pub auth_handle: Handle,
-    pub nv_index: Handle,
+    pub auth_handle: NamedHandle<'a>,
+    pub nv_index: NamedHandle<'a>,
     pub data: Tpm2bMaxNvBuffer<'a>,
     pub offset: u16,
 }
@@ -202,8 +225,12 @@ impl Command for NVWrite<'_> {
     type Response<'a> = ();
 }
 impl Message for NVWrite<'_> {
-    type Handles = [Handle; 2];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 2;
+    type Handles<'a>
+        = [NamedHandle<'a>; 2]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         [self.auth_handle, self.nv_index]
     }
 }
@@ -217,7 +244,7 @@ impl Marshal for NVWrite<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for NVWrite<'a> {
     fn unmarshal_with_handles(
-        [auth_handle, nv_index]: Self::Handles,
+        [auth_handle, nv_index]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -233,31 +260,35 @@ impl<'a> UnmarshalMessage<'a> for NVWrite<'a> {
 #[doc(alias = "TPM2_NV_Increment")]
 #[doc(alias = "NV_Increment_In")]
 #[derive(Clone, Copy, PartialEq, Debug, Eq)]
-pub struct NVIncrement {
-    pub auth_handle: Handle,
-    pub nv_index: Handle,
+pub struct NVIncrement<'a> {
+    pub auth_handle: NamedHandle<'a>,
+    pub nv_index: NamedHandle<'a>,
 }
 
-impl Command for NVIncrement {
+impl Command for NVIncrement<'_> {
     const CMD_CODE: TpmCc = TpmCc::NVIncrement;
     type Response<'a> = ();
 }
-impl Message for NVIncrement {
-    type Handles = [Handle; 2];
-    fn handles(&self) -> Self::Handles {
+impl Message for NVIncrement<'_> {
+    const NUM_HANDLES: usize = 2;
+    type Handles<'a>
+        = [NamedHandle<'a>; 2]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         [self.auth_handle, self.nv_index]
     }
 }
-impl Marshal for NVIncrement {
+impl Marshal for NVIncrement<'_> {
     const MAX_SIZE: usize = 0;
     type MaxBuffer = [u8; 0];
     fn marshal(&self, _: &mut Self::MaxBuffer) -> usize {
         0
     }
 }
-impl<'a> UnmarshalMessage<'a> for NVIncrement {
+impl<'a> UnmarshalMessage<'a> for NVIncrement<'a> {
     fn unmarshal_with_handles(
-        [auth_handle, nv_index]: Self::Handles,
+        [auth_handle, nv_index]: Self::Handles<'a>,
         _: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -272,8 +303,8 @@ impl<'a> UnmarshalMessage<'a> for NVIncrement {
 #[doc(alias = "NV_Extend_In")]
 #[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct NVExtend<'a> {
-    pub auth_handle: Handle,
-    pub nv_index: Handle,
+    pub auth_handle: NamedHandle<'a>,
+    pub nv_index: NamedHandle<'a>,
     pub data: Tpm2bMaxNvBuffer<'a>,
 }
 
@@ -282,8 +313,12 @@ impl Command for NVExtend<'_> {
     type Response<'a> = ();
 }
 impl Message for NVExtend<'_> {
-    type Handles = [Handle; 2];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 2;
+    type Handles<'a>
+        = [NamedHandle<'a>; 2]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         [self.auth_handle, self.nv_index]
     }
 }
@@ -296,7 +331,7 @@ impl Marshal for NVExtend<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for NVExtend<'a> {
     fn unmarshal_with_handles(
-        [auth_handle, nv_index]: Self::Handles,
+        [auth_handle, nv_index]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -311,32 +346,36 @@ impl<'a> UnmarshalMessage<'a> for NVExtend<'a> {
 #[doc(alias = "TPM2_NV_SetBits")]
 #[doc(alias = "NV_SetBits_In")]
 #[derive(Clone, Copy, PartialEq, Debug, Eq)]
-pub struct NVSetBits {
-    pub auth_handle: Handle,
-    pub nv_index: Handle,
+pub struct NVSetBits<'a> {
+    pub auth_handle: NamedHandle<'a>,
+    pub nv_index: NamedHandle<'a>,
     pub bits: u64,
 }
 
-impl Command for NVSetBits {
+impl Command for NVSetBits<'_> {
     const CMD_CODE: TpmCc = TpmCc::NVSetBits;
     type Response<'a> = ();
 }
-impl Message for NVSetBits {
-    type Handles = [Handle; 2];
-    fn handles(&self) -> Self::Handles {
+impl Message for NVSetBits<'_> {
+    const NUM_HANDLES: usize = 2;
+    type Handles<'a>
+        = [NamedHandle<'a>; 2]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         [self.auth_handle, self.nv_index]
     }
 }
-impl Marshal for NVSetBits {
+impl Marshal for NVSetBits<'_> {
     const MAX_SIZE: usize = u64::MAX_SIZE;
-    type MaxBuffer = [u8; Self::MAX_SIZE];
+    type MaxBuffer = [u8; NVSetBits::MAX_SIZE];
     fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
         self.bits.marshal(dst)
     }
 }
-impl<'a> UnmarshalMessage<'a> for NVSetBits {
+impl<'a> UnmarshalMessage<'a> for NVSetBits<'a> {
     fn unmarshal_with_handles(
-        [auth_handle, nv_index]: Self::Handles,
+        [auth_handle, nv_index]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -351,31 +390,35 @@ impl<'a> UnmarshalMessage<'a> for NVSetBits {
 #[doc(alias = "TPM2_NV_WriteLock")]
 #[doc(alias = "NV_WriteLock_In")]
 #[derive(Clone, Copy, PartialEq, Debug, Eq)]
-pub struct NVWriteLock {
-    pub auth_handle: Handle,
-    pub nv_index: Handle,
+pub struct NVWriteLock<'a> {
+    pub auth_handle: NamedHandle<'a>,
+    pub nv_index: NamedHandle<'a>,
 }
 
-impl Command for NVWriteLock {
+impl Command for NVWriteLock<'_> {
     const CMD_CODE: TpmCc = TpmCc::NVWriteLock;
     type Response<'a> = ();
 }
-impl Message for NVWriteLock {
-    type Handles = [Handle; 2];
-    fn handles(&self) -> Self::Handles {
+impl Message for NVWriteLock<'_> {
+    const NUM_HANDLES: usize = 2;
+    type Handles<'a>
+        = [NamedHandle<'a>; 2]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         [self.auth_handle, self.nv_index]
     }
 }
-impl Marshal for NVWriteLock {
+impl Marshal for NVWriteLock<'_> {
     const MAX_SIZE: usize = 0;
     type MaxBuffer = [u8; 0];
     fn marshal(&self, _: &mut Self::MaxBuffer) -> usize {
         0
     }
 }
-impl<'a> UnmarshalMessage<'a> for NVWriteLock {
+impl<'a> UnmarshalMessage<'a> for NVWriteLock<'a> {
     fn unmarshal_with_handles(
-        [auth_handle, nv_index]: Self::Handles,
+        [auth_handle, nv_index]: Self::Handles<'a>,
         _: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -398,9 +441,13 @@ impl Command for NVGlobalWriteLock {
     type Response<'a> = ();
 }
 impl Message for NVGlobalWriteLock {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.auth_handle]
+    const NUM_HANDLES: usize = 1;
+    type Handles<'a>
+        = [NamedHandle<'a>; 1]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.auth_handle.into()]
     }
 }
 impl Marshal for NVGlobalWriteLock {
@@ -412,10 +459,12 @@ impl Marshal for NVGlobalWriteLock {
 }
 impl<'a> UnmarshalMessage<'a> for NVGlobalWriteLock {
     fn unmarshal_with_handles(
-        [auth_handle]: Self::Handles,
+        [auth_handle]: Self::Handles<'a>,
         _: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
-        Ok(Self { auth_handle })
+        Ok(Self {
+            auth_handle: auth_handle.handle,
+        })
     }
 }
 
@@ -423,9 +472,9 @@ impl<'a> UnmarshalMessage<'a> for NVGlobalWriteLock {
 #[doc(alias = "TPM2_NV_Read")]
 #[doc(alias = "NV_Read_In")]
 #[derive(Clone, Copy, PartialEq, Debug, Eq)]
-pub struct NVRead {
-    pub auth_handle: Handle,
-    pub nv_index: Handle,
+pub struct NVRead<'a> {
+    pub auth_handle: NamedHandle<'a>,
+    pub nv_index: NamedHandle<'a>,
     pub size: u16,
     pub offset: u16,
 }
@@ -436,27 +485,31 @@ pub struct NVReadRsp<'a> {
     pub data: Tpm2bMaxNvBuffer<'a>,
 }
 
-impl Command for NVRead {
+impl Command for NVRead<'_> {
     const CMD_CODE: TpmCc = TpmCc::NVRead;
     type Response<'a> = NVReadRsp<'a>;
 }
-impl Message for NVRead {
-    type Handles = [Handle; 2];
-    fn handles(&self) -> Self::Handles {
+impl Message for NVRead<'_> {
+    const NUM_HANDLES: usize = 2;
+    type Handles<'a>
+        = [NamedHandle<'a>; 2]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         [self.auth_handle, self.nv_index]
     }
 }
-impl Marshal for NVRead {
+impl Marshal for NVRead<'_> {
     const MAX_SIZE: usize = u16::MAX_SIZE + u16::MAX_SIZE;
-    type MaxBuffer = [u8; Self::MAX_SIZE];
+    type MaxBuffer = [u8; NVRead::MAX_SIZE];
     fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
         let count = marshal_helper(&self.size, dst, 0);
         marshal_helper(&self.offset, dst, count)
     }
 }
-impl<'a> UnmarshalMessage<'a> for NVRead {
+impl<'a> UnmarshalMessage<'a> for NVRead<'a> {
     fn unmarshal_with_handles(
-        [auth_handle, nv_index]: Self::Handles,
+        [auth_handle, nv_index]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -469,8 +522,12 @@ impl<'a> UnmarshalMessage<'a> for NVRead {
 }
 
 impl Message for NVReadRsp<'_> {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 0;
+    type Handles<'a>
+        = [NamedHandle<'a>; 0]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -483,7 +540,7 @@ impl Marshal for NVReadRsp<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for NVReadRsp<'a> {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -496,31 +553,35 @@ impl<'a> UnmarshalMessage<'a> for NVReadRsp<'a> {
 #[doc(alias = "TPM2_NV_ReadLock")]
 #[doc(alias = "NV_ReadLock_In")]
 #[derive(Clone, Copy, PartialEq, Debug, Eq)]
-pub struct NVReadLock {
-    pub auth_handle: Handle,
-    pub nv_index: Handle,
+pub struct NVReadLock<'a> {
+    pub auth_handle: NamedHandle<'a>,
+    pub nv_index: NamedHandle<'a>,
 }
 
-impl Command for NVReadLock {
+impl Command for NVReadLock<'_> {
     const CMD_CODE: TpmCc = TpmCc::NVReadLock;
     type Response<'a> = ();
 }
-impl Message for NVReadLock {
-    type Handles = [Handle; 2];
-    fn handles(&self) -> Self::Handles {
+impl Message for NVReadLock<'_> {
+    const NUM_HANDLES: usize = 2;
+    type Handles<'a>
+        = [NamedHandle<'a>; 2]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         [self.auth_handle, self.nv_index]
     }
 }
-impl Marshal for NVReadLock {
+impl Marshal for NVReadLock<'_> {
     const MAX_SIZE: usize = 0;
     type MaxBuffer = [u8; 0];
     fn marshal(&self, _: &mut Self::MaxBuffer) -> usize {
         0
     }
 }
-impl<'a> UnmarshalMessage<'a> for NVReadLock {
+impl<'a> UnmarshalMessage<'a> for NVReadLock<'a> {
     fn unmarshal_with_handles(
-        [auth_handle, nv_index]: Self::Handles,
+        [auth_handle, nv_index]: Self::Handles<'a>,
         _: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -535,7 +596,7 @@ impl<'a> UnmarshalMessage<'a> for NVReadLock {
 #[doc(alias = "NV_ChangeAuth_In")]
 #[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct NVChangeAuth<'a> {
-    pub nv_index: Handle,
+    pub nv_index: NamedHandle<'a>,
     pub new_auth: Tpm2bAuth<'a>,
 }
 
@@ -544,8 +605,12 @@ impl Command for NVChangeAuth<'_> {
     type Response<'a> = ();
 }
 impl Message for NVChangeAuth<'_> {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 1;
+    type Handles<'a>
+        = [NamedHandle<'a>; 1]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         [self.nv_index]
     }
 }
@@ -558,7 +623,7 @@ impl Marshal for NVChangeAuth<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for NVChangeAuth<'a> {
     fn unmarshal_with_handles(
-        [nv_index]: Self::Handles,
+        [nv_index]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -573,9 +638,9 @@ impl<'a> UnmarshalMessage<'a> for NVChangeAuth<'a> {
 #[doc(alias = "NV_Certify_In")]
 #[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct NVCertify<'a> {
-    pub sign_handle: Handle,
-    pub auth_handle: Handle,
-    pub nv_index: Handle,
+    pub sign_handle: NamedHandle<'a>,
+    pub auth_handle: NamedHandle<'a>,
+    pub nv_index: NamedHandle<'a>,
     pub qualifying_data: Tpm2bData<'a>,
     pub in_scheme: Option<TpmtSigScheme>,
     pub size: u16,
@@ -594,8 +659,12 @@ impl Command for NVCertify<'_> {
     type Response<'a> = NVCertifyRsp<'a>;
 }
 impl Message for NVCertify<'_> {
-    type Handles = [Handle; 3];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 3;
+    type Handles<'a>
+        = [NamedHandle<'a>; 3]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         [self.sign_handle, self.auth_handle, self.nv_index]
     }
 }
@@ -612,7 +681,7 @@ impl Marshal for NVCertify<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for NVCertify<'a> {
     fn unmarshal_with_handles(
-        [sign_handle, auth_handle, nv_index]: Self::Handles,
+        [sign_handle, auth_handle, nv_index]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -628,8 +697,12 @@ impl<'a> UnmarshalMessage<'a> for NVCertify<'a> {
 }
 
 impl Message for NVCertifyRsp<'_> {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 0;
+    type Handles<'a>
+        = [NamedHandle<'a>; 0]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -643,7 +716,7 @@ impl Marshal for NVCertifyRsp<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for NVCertifyRsp<'a> {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -668,9 +741,13 @@ impl Command for NVDefineSpace2<'_> {
     type Response<'a> = ();
 }
 impl Message for NVDefineSpace2<'_> {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.auth_handle]
+    const NUM_HANDLES: usize = 1;
+    type Handles<'a>
+        = [NamedHandle<'a>; 1]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.auth_handle.into()]
     }
 }
 impl Marshal for NVDefineSpace2<'_> {
@@ -683,11 +760,11 @@ impl Marshal for NVDefineSpace2<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for NVDefineSpace2<'a> {
     fn unmarshal_with_handles(
-        [auth_handle]: Self::Handles,
+        [auth_handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            auth_handle,
+            auth_handle: auth_handle.handle,
             auth: Unmarshal::unmarshal(src)?,
             public_info: Unmarshal::unmarshal(src)?,
         })
@@ -698,8 +775,8 @@ impl<'a> UnmarshalMessage<'a> for NVDefineSpace2<'a> {
 #[doc(alias = "TPM2_NV_ReadPublic2")]
 #[doc(alias = "NV_ReadPublic2_In")]
 #[derive(Clone, Copy, PartialEq, Debug, Eq)]
-pub struct NVReadPublic2 {
-    pub nv_index: Handle,
+pub struct NVReadPublic2<'a> {
+    pub nv_index: NamedHandle<'a>,
 }
 /// TPM2_NV_ReadPublic2 (Response)
 #[doc(alias = "NV_ReadPublic2_Out")]
@@ -709,26 +786,30 @@ pub struct NVReadPublic2Rsp<'a> {
     pub nv_name: Tpm2bName<'a>,
 }
 
-impl Command for NVReadPublic2 {
+impl Command for NVReadPublic2<'_> {
     const CMD_CODE: TpmCc = TpmCc::NVReadPublic2;
     type Response<'a> = NVReadPublic2Rsp<'a>;
 }
-impl Message for NVReadPublic2 {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
+impl Message for NVReadPublic2<'_> {
+    const NUM_HANDLES: usize = 1;
+    type Handles<'a>
+        = [NamedHandle<'a>; 1]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         [self.nv_index]
     }
 }
-impl Marshal for NVReadPublic2 {
+impl Marshal for NVReadPublic2<'_> {
     const MAX_SIZE: usize = 0;
     type MaxBuffer = [u8; 0];
     fn marshal(&self, _: &mut Self::MaxBuffer) -> usize {
         0
     }
 }
-impl<'a> UnmarshalMessage<'a> for NVReadPublic2 {
+impl<'a> UnmarshalMessage<'a> for NVReadPublic2<'a> {
     fn unmarshal_with_handles(
-        [nv_index]: Self::Handles,
+        [nv_index]: Self::Handles<'a>,
         _: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self { nv_index })
@@ -736,8 +817,12 @@ impl<'a> UnmarshalMessage<'a> for NVReadPublic2 {
 }
 
 impl Message for NVReadPublic2Rsp<'_> {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 0;
+    type Handles<'a>
+        = [NamedHandle<'a>; 0]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -751,7 +836,7 @@ impl Marshal for NVReadPublic2Rsp<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for NVReadPublic2Rsp<'a> {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {

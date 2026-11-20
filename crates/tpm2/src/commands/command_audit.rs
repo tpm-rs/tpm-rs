@@ -21,9 +21,13 @@ impl Command for SetCommandCodeAuditStatus {
     type Response<'a> = ();
 }
 impl Message for SetCommandCodeAuditStatus {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.auth]
+    const NUM_HANDLES: usize = 1;
+    type Handles<'a>
+        = [NamedHandle<'a>; 1]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.auth.into()]
     }
 }
 impl Marshal for SetCommandCodeAuditStatus {
@@ -37,11 +41,11 @@ impl Marshal for SetCommandCodeAuditStatus {
 }
 impl<'a> UnmarshalMessage<'a> for SetCommandCodeAuditStatus {
     fn unmarshal_with_handles(
-        [auth]: Self::Handles,
+        [auth]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            auth,
+            auth: auth.handle,
             audit_alg: Unmarshal::unmarshal(src)?,
             set_list: Unmarshal::unmarshal(src)?,
             clear_list: Unmarshal::unmarshal(src)?,

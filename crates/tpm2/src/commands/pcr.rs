@@ -19,9 +19,13 @@ impl Command for PCRExtend<'_> {
     type Response<'a> = ();
 }
 impl Message for PCRExtend<'_> {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.pcr_handle]
+    const NUM_HANDLES: usize = 1;
+    type Handles<'a>
+        = [NamedHandle<'a>; 1]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.pcr_handle.into()]
     }
 }
 impl Marshal for PCRExtend<'_> {
@@ -33,11 +37,11 @@ impl Marshal for PCRExtend<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for PCRExtend<'a> {
     fn unmarshal_with_handles(
-        [pcr_handle]: Self::Handles,
+        [pcr_handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            pcr_handle,
+            pcr_handle: pcr_handle.handle,
             digests: Unmarshal::unmarshal(src)?,
         })
     }
@@ -63,9 +67,13 @@ impl Command for PCREvent<'_> {
     type Response<'a> = PCREventRsp<'a>;
 }
 impl Message for PCREvent<'_> {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.pcr_handle]
+    const NUM_HANDLES: usize = 1;
+    type Handles<'a>
+        = [NamedHandle<'a>; 1]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.pcr_handle.into()]
     }
 }
 impl Marshal for PCREvent<'_> {
@@ -77,19 +85,23 @@ impl Marshal for PCREvent<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for PCREvent<'a> {
     fn unmarshal_with_handles(
-        [pcr_handle]: Self::Handles,
+        [pcr_handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            pcr_handle,
+            pcr_handle: pcr_handle.handle,
             event_data: Unmarshal::unmarshal(src)?,
         })
     }
 }
 
 impl Message for PCREventRsp<'_> {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 0;
+    type Handles<'a>
+        = [NamedHandle<'a>; 0]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -102,7 +114,7 @@ impl Marshal for PCREventRsp<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for PCREventRsp<'a> {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -132,8 +144,12 @@ impl Command for PCRRead {
     type Response<'a> = PCRReadRsp<'a>;
 }
 impl Message for PCRRead {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 0;
+    type Handles<'a>
+        = [NamedHandle<'a>; 0]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -146,7 +162,7 @@ impl Marshal for PCRRead {
 }
 impl<'a> UnmarshalMessage<'a> for PCRRead {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -156,8 +172,12 @@ impl<'a> UnmarshalMessage<'a> for PCRRead {
 }
 
 impl Message for PCRReadRsp<'_> {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 0;
+    type Handles<'a>
+        = [NamedHandle<'a>; 0]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -172,7 +192,7 @@ impl Marshal for PCRReadRsp<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for PCRReadRsp<'a> {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -206,9 +226,13 @@ impl Command for PCRAllocate {
     type Response<'a> = PCRAllocateRsp;
 }
 impl Message for PCRAllocate {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.auth_handle]
+    const NUM_HANDLES: usize = 1;
+    type Handles<'a>
+        = [NamedHandle<'a>; 1]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.auth_handle.into()]
     }
 }
 impl Marshal for PCRAllocate {
@@ -220,19 +244,23 @@ impl Marshal for PCRAllocate {
 }
 impl<'a> UnmarshalMessage<'a> for PCRAllocate {
     fn unmarshal_with_handles(
-        [auth_handle]: Self::Handles,
+        [auth_handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            auth_handle,
+            auth_handle: auth_handle.handle,
             pcr_allocation: Unmarshal::unmarshal(src)?,
         })
     }
 }
 
 impl Message for PCRAllocateRsp {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 0;
+    type Handles<'a>
+        = [NamedHandle<'a>; 0]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -248,7 +276,7 @@ impl Marshal for PCRAllocateRsp {
 }
 impl<'a> UnmarshalMessage<'a> for PCRAllocateRsp {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -276,9 +304,13 @@ impl Command for PCRSetAuthPolicy<'_> {
     type Response<'a> = ();
 }
 impl Message for PCRSetAuthPolicy<'_> {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.auth_handle]
+    const NUM_HANDLES: usize = 1;
+    type Handles<'a>
+        = [NamedHandle<'a>; 1]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.auth_handle.into()]
     }
 }
 impl Marshal for PCRSetAuthPolicy<'_> {
@@ -293,11 +325,11 @@ impl Marshal for PCRSetAuthPolicy<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for PCRSetAuthPolicy<'a> {
     fn unmarshal_with_handles(
-        [auth_handle]: Self::Handles,
+        [auth_handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            auth_handle,
+            auth_handle: auth_handle.handle,
             auth_policy: Unmarshal::unmarshal(src)?,
             hash_alg: Unmarshal::unmarshal(src)?,
             pcr_num: Unmarshal::unmarshal(src)?,
@@ -319,9 +351,13 @@ impl Command for PCRSetAuthValue<'_> {
     type Response<'a> = ();
 }
 impl Message for PCRSetAuthValue<'_> {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.pcr_handle]
+    const NUM_HANDLES: usize = 1;
+    type Handles<'a>
+        = [NamedHandle<'a>; 1]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.pcr_handle.into()]
     }
 }
 impl Marshal for PCRSetAuthValue<'_> {
@@ -333,11 +369,11 @@ impl Marshal for PCRSetAuthValue<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for PCRSetAuthValue<'a> {
     fn unmarshal_with_handles(
-        [pcr_handle]: Self::Handles,
+        [pcr_handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            pcr_handle,
+            pcr_handle: pcr_handle.handle,
             auth: Unmarshal::unmarshal(src)?,
         })
     }
@@ -356,9 +392,13 @@ impl Command for PCRReset {
     type Response<'a> = ();
 }
 impl Message for PCRReset {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.pcr_handle]
+    const NUM_HANDLES: usize = 1;
+    type Handles<'a>
+        = [NamedHandle<'a>; 1]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.pcr_handle.into()]
     }
 }
 impl Marshal for PCRReset {
@@ -370,9 +410,11 @@ impl Marshal for PCRReset {
 }
 impl<'a> UnmarshalMessage<'a> for PCRReset {
     fn unmarshal_with_handles(
-        [pcr_handle]: Self::Handles,
+        [pcr_handle]: Self::Handles<'a>,
         _: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
-        Ok(Self { pcr_handle })
+        Ok(Self {
+            pcr_handle: pcr_handle.handle,
+        })
     }
 }

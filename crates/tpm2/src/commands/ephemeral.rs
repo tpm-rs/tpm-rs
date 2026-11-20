@@ -10,7 +10,7 @@ use crate::{errors::UnmarshalError, marshal::marshal_helper, *};
 #[doc(alias = "Commit_In")]
 #[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct Commit<'a> {
-    pub sign_handle: Handle,
+    pub sign_handle: NamedHandle<'a>,
     pub p1: Tpm2bEccPoint<'a>,
     pub s2: Tpm2bSensitiveData<'a>,
     pub y2: Tpm2bEccParameter<'a>,
@@ -30,8 +30,12 @@ impl Command for Commit<'_> {
     type Response<'a> = CommitRsp<'a>;
 }
 impl Message for Commit<'_> {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 1;
+    type Handles<'a>
+        = [NamedHandle<'a>; 1]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         [self.sign_handle]
     }
 }
@@ -47,7 +51,7 @@ impl Marshal for Commit<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for Commit<'a> {
     fn unmarshal_with_handles(
-        [sign_handle]: Self::Handles,
+        [sign_handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -60,8 +64,12 @@ impl<'a> UnmarshalMessage<'a> for Commit<'a> {
 }
 
 impl Message for CommitRsp<'_> {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 0;
+    type Handles<'a>
+        = [NamedHandle<'a>; 0]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -78,7 +86,7 @@ impl Marshal for CommitRsp<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for CommitRsp<'a> {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -110,8 +118,12 @@ impl Command for ECEphemeral {
     type Response<'a> = ECEphemeralRsp<'a>;
 }
 impl Message for ECEphemeral {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 0;
+    type Handles<'a>
+        = [NamedHandle<'a>; 0]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -124,7 +136,7 @@ impl Marshal for ECEphemeral {
 }
 impl<'a> UnmarshalMessage<'a> for ECEphemeral {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -134,8 +146,12 @@ impl<'a> UnmarshalMessage<'a> for ECEphemeral {
 }
 
 impl Message for ECEphemeralRsp<'_> {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 0;
+    type Handles<'a>
+        = [NamedHandle<'a>; 0]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -149,7 +165,7 @@ impl Marshal for ECEphemeralRsp<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for ECEphemeralRsp<'a> {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
