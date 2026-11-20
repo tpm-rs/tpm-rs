@@ -24,6 +24,7 @@
 
 mod basic_and_auth_tests;
 mod shutdown_tests;
+mod policy_tests;
 
 use std::io;
 use std::net::Ipv4Addr;
@@ -249,6 +250,7 @@ pub fn read_nv_index(simulator: &mut TcpSimulator, nv_public: &TpmsNvPublic, aut
 fn main() {
     basic_and_auth_tests::run();
     shutdown_tests::run();
+    policy_tests::run();
 
     todo!();
 }
