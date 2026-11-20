@@ -1,7 +1,7 @@
 use tpm2::crypto::{hash, hmac};
 use tpm2::{
-    Handle, Tpm2bAuth, Tpm2bData, Tpm2bDigest, Tpm2bName, Tpm2bNonce, TpmCc, TpmaSession,
-    TpmiAlgHash, TpmsAuthResponse,
+    Handle, NamedHandle, Tpm2bAuth, Tpm2bData, Tpm2bDigest, Tpm2bName, Tpm2bNonce, TpmCc,
+    TpmaSession, TpmiAlgHash, TpmsAuthResponse,
 };
 use crate::CryptoBackend;
 
@@ -74,11 +74,12 @@ fn test_hmac_session_command_hmac() {
     session.set_auth_value(Tpm2bAuth::new(b"auth\0\0").unwrap());
 
     let name = [0xAB; 34];
-    let names = [None, Some(Tpm2bName::new(&name).unwrap())];
     let cmd = CommandData {
         code: CODE,
-        handles: &[Handle::RH_OWNER, NV_INDEX],
-        names: &names,
+        handles: &[
+            Handle::RH_OWNER.into(),
+            NamedHandle::new(NV_INDEX, Tpm2bName::new(&name).unwrap()),
+        ],
         params: b"params",
     };
     let auth = session.auth_command(&cmd).unwrap();
@@ -114,8 +115,7 @@ fn test_hmac_session_rolls_nonces() {
     session.set_auth_value(Tpm2bAuth::new(b"auth").unwrap());
     let cmd = CommandData {
         code: CODE,
-        handles: &[Handle::RH_OWNER],
-        names: &[],
+        handles: &[Handle::RH_OWNER.into()],
         params: b"params",
     };
     let rsp = ResponseData {
@@ -175,8 +175,7 @@ fn test_hmac_session_missing_name() {
     session.set_auth_value(Tpm2bAuth::new(b"auth").unwrap());
     let cmd = CommandData {
         code: CODE,
-        handles: &[Handle::RH_OWNER, NV_INDEX],
-        names: &[],
+        handles: &[Handle::RH_OWNER.into(), NV_INDEX.into()],
         params: &[],
     };
     assert_eq!(
@@ -192,8 +191,7 @@ fn test_hmac_session_empty_key() {
     let mut session = new_hmac_session();
     let cmd = CommandData {
         code: CODE,
-        handles: &[Handle::RH_OWNER, NV_INDEX],
-        names: &[],
+        handles: &[Handle::RH_OWNER.into(), NV_INDEX.into()],
         params: b"params",
     };
     let rsp = ResponseData {
@@ -231,8 +229,7 @@ fn test_password_auth_command() {
     let mut session = PasswordSession::new("hello").unwrap();
     let cmd = CommandData {
         code: CODE,
-        handles: &[NV_INDEX],
-        names: &[],
+        handles: &[NV_INDEX.into()],
         params: &[],
     };
     // Password sessions don't need Names.
@@ -419,8 +416,7 @@ fn test_policy_session_policy_only() {
 
     let cmd = CommandData {
         code: CODE,
-        handles: &[NV_INDEX, NV_INDEX],
-        names: &[],
+        handles: &[NV_INDEX.into(), NV_INDEX.into()],
         params: b"params",
     };
     let rsp = ResponseData {
@@ -458,11 +454,9 @@ fn test_policy_session_auth_value() {
     );
 
     let name = [0xAB; 34];
-    let names = [Some(Tpm2bName::new(&name).unwrap())];
     let cmd = CommandData {
         code: CODE,
-        handles: &[NV_INDEX],
-        names: &names,
+        handles: &[NamedHandle::new(NV_INDEX, Tpm2bName::new(&name).unwrap())],
         params: b"params",
     };
     let rsp = ResponseData {
@@ -522,8 +516,7 @@ fn test_policy_session_password() {
     // No Names are needed, as there is no cpHash.
     let cmd = CommandData {
         code: CODE,
-        handles: &[NV_INDEX],
-        names: &[],
+        handles: &[NV_INDEX.into()],
         params: b"params",
     };
     let rsp = ResponseData {
@@ -571,8 +564,7 @@ fn test_policy_session_restart() {
 
     let cmd = CommandData {
         code: CODE,
-        handles: &[NV_INDEX],
-        names: &[],
+        handles: &[NV_INDEX.into()],
         params: b"params",
     };
     let auth = session.auth_command(&cmd).unwrap();

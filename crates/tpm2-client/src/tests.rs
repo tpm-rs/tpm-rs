@@ -224,7 +224,7 @@ fn test_response_missing_sessions() {
     let mut session = PasswordSession::default();
     let mut resp_buffer = [0u8; RESP_BUFFER_SIZE];
     assert_eq!(
-        run_command_with_sessions(&cmd, &[], &mut session, &mut fake_tpm, &mut resp_buffer),
+        run_command_with_sessions(&cmd, &mut session, &mut fake_tpm, &mut resp_buffer),
         Err(ClientError::UnexpectedTag)
     );
 }
@@ -251,7 +251,7 @@ fn test_response_session_fails_validation() {
     let mut session = PasswordSession::default();
     let mut resp_buffer = [0u8; RESP_BUFFER_SIZE];
     assert_eq!(
-        run_command_with_sessions(&cmd, &[], &mut session, &mut fake_tpm, &mut resp_buffer),
+        run_command_with_sessions(&cmd, &mut session, &mut fake_tpm, &mut resp_buffer),
         Err(ClientError::Auth(validation_failure.err().unwrap()))
     );
 }
@@ -269,7 +269,7 @@ fn test_marshal_named_handle_and_unmarshal_response_handle() {
         object_handle: NamedHandle::new(raw_handle, name),
     };
     let mut cmd_buf = [0u8; CMD_BUFFER_SIZE];
-    let written = marshal_command(&cmd, &(), &mut cmd_buf);
+    let written = marshal_command(&cmd, &mut (), &mut cmd_buf).unwrap();
     assert_eq!(written, CommandHeader::MAX_SIZE + Handle::MAX_SIZE);
 
     let mut slice = &cmd_buf[..written];
@@ -286,7 +286,7 @@ fn test_marshal_named_handle_and_unmarshal_response_handle() {
     fake_tpm.add_to_response(&name);
     let mut resp_buf = [0u8; RESP_BUFFER_SIZE];
     let raw_resp = fake_tpm.transact(&[], &mut resp_buf).unwrap();
-    let load_rsp: responses::Load<'_> = unmarshal_response::<_, !>(&(), raw_resp).unwrap();
+    let load_rsp: responses::Load<'_> = unmarshal_response::<_, !>(TpmCc::Load, &mut (), raw_resp).unwrap();
     assert_eq!(load_rsp.object_handle, raw_handle);
     assert_eq!(load_rsp.name, name);
     assert_eq!(load_rsp.named_handle(), NamedHandle::new(raw_handle, name));
@@ -298,7 +298,7 @@ fn test_marshal_named_handle_and_unmarshal_response_handle() {
     let mut seq_buf = [0u8; RESP_BUFFER_SIZE];
     let raw_seq_resp = fake_seq_tpm.transact(&[], &mut seq_buf).unwrap();
     let seq_rsp: responses::HashSequenceStart =
-        unmarshal_response::<_, !>(&(), raw_seq_resp).unwrap();
+        unmarshal_response::<_, !>(TpmCc::HashSequenceStart, &mut (), raw_seq_resp).unwrap();
     assert_eq!(seq_rsp.sequence_handle, SequenceHandle(seq_handle));
 }
 
@@ -307,7 +307,7 @@ fn test_marshal_command_with_sessions() {
     let cmd = TestCommand(0x11223344);
     let mut session = PasswordSession::new("pw").unwrap();
     let mut buf = [0u8; CMD_BUFFER_SIZE];
-    let written = marshal_command(&cmd, &[], &mut session, &mut buf).unwrap();
+    let written = marshal_command(&cmd, &mut session, &mut buf).unwrap();
 
     // TPMS_AUTH_COMMAND: handle (4) + nonce (2 + 0) + attributes (1) + hmac (2 + 2)
     let auth_size = 4 + 2 + 1 + 2 + 2;

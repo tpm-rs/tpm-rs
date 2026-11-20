@@ -193,17 +193,17 @@ pub fn run_command<'a, C: Command<MaxBuffer = [u8; N]>, T: Connection, const N: 
     tpm: &mut T,
     resp_buffer: &'a mut [u8],
 ) -> Result<C::Response<'a>, ClientError<T::Error>> {
-    run_command_with_sessions(cmd, &[], &mut (), tpm, resp_buffer)
+    run_command_with_sessions(cmd, &mut (), tpm, resp_buffer)
 }
 
 /// Runs a TPM command with the provided sessions over the given
 /// connection.
 ///
-/// `names` are the Names of the command's handles, in handle order. Sessions
-/// that compute a cpHash (e.g. [`HmacSession`](sessions::HmacSession)) need
-/// a Name for every handle. Names of PCR, session, and permanent handles are
-/// derived from the handle, so a `None` (or missing) entry can be used.
-/// Other Names (e.g. of NV indices or objects) must be provided.
+/// Sessions that compute a cpHash (e.g.
+/// [`HmacSession`](sessions::HmacSession)) need a Name for every handle, which
+/// they take from the command's [`NamedHandle`](tpm2::NamedHandle)s. Names of
+/// PCR, session, permanent, and AC handles are derived from the handle. Other
+/// Names (e.g. of NV indices or objects) must be set on the command's handles.
 ///
 /// Sessions are updated in place (e.g. rolling nonces), so they are borrowed
 /// mutably. Multiple sessions can be passed as a tuple of `&mut` references,
@@ -222,13 +222,12 @@ pub fn run_command_with_sessions<
     const N: usize,
 >(
     cmd: &C,
-    names: &[Option<Tpm2bName>],
     cmd_sessions: &mut impl AuthorizationArea,
     tpm: &mut T,
     resp_buffer: &'a mut [u8],
 ) -> Result<C::Response<'a>, ClientError<T::Error>> {
     let mut cmd_buffer = [0u8; CMD_BUFFER_SIZE];
-    let written = marshal_command(cmd, names, cmd_sessions, &mut cmd_buffer)?;
+    let written = marshal_command(cmd, cmd_sessions, &mut cmd_buffer)?;
 
     let resp_buffer = tpm
         .transact(&cmd_buffer[..written], resp_buffer)

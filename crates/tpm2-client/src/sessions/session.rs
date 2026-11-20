@@ -1,7 +1,5 @@
 use tpm2::crypto::{Crypto, CryptoError, HashContext, hash};
-use tpm2::{
-    Handle, Tpm2bName, TpmCc, TpmHt, TpmiAlgHash, TpmsAuthCommand, TpmsAuthResponse, TpmtHa,
-};
+use tpm2::{NamedHandle, TpmCc, TpmiAlgHash, TpmsAuthCommand, TpmsAuthResponse, TpmtHa};
 
 /// Error occurring during session authorization validation.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -38,33 +36,15 @@ impl From<CryptoError> for AuthError {
 pub struct CommandData<'a> {
     /// The command code.
     pub code: TpmCc,
-    /// The command's handle area.
-    pub handles: &'a [Handle],
-    /// Names of the handles, in handle order. `None` (or a missing entry)
-    /// means that the Name is derived from the handle value, which is only
-    /// possible for PCR, session, and permanent handles.
-    pub names: &'a [Option<Tpm2bName<'a>>],
+    /// The command's handle area, with each handle's Name. Handles without
+    /// an explicit Name must be ones whose Name is derived from the handle
+    /// value (see [`NamedHandle::resolve_name`]).
+    pub handles: &'a [NamedHandle<'a>],
     /// The marshaled command parameters.
     pub params: &'a [u8],
 }
 
 impl CommandData<'_> {
-    /// Returns the Name of the `i`th handle.
-    fn name(&self, i: usize) -> Result<NameBytes<'_>, AuthError> {
-        if let Some(Some(name)) = self.names.get(i) {
-            return Ok(NameBytes::Provided(*name));
-        }
-        // TPM 2.0 Part 1, Section 16: these handle types use the handle
-        // value as their Name.
-        let handle = self.handles[i];
-        match handle.handle_type() {
-            Some(TpmHt::PCR | TpmHt::HMACSession | TpmHt::PolicySession | TpmHt::Permanent) => {
-                Ok(NameBytes::Handle(handle.0.to_be_bytes()))
-            }
-            _ => Err(AuthError::MissingName),
-        }
-    }
-
     /// Computes the command parameter hash:
     ///
     /// ```text
@@ -79,31 +59,14 @@ impl CommandData<'_> {
         alg: TpmiAlgHash,
         out: &'o mut [u8; TpmiAlgHash::MAX_DIGEST_BYTES],
     ) -> Result<TpmtHa<'o>, AuthError> {
-        if self.names.len() > self.handles.len() {
-            return Err(AuthError::MissingName);
-        }
         let mut stream = HashContext::<C>::new(alg)?;
         stream.update(&self.code.code().to_be_bytes())?;
-        for i in 0..self.handles.len() {
-            stream.update(self.name(i)?.as_slice())?;
+        for handle in self.handles {
+            let name = handle.resolve_name().ok_or(AuthError::MissingName)?;
+            stream.update(name.as_slice())?;
         }
         stream.update(self.params)?;
         Ok(stream.finalize(out)?)
-    }
-}
-
-/// A handle's Name, either provided by the caller or derived from the handle.
-enum NameBytes<'a> {
-    Provided(Tpm2bName<'a>),
-    Handle([u8; 4]),
-}
-
-impl NameBytes<'_> {
-    fn as_slice(&self) -> &[u8] {
-        match self {
-            Self::Provided(name) => name.as_slice(),
-            Self::Handle(bytes) => bytes,
-        }
     }
 }
 

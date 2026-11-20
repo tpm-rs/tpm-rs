@@ -17,8 +17,7 @@ pub const RESP_BUFFER_SIZE: usize = 4096;
 /// - the [`AuthorizationArea`] (if present)
 /// - the [`Command`]'s parameters
 ///
-/// `names` are the Names of the command's handles, which sessions may need
-/// (see [`CommandData::names`]).
+/// Sessions take the handles' Names from the command's [`NamedHandle`]s.
 ///
 /// ## Compile-time checks
 ///
@@ -54,11 +53,10 @@ pub const RESP_BUFFER_SIZE: usize = 4096;
 /// let mut buf = [0u8; CMD_BUFFER_SIZE];
 /// let cmd = TooBig([0; CMD_BUFFER_SIZE]);
 /// // Fails to compile, raising "command is too big for buffer".
-/// marshal_command(&cmd, &[], &mut (), &mut buf);
+/// marshal_command(&cmd, &mut (), &mut buf);
 /// ```
 pub fn marshal_command<C: Command<MaxBuffer = [u8; N]>, const N: usize>(
     cmd: &C,
-    names: &[Option<Tpm2bName>],
     cmd_sessions: &mut impl AuthorizationArea,
     dst: &mut [u8; CMD_BUFFER_SIZE],
 ) -> Result<usize, AuthError> {
@@ -75,9 +73,10 @@ pub fn marshal_command<C: Command<MaxBuffer = [u8; N]>, const N: usize>(
     let mut offset = CommandHeader::MAX_SIZE;
 
     // Marshal Handles
-    let handles = cmd.handles();
-    for handle in handles.as_ref() {
-        offset += handle.marshal(dst[offset..].first_chunk_mut().unwrap());
+    let named_handles = cmd.handles();
+    let named_handles = named_handles.as_ref();
+    for named_handle in named_handles {
+        offset += named_handle.handle.marshal(dst[offset..].first_chunk_mut().unwrap());
     }
 
     if cmd_sessions.tag() == TpmiStCommandTag::Sessions {
@@ -99,8 +98,7 @@ pub fn marshal_command<C: Command<MaxBuffer = [u8; N]>, const N: usize>(
         // Marshal Sessions
         let cmd_data = CommandData {
             code: C::CMD_CODE,
-            handles: handles.as_ref(),
-            names,
+            handles: named_handles,
             params: &params_buf[..params_size],
         };
         let auth_size = cmd_sessions.marshal_auth_commands(&cmd_data, auth_buf)?;
