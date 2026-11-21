@@ -10,8 +10,8 @@ use crate::{errors::UnmarshalError, marshal::marshal_helper, *};
 #[doc(alias = "StartAuthSession_In")]
 #[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct StartAuthSession<'a> {
-    pub tpm_key: Handle,
-    pub bind: Handle,
+    pub tpm_key: NamedHandle<'a>,
+    pub bind: NamedHandle<'a>,
     pub nonce_caller: Tpm2bNonce<'a>,
     pub encrypted_salt: Tpm2bEncryptedSecret<'a>,
     pub session_type: TpmSe,
@@ -31,8 +31,12 @@ impl Command for StartAuthSession<'_> {
     type Response<'a> = StartAuthSessionRsp<'a>;
 }
 impl Message for StartAuthSession<'_> {
-    type Handles = [Handle; 2];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 2;
+    type Handles<'a>
+        = [NamedHandle<'a>; 2]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         [self.tpm_key, self.bind]
     }
 }
@@ -53,7 +57,7 @@ impl Marshal for StartAuthSession<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for StartAuthSession<'a> {
     fn unmarshal_with_handles(
-        [tpm_key, bind]: Self::Handles,
+        [tpm_key, bind]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -69,9 +73,13 @@ impl<'a> UnmarshalMessage<'a> for StartAuthSession<'a> {
 }
 
 impl Message for StartAuthSessionRsp<'_> {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.session_handle]
+    const NUM_HANDLES: usize = 1;
+    type Handles<'a>
+        = [NamedHandle<'a>; 1]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.session_handle.into()]
     }
 }
 impl Marshal for StartAuthSessionRsp<'_> {
@@ -83,11 +91,11 @@ impl Marshal for StartAuthSessionRsp<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for StartAuthSessionRsp<'a> {
     fn unmarshal_with_handles(
-        [session_handle]: Self::Handles,
+        [session_handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            session_handle,
+            session_handle: session_handle.handle,
             nonce_tpm: Unmarshal::unmarshal(src)?,
         })
     }
@@ -106,9 +114,13 @@ impl Command for PolicyRestart {
     type Response<'a> = ();
 }
 impl Message for PolicyRestart {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.session_handle]
+    const NUM_HANDLES: usize = 1;
+    type Handles<'a>
+        = [NamedHandle<'a>; 1]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.session_handle.into()]
     }
 }
 impl Marshal for PolicyRestart {
@@ -120,9 +132,11 @@ impl Marshal for PolicyRestart {
 }
 impl<'a> UnmarshalMessage<'a> for PolicyRestart {
     fn unmarshal_with_handles(
-        [session_handle]: Self::Handles,
+        [session_handle]: Self::Handles<'a>,
         _: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
-        Ok(Self { session_handle })
+        Ok(Self {
+            session_handle: session_handle.handle,
+        })
     }
 }

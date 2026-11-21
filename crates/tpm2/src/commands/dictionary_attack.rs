@@ -18,9 +18,13 @@ impl Command for DictionaryAttackLockReset {
     type Response<'a> = ();
 }
 impl Message for DictionaryAttackLockReset {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.lock_handle]
+    const NUM_HANDLES: usize = 1;
+    type Handles<'a>
+        = [NamedHandle<'a>; 1]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.lock_handle.into()]
     }
 }
 impl Marshal for DictionaryAttackLockReset {
@@ -32,10 +36,12 @@ impl Marshal for DictionaryAttackLockReset {
 }
 impl<'a> UnmarshalMessage<'a> for DictionaryAttackLockReset {
     fn unmarshal_with_handles(
-        [lock_handle]: Self::Handles,
+        [lock_handle]: Self::Handles<'a>,
         _: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
-        Ok(Self { lock_handle })
+        Ok(Self {
+            lock_handle: lock_handle.handle,
+        })
     }
 }
 
@@ -55,9 +61,13 @@ impl Command for DictionaryAttackParameters {
     type Response<'a> = ();
 }
 impl Message for DictionaryAttackParameters {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.lock_handle]
+    const NUM_HANDLES: usize = 1;
+    type Handles<'a>
+        = [NamedHandle<'a>; 1]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.lock_handle.into()]
     }
 }
 impl Marshal for DictionaryAttackParameters {
@@ -71,11 +81,11 @@ impl Marshal for DictionaryAttackParameters {
 }
 impl<'a> UnmarshalMessage<'a> for DictionaryAttackParameters {
     fn unmarshal_with_handles(
-        [lock_handle]: Self::Handles,
+        [lock_handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            lock_handle,
+            lock_handle: lock_handle.handle,
             new_max_tries: Unmarshal::unmarshal(src)?,
             new_recovery_time: Unmarshal::unmarshal(src)?,
             lockout_recovery: Unmarshal::unmarshal(src)?,

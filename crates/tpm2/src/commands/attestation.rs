@@ -10,8 +10,8 @@ use crate::{errors::UnmarshalError, marshal::marshal_helper, *};
 #[doc(alias = "Certify_In")]
 #[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct Certify<'a> {
-    pub object_handle: Handle,
-    pub sign_handle: Handle,
+    pub object_handle: NamedHandle<'a>,
+    pub sign_handle: NamedHandle<'a>,
     pub qualifying_data: Tpm2bData<'a>,
     pub in_scheme: Option<TpmtSigScheme>,
 }
@@ -28,8 +28,12 @@ impl Command for Certify<'_> {
     type Response<'a> = CertifyRsp<'a>;
 }
 impl Message for Certify<'_> {
-    type Handles = [Handle; 2];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 2;
+    type Handles<'a>
+        = [NamedHandle<'a>; 2]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         [self.object_handle, self.sign_handle]
     }
 }
@@ -43,7 +47,7 @@ impl Marshal for Certify<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for Certify<'a> {
     fn unmarshal_with_handles(
-        [object_handle, sign_handle]: Self::Handles,
+        [object_handle, sign_handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -56,8 +60,12 @@ impl<'a> UnmarshalMessage<'a> for Certify<'a> {
 }
 
 impl Message for CertifyRsp<'_> {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 0;
+    type Handles<'a>
+        = [NamedHandle<'a>; 0]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -71,7 +79,7 @@ impl Marshal for CertifyRsp<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for CertifyRsp<'a> {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -86,8 +94,8 @@ impl<'a> UnmarshalMessage<'a> for CertifyRsp<'a> {
 #[doc(alias = "CertifyCreation_In")]
 #[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct CertifyCreation<'a> {
-    pub sign_handle: Handle,
-    pub object_handle: Handle,
+    pub sign_handle: NamedHandle<'a>,
+    pub object_handle: NamedHandle<'a>,
     pub qualifying_data: Tpm2bData<'a>,
     pub creation_hash: Tpm2bDigest<'a>,
     pub in_scheme: Option<TpmtSigScheme>,
@@ -106,8 +114,12 @@ impl Command for CertifyCreation<'_> {
     type Response<'a> = CertifyCreationRsp<'a>;
 }
 impl Message for CertifyCreation<'_> {
-    type Handles = [Handle; 2];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 2;
+    type Handles<'a>
+        = [NamedHandle<'a>; 2]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         [self.sign_handle, self.object_handle]
     }
 }
@@ -126,7 +138,7 @@ impl Marshal for CertifyCreation<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for CertifyCreation<'a> {
     fn unmarshal_with_handles(
-        [sign_handle, object_handle]: Self::Handles,
+        [sign_handle, object_handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -141,8 +153,12 @@ impl<'a> UnmarshalMessage<'a> for CertifyCreation<'a> {
 }
 
 impl Message for CertifyCreationRsp<'_> {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 0;
+    type Handles<'a>
+        = [NamedHandle<'a>; 0]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -156,7 +172,7 @@ impl Marshal for CertifyCreationRsp<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for CertifyCreationRsp<'a> {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -171,7 +187,7 @@ impl<'a> UnmarshalMessage<'a> for CertifyCreationRsp<'a> {
 #[doc(alias = "Quote_In")]
 #[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct Quote<'a> {
-    pub sign_handle: Handle,
+    pub sign_handle: NamedHandle<'a>,
     pub qualifying_data: Tpm2bData<'a>,
     pub in_scheme: Option<TpmtSigScheme>,
     pub pcr_select: TpmlPcrSelection,
@@ -189,8 +205,12 @@ impl Command for Quote<'_> {
     type Response<'a> = QuoteRsp<'a>;
 }
 impl Message for Quote<'_> {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 1;
+    type Handles<'a>
+        = [NamedHandle<'a>; 1]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         [self.sign_handle]
     }
 }
@@ -206,7 +226,7 @@ impl Marshal for Quote<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for Quote<'a> {
     fn unmarshal_with_handles(
-        [sign_handle]: Self::Handles,
+        [sign_handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -219,8 +239,12 @@ impl<'a> UnmarshalMessage<'a> for Quote<'a> {
 }
 
 impl Message for QuoteRsp<'_> {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 0;
+    type Handles<'a>
+        = [NamedHandle<'a>; 0]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -234,7 +258,7 @@ impl Marshal for QuoteRsp<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for QuoteRsp<'a> {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -250,7 +274,7 @@ impl<'a> UnmarshalMessage<'a> for QuoteRsp<'a> {
 #[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct GetSessionAuditDigest<'a> {
     pub privacy_admin_handle: Handle,
-    pub sign_handle: Handle,
+    pub sign_handle: NamedHandle<'a>,
     pub session_handle: Handle,
     pub qualifying_data: Tpm2bData<'a>,
     pub in_scheme: Option<TpmtSigScheme>,
@@ -268,12 +292,16 @@ impl Command for GetSessionAuditDigest<'_> {
     type Response<'a> = GetSessionAuditDigestRsp<'a>;
 }
 impl Message for GetSessionAuditDigest<'_> {
-    type Handles = [Handle; 3];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 3;
+    type Handles<'a>
+        = [NamedHandle<'a>; 3]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         [
-            self.privacy_admin_handle,
+            self.privacy_admin_handle.into(),
             self.sign_handle,
-            self.session_handle,
+            self.session_handle.into(),
         ]
     }
 }
@@ -287,13 +315,13 @@ impl Marshal for GetSessionAuditDigest<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for GetSessionAuditDigest<'a> {
     fn unmarshal_with_handles(
-        [privacy_admin_handle, sign_handle, session_handle]: Self::Handles,
+        [privacy_admin_handle, sign_handle, session_handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            privacy_admin_handle,
+            privacy_admin_handle: privacy_admin_handle.handle,
             sign_handle,
-            session_handle,
+            session_handle: session_handle.handle,
             qualifying_data: Unmarshal::unmarshal(src)?,
             in_scheme: Unmarshal::unmarshal(src)?,
         })
@@ -301,8 +329,12 @@ impl<'a> UnmarshalMessage<'a> for GetSessionAuditDigest<'a> {
 }
 
 impl Message for GetSessionAuditDigestRsp<'_> {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 0;
+    type Handles<'a>
+        = [NamedHandle<'a>; 0]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -316,7 +348,7 @@ impl Marshal for GetSessionAuditDigestRsp<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for GetSessionAuditDigestRsp<'a> {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -332,7 +364,7 @@ impl<'a> UnmarshalMessage<'a> for GetSessionAuditDigestRsp<'a> {
 #[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct GetCommandAuditDigest<'a> {
     pub privacy_handle: Handle,
-    pub sign_handle: Handle,
+    pub sign_handle: NamedHandle<'a>,
     pub qualifying_data: Tpm2bData<'a>,
     pub in_scheme: Option<TpmtSigScheme>,
 }
@@ -349,9 +381,13 @@ impl Command for GetCommandAuditDigest<'_> {
     type Response<'a> = GetCommandAuditDigestRsp<'a>;
 }
 impl Message for GetCommandAuditDigest<'_> {
-    type Handles = [Handle; 2];
-    fn handles(&self) -> Self::Handles {
-        [self.privacy_handle, self.sign_handle]
+    const NUM_HANDLES: usize = 2;
+    type Handles<'a>
+        = [NamedHandle<'a>; 2]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.privacy_handle.into(), self.sign_handle]
     }
 }
 impl Marshal for GetCommandAuditDigest<'_> {
@@ -364,11 +400,11 @@ impl Marshal for GetCommandAuditDigest<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for GetCommandAuditDigest<'a> {
     fn unmarshal_with_handles(
-        [privacy_handle, sign_handle]: Self::Handles,
+        [privacy_handle, sign_handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            privacy_handle,
+            privacy_handle: privacy_handle.handle,
             sign_handle,
             qualifying_data: Unmarshal::unmarshal(src)?,
             in_scheme: Unmarshal::unmarshal(src)?,
@@ -377,8 +413,12 @@ impl<'a> UnmarshalMessage<'a> for GetCommandAuditDigest<'a> {
 }
 
 impl Message for GetCommandAuditDigestRsp<'_> {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 0;
+    type Handles<'a>
+        = [NamedHandle<'a>; 0]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -392,7 +432,7 @@ impl Marshal for GetCommandAuditDigestRsp<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for GetCommandAuditDigestRsp<'a> {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -408,7 +448,7 @@ impl<'a> UnmarshalMessage<'a> for GetCommandAuditDigestRsp<'a> {
 #[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct GetTime<'a> {
     pub privacy_admin_handle: Handle,
-    pub sign_handle: Handle,
+    pub sign_handle: NamedHandle<'a>,
     pub qualifying_data: Tpm2bData<'a>,
     pub in_scheme: Option<TpmtSigScheme>,
 }
@@ -425,9 +465,13 @@ impl Command for GetTime<'_> {
     type Response<'a> = GetTimeRsp<'a>;
 }
 impl Message for GetTime<'_> {
-    type Handles = [Handle; 2];
-    fn handles(&self) -> Self::Handles {
-        [self.privacy_admin_handle, self.sign_handle]
+    const NUM_HANDLES: usize = 2;
+    type Handles<'a>
+        = [NamedHandle<'a>; 2]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.privacy_admin_handle.into(), self.sign_handle]
     }
 }
 impl Marshal for GetTime<'_> {
@@ -440,11 +484,11 @@ impl Marshal for GetTime<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for GetTime<'a> {
     fn unmarshal_with_handles(
-        [privacy_admin_handle, sign_handle]: Self::Handles,
+        [privacy_admin_handle, sign_handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            privacy_admin_handle,
+            privacy_admin_handle: privacy_admin_handle.handle,
             sign_handle,
             qualifying_data: Unmarshal::unmarshal(src)?,
             in_scheme: Unmarshal::unmarshal(src)?,
@@ -453,8 +497,12 @@ impl<'a> UnmarshalMessage<'a> for GetTime<'a> {
 }
 
 impl Message for GetTimeRsp<'_> {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 0;
+    type Handles<'a>
+        = [NamedHandle<'a>; 0]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -468,7 +516,7 @@ impl Marshal for GetTimeRsp<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for GetTimeRsp<'a> {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {

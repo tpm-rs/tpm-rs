@@ -22,8 +22,12 @@ impl Command for ReadClock {
     type Response<'a> = ReadClockRsp;
 }
 impl Message for ReadClock {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 0;
+    type Handles<'a>
+        = [NamedHandle<'a>; 0]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -35,14 +39,21 @@ impl Marshal for ReadClock {
     }
 }
 impl<'a> UnmarshalMessage<'a> for ReadClock {
-    fn unmarshal_with_handles([]: Self::Handles, _: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
+    fn unmarshal_with_handles(
+        []: Self::Handles<'a>,
+        _: &mut &'a [u8],
+    ) -> Result<Self, UnmarshalError> {
         Ok(Self)
     }
 }
 
 impl Message for ReadClockRsp {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 0;
+    type Handles<'a>
+        = [NamedHandle<'a>; 0]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -55,7 +66,7 @@ impl Marshal for ReadClockRsp {
 }
 impl<'a> UnmarshalMessage<'a> for ReadClockRsp {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -78,9 +89,13 @@ impl Command for ClockSet {
     type Response<'a> = ();
 }
 impl Message for ClockSet {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.auth]
+    const NUM_HANDLES: usize = 1;
+    type Handles<'a>
+        = [NamedHandle<'a>; 1]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.auth.into()]
     }
 }
 impl Marshal for ClockSet {
@@ -92,11 +107,11 @@ impl Marshal for ClockSet {
 }
 impl<'a> UnmarshalMessage<'a> for ClockSet {
     fn unmarshal_with_handles(
-        [auth]: Self::Handles,
+        [auth]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            auth,
+            auth: auth.handle,
             new_time: Unmarshal::unmarshal(src)?,
         })
     }
@@ -116,9 +131,13 @@ impl Command for ClockRateAdjust {
     type Response<'a> = ();
 }
 impl Message for ClockRateAdjust {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.auth]
+    const NUM_HANDLES: usize = 1;
+    type Handles<'a>
+        = [NamedHandle<'a>; 1]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.auth.into()]
     }
 }
 impl Marshal for ClockRateAdjust {
@@ -130,11 +149,11 @@ impl Marshal for ClockRateAdjust {
 }
 impl<'a> UnmarshalMessage<'a> for ClockRateAdjust {
     fn unmarshal_with_handles(
-        [auth]: Self::Handles,
+        [auth]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            auth,
+            auth: auth.handle,
             rate_adjust: Unmarshal::unmarshal(src)?,
         })
     }
@@ -154,9 +173,13 @@ impl Command for ACTSetTimeout {
     type Response<'a> = ();
 }
 impl Message for ACTSetTimeout {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.act_handle]
+    const NUM_HANDLES: usize = 1;
+    type Handles<'a>
+        = [NamedHandle<'a>; 1]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.act_handle.into()]
     }
 }
 impl Marshal for ACTSetTimeout {
@@ -168,11 +191,11 @@ impl Marshal for ACTSetTimeout {
 }
 impl<'a> UnmarshalMessage<'a> for ACTSetTimeout {
     fn unmarshal_with_handles(
-        [act_handle]: Self::Handles,
+        [act_handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            act_handle,
+            act_handle: act_handle.handle,
             start_timeout: Unmarshal::unmarshal(src)?,
         })
     }

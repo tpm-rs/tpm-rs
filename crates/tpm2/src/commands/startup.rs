@@ -24,8 +24,12 @@ impl Command for Startup {
     type Response<'a> = ();
 }
 impl Message for Startup {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 0;
+    type Handles<'a>
+        = [NamedHandle<'a>; 0]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -38,7 +42,7 @@ impl Marshal for Startup {
 }
 impl<'a> UnmarshalMessage<'a> for Startup {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -60,8 +64,12 @@ impl Command for Shutdown {
     type Response<'a> = ();
 }
 impl Message for Shutdown {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 0;
+    type Handles<'a>
+        = [NamedHandle<'a>; 0]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -74,7 +82,7 @@ impl Marshal for Shutdown {
 }
 impl<'a> UnmarshalMessage<'a> for Shutdown {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
