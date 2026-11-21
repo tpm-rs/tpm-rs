@@ -14,7 +14,7 @@ TPM 2.0 Implementation in Rust, consisting of:
   - cryptographic interfaces
 - [`tpm2-client`](./crates/tpm2-client/): client-side code for running TPM commands
 - [`tpm2-tcp`](./crates/tpm2-tcp/): TCP connection to the TCG TPM simulator
-- [`tpm2-impl`](./crates/tpm2-impl/): engine code implementing the TPM's core logic
+- [`tpm2-engine`](./crates/tpm2-engine/): engine code implementing the TPM's core logic
   - Currently _quite_ incomplete.
 - [`tpm2-rustcrypto`](./crates/tpm2-rustcrypto/): [RustCrypto] cryptography backend for `tpm2`
 - [`tpm2-openssl`](./crates/tpm2-openssl/): [OpenSSL] cryptography backend for `tpm2`

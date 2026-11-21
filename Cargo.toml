@@ -5,7 +5,7 @@ members = [
     "crates/tpm2",
     "crates/tpm2-boringssl",
     "crates/tpm2-client",
-    "crates/tpm2-impl",
+    "crates/tpm2-engine",
     "crates/tpm2-openssl",
     "crates/tpm2-rustcrypto",
     "crates/tpm2-tcp",
@@ -16,7 +16,7 @@ members = [
 default-members = [
     "crates/tpm2",
     "crates/tpm2-client",
-    "crates/tpm2-impl",
+    "crates/tpm2-engine",
     "crates/tpm2-openssl",
     "crates/tpm2-rustcrypto",
     "crates/tpm2-tcp",
@@ -45,6 +45,7 @@ bitflags = "2.13"
 
 # Workspace crates used by other workspace crates.
 tpm2 = { path = "crates/tpm2", version = "0.2.0" }
+tpm2-client = { path = "crates/tpm2-client", version = "0.2.0" }
 tpm2-tcp = { path = "crates/tpm2-tcp", version = "0.2.0" }
 
 [profile.release]
