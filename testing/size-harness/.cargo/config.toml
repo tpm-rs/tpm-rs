@@ -1,0 +1,7 @@
+[target.'cfg(target_os = "none")']
+rustflags = [
+    "-C", "relocation-model=static",
+    "-C", "force-unwind-tables=no",
+    "-C", "link-arg=-e_start",
+    "-C", "link-arg=--gc-sections",
+]

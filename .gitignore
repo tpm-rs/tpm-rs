@@ -1,4 +1,5 @@
 /target
+/testing/size-harness/target
 *.lock
 .vscode
 NVChip
