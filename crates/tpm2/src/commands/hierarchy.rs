@@ -28,14 +28,25 @@ pub struct CreatePrimaryRsp<'a> {
     pub name: Tpm2bName<'a>,
 }
 
+impl<'a> CreatePrimaryRsp<'a> {
+    /// Returns the created object's [`NamedHandle`].
+    pub const fn named_handle(&self) -> NamedHandle<'a> {
+        NamedHandle::new(self.object_handle, self.name)
+    }
+}
+
 impl Command for CreatePrimary<'_> {
     const CMD_CODE: TpmCc = TpmCc::CreatePrimary;
     type Response<'a> = CreatePrimaryRsp<'a>;
 }
 impl Message for CreatePrimary<'_> {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.primary_handle]
+    const NUM_HANDLES: usize = 1;
+    type Handles<'a>
+        = [NamedHandle<'a>; 1]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.primary_handle.into()]
     }
 }
 impl Marshal for CreatePrimary<'_> {
@@ -53,11 +64,11 @@ impl Marshal for CreatePrimary<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for CreatePrimary<'a> {
     fn unmarshal_with_handles(
-        [primary_handle]: Self::Handles,
+        [primary_handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            primary_handle,
+            primary_handle: primary_handle.handle,
             in_sensitive: Unmarshal::unmarshal(src)?,
             in_public: Unmarshal::unmarshal(src)?,
             outside_info: Unmarshal::unmarshal(src)?,
@@ -67,9 +78,13 @@ impl<'a> UnmarshalMessage<'a> for CreatePrimary<'a> {
 }
 
 impl Message for CreatePrimaryRsp<'_> {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.object_handle]
+    const NUM_HANDLES: usize = 1;
+    type Handles<'a>
+        = [NamedHandle<'a>; 1]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.object_handle.into()]
     }
 }
 impl Marshal for CreatePrimaryRsp<'_> {
@@ -89,11 +104,11 @@ impl Marshal for CreatePrimaryRsp<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for CreatePrimaryRsp<'a> {
     fn unmarshal_with_handles(
-        [object_handle]: Self::Handles,
+        [object_handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            object_handle,
+            object_handle: object_handle.handle,
             out_public: Unmarshal::unmarshal(src)?,
             creation_data: Unmarshal::unmarshal(src)?,
             creation_hash: Unmarshal::unmarshal(src)?,
@@ -118,9 +133,13 @@ impl Command for HierarchyControl {
     type Response<'a> = ();
 }
 impl Message for HierarchyControl {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.auth_handle]
+    const NUM_HANDLES: usize = 1;
+    type Handles<'a>
+        = [NamedHandle<'a>; 1]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.auth_handle.into()]
     }
 }
 impl Marshal for HierarchyControl {
@@ -133,11 +152,11 @@ impl Marshal for HierarchyControl {
 }
 impl<'a> UnmarshalMessage<'a> for HierarchyControl {
     fn unmarshal_with_handles(
-        [auth_handle]: Self::Handles,
+        [auth_handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            auth_handle,
+            auth_handle: auth_handle.handle,
             enable: Unmarshal::unmarshal(src)?,
             state: Unmarshal::unmarshal(src)?,
         })
@@ -159,9 +178,13 @@ impl Command for SetPrimaryPolicy<'_> {
     type Response<'a> = ();
 }
 impl Message for SetPrimaryPolicy<'_> {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.auth_handle]
+    const NUM_HANDLES: usize = 1;
+    type Handles<'a>
+        = [NamedHandle<'a>; 1]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.auth_handle.into()]
     }
 }
 impl Marshal for SetPrimaryPolicy<'_> {
@@ -174,11 +197,11 @@ impl Marshal for SetPrimaryPolicy<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for SetPrimaryPolicy<'a> {
     fn unmarshal_with_handles(
-        [auth_handle]: Self::Handles,
+        [auth_handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            auth_handle,
+            auth_handle: auth_handle.handle,
             auth_policy: Unmarshal::unmarshal(src)?,
             hash_alg: Unmarshal::unmarshal(src)?,
         })
@@ -198,9 +221,13 @@ impl Command for ChangePPS {
     type Response<'a> = ();
 }
 impl Message for ChangePPS {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.auth_handle]
+    const NUM_HANDLES: usize = 1;
+    type Handles<'a>
+        = [NamedHandle<'a>; 1]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.auth_handle.into()]
     }
 }
 impl Marshal for ChangePPS {
@@ -212,10 +239,12 @@ impl Marshal for ChangePPS {
 }
 impl<'a> UnmarshalMessage<'a> for ChangePPS {
     fn unmarshal_with_handles(
-        [auth_handle]: Self::Handles,
+        [auth_handle]: Self::Handles<'a>,
         _: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
-        Ok(Self { auth_handle })
+        Ok(Self {
+            auth_handle: auth_handle.handle,
+        })
     }
 }
 
@@ -232,9 +261,13 @@ impl Command for ChangeEPS {
     type Response<'a> = ();
 }
 impl Message for ChangeEPS {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.auth_handle]
+    const NUM_HANDLES: usize = 1;
+    type Handles<'a>
+        = [NamedHandle<'a>; 1]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.auth_handle.into()]
     }
 }
 impl Marshal for ChangeEPS {
@@ -246,10 +279,12 @@ impl Marshal for ChangeEPS {
 }
 impl<'a> UnmarshalMessage<'a> for ChangeEPS {
     fn unmarshal_with_handles(
-        [auth_handle]: Self::Handles,
+        [auth_handle]: Self::Handles<'a>,
         _: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
-        Ok(Self { auth_handle })
+        Ok(Self {
+            auth_handle: auth_handle.handle,
+        })
     }
 }
 
@@ -266,9 +301,13 @@ impl Command for Clear {
     type Response<'a> = ();
 }
 impl Message for Clear {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.auth_handle]
+    const NUM_HANDLES: usize = 1;
+    type Handles<'a>
+        = [NamedHandle<'a>; 1]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.auth_handle.into()]
     }
 }
 impl Marshal for Clear {
@@ -280,10 +319,12 @@ impl Marshal for Clear {
 }
 impl<'a> UnmarshalMessage<'a> for Clear {
     fn unmarshal_with_handles(
-        [auth_handle]: Self::Handles,
+        [auth_handle]: Self::Handles<'a>,
         _: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
-        Ok(Self { auth_handle })
+        Ok(Self {
+            auth_handle: auth_handle.handle,
+        })
     }
 }
 
@@ -301,9 +342,13 @@ impl Command for ClearControl {
     type Response<'a> = ();
 }
 impl Message for ClearControl {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.auth]
+    const NUM_HANDLES: usize = 1;
+    type Handles<'a>
+        = [NamedHandle<'a>; 1]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.auth.into()]
     }
 }
 impl Marshal for ClearControl {
@@ -315,11 +360,11 @@ impl Marshal for ClearControl {
 }
 impl<'a> UnmarshalMessage<'a> for ClearControl {
     fn unmarshal_with_handles(
-        [auth]: Self::Handles,
+        [auth]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            auth,
+            auth: auth.handle,
             disable: Unmarshal::unmarshal(src)?,
         })
     }
@@ -339,9 +384,13 @@ impl Command for HierarchyChangeAuth<'_> {
     type Response<'a> = ();
 }
 impl Message for HierarchyChangeAuth<'_> {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.auth_handle]
+    const NUM_HANDLES: usize = 1;
+    type Handles<'a>
+        = [NamedHandle<'a>; 1]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.auth_handle.into()]
     }
 }
 impl Marshal for HierarchyChangeAuth<'_> {
@@ -353,11 +402,11 @@ impl Marshal for HierarchyChangeAuth<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for HierarchyChangeAuth<'a> {
     fn unmarshal_with_handles(
-        [auth_handle]: Self::Handles,
+        [auth_handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            auth_handle,
+            auth_handle: auth_handle.handle,
             new_auth: Unmarshal::unmarshal(src)?,
         })
     }
@@ -377,9 +426,13 @@ impl Command for ReadOnlyControl {
     type Response<'a> = ();
 }
 impl Message for ReadOnlyControl {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.auth_handle]
+    const NUM_HANDLES: usize = 1;
+    type Handles<'a>
+        = [NamedHandle<'a>; 1]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.auth_handle.into()]
     }
 }
 impl Marshal for ReadOnlyControl {
@@ -391,11 +444,11 @@ impl Marshal for ReadOnlyControl {
 }
 impl<'a> UnmarshalMessage<'a> for ReadOnlyControl {
     fn unmarshal_with_handles(
-        [auth_handle]: Self::Handles,
+        [auth_handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            auth_handle,
+            auth_handle: auth_handle.handle,
             state: Unmarshal::unmarshal(src)?,
         })
     }

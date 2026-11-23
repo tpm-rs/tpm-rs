@@ -9,13 +9,21 @@
 //! **Part 3: Commands** of the TPM 2.0 Specification, several intentional
 //! design differences exist:
 //!
-//! ### [`Handle`] types
+//! ### [`Handle`](crate::Handle) types
 //!
-//! Currently, we do not use different types for any of the handles, so types
-//! like `TPMI_DH_OBJECT`, `TPMI_DH_PCR`, or `TPMI_RH_NV_INDEX` are all just
-//! represented by a [`Handle`]. In the future, when more fine-grained handle
-//! types are added, [`UnmarshalMessage::unmarshal_with_handles`] will perform
-//! additional validation to ensure handles are in the correct range.
+//! Command handle-area slots are typed by Name semantics:
+//! - [`NamedHandle`] for slots that can accept an Object or NV Index (which
+//!   have digest Names).
+//! - [`SequenceHandle`](crate::SequenceHandle) for sequence handles (whose Name
+//!   is always empty).
+//! - [`Handle`](crate::Handle) for PCR, session, permanent, parameter-area,
+//!   `ContextSave`, and response handles.
+//!
+//! We do not yet validate handle numeric ranges per spec interface type
+//! (`TPMI_DH_OBJECT`, `TPMI_DH_PCR`, `TPMI_RH_NV_INDEX`, etc.). In the future,
+//! when more fine-grained handle types are added,
+//! [`UnmarshalMessage::unmarshal_with_handles`] will perform additional
+//! validation to ensure handles are in the correct range.
 //!
 //! ### Intentionally omitted commands
 //!
@@ -72,7 +80,7 @@
 //! - [`PolicyOR::p_hash_list`] is checked to ensure it has at least 2 digests.
 //!
 #![allow(deprecated)] // So we can define now-deprecated Commands / impls.
-use crate::{Handle, Marshal, TpmCc, errors::UnmarshalError};
+use crate::{Marshal, NamedHandle, TpmCc, errors::UnmarshalError};
 
 /// Common trait for a TPM 2.0 command [`Message`].
 pub trait Command: Message {
@@ -87,29 +95,38 @@ pub trait Command: Message {
 /// Note that the [`Marshal`] supertrait marshals only the parameter area of the
 /// message; the handle area is accessed via [`Message::handles`].
 pub trait Message: Marshal {
-    /// Fixed-size array of [`Handle`]s in this message's handle area (`[Handle; N]`).
-    type Handles: AsRef<[Handle]> + AsMut<[Handle]> + Default + Copy;
+    /// Number of handles in this message's handle area.
+    const NUM_HANDLES: usize;
+    /// Fixed-size array of [`NamedHandle`]s in this message's handle area
+    /// (`[NamedHandle<'a>; Self::NUM_HANDLES]`).
+    type Handles<'a>: AsRef<[NamedHandle<'a>]> + AsMut<[NamedHandle<'a>]> + Default + Copy
+    where
+        Self: 'a;
     /// Returns the handles in this message's handle area.
-    fn handles(&self) -> Self::Handles;
+    fn handles(&self) -> Self::Handles<'_>;
 }
 
 /// Trait for unmarshaling a [`Message`] from its handle area and parameter bytes.
-pub trait UnmarshalMessage<'a>: Message {
+pub trait UnmarshalMessage<'a>: Message + 'a {
     /// Unmarshals the message's parameters from `src` and combines them with `handles`.
     fn unmarshal_with_handles(
-        handles: Self::Handles,
+        handles: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError>;
 }
 
 impl Message for () {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 0;
+    type Handles<'a> = [NamedHandle<'a>; Self::NUM_HANDLES];
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
-impl UnmarshalMessage<'_> for () {
-    fn unmarshal_with_handles([]: Self::Handles, _: &mut &'_ [u8]) -> Result<Self, UnmarshalError> {
+impl<'a> UnmarshalMessage<'a> for () {
+    fn unmarshal_with_handles(
+        []: Self::Handles<'a>,
+        _: &mut &'a [u8],
+    ) -> Result<Self, UnmarshalError> {
         Ok(())
     }
 }

@@ -10,8 +10,8 @@ use crate::{errors::UnmarshalError, marshal::marshal_helper, *};
 #[doc(alias = "Duplicate_In")]
 #[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct Duplicate<'a> {
-    pub object_handle: Handle,
-    pub new_parent_handle: Handle,
+    pub object_handle: NamedHandle<'a>,
+    pub new_parent_handle: NamedHandle<'a>,
     pub encryption_key_in: Tpm2bData<'a>,
     pub symmetric_alg: Option<TpmtSymDefObject>,
 }
@@ -29,8 +29,12 @@ impl Command for Duplicate<'_> {
     type Response<'a> = DuplicateRsp<'a>;
 }
 impl Message for Duplicate<'_> {
-    type Handles = [Handle; 2];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 2;
+    type Handles<'a>
+        = [NamedHandle<'a>; 2]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         [self.object_handle, self.new_parent_handle]
     }
 }
@@ -44,7 +48,7 @@ impl Marshal for Duplicate<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for Duplicate<'a> {
     fn unmarshal_with_handles(
-        [object_handle, new_parent_handle]: Self::Handles,
+        [object_handle, new_parent_handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -57,8 +61,12 @@ impl<'a> UnmarshalMessage<'a> for Duplicate<'a> {
 }
 
 impl Message for DuplicateRsp<'_> {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 0;
+    type Handles<'a>
+        = [NamedHandle<'a>; 0]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -74,7 +82,7 @@ impl Marshal for DuplicateRsp<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for DuplicateRsp<'a> {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -90,8 +98,8 @@ impl<'a> UnmarshalMessage<'a> for DuplicateRsp<'a> {
 #[doc(alias = "Rewrap_In")]
 #[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct Rewrap<'a> {
-    pub old_parent: Handle,
-    pub new_parent: Handle,
+    pub old_parent: NamedHandle<'a>,
+    pub new_parent: NamedHandle<'a>,
     pub in_duplicate: Tpm2bPrivate<'a>,
     pub name: Tpm2bName<'a>,
     pub in_sym_seed: Tpm2bEncryptedSecret<'a>,
@@ -109,8 +117,12 @@ impl Command for Rewrap<'_> {
     type Response<'a> = RewrapRsp<'a>;
 }
 impl Message for Rewrap<'_> {
-    type Handles = [Handle; 2];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 2;
+    type Handles<'a>
+        = [NamedHandle<'a>; 2]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         [self.old_parent, self.new_parent]
     }
 }
@@ -126,7 +138,7 @@ impl Marshal for Rewrap<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for Rewrap<'a> {
     fn unmarshal_with_handles(
-        [old_parent, new_parent]: Self::Handles,
+        [old_parent, new_parent]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -140,8 +152,12 @@ impl<'a> UnmarshalMessage<'a> for Rewrap<'a> {
 }
 
 impl Message for RewrapRsp<'_> {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 0;
+    type Handles<'a>
+        = [NamedHandle<'a>; 0]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -155,7 +171,7 @@ impl Marshal for RewrapRsp<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for RewrapRsp<'a> {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -170,7 +186,7 @@ impl<'a> UnmarshalMessage<'a> for RewrapRsp<'a> {
 #[doc(alias = "Import_In")]
 #[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct Import<'a> {
-    pub parent_handle: Handle,
+    pub parent_handle: NamedHandle<'a>,
     pub encryption_key: Tpm2bData<'a>,
     pub object_public: Tpm2bPublic<'a>,
     pub duplicate: Tpm2bPrivate<'a>,
@@ -189,8 +205,12 @@ impl Command for Import<'_> {
     type Response<'a> = ImportRsp<'a>;
 }
 impl Message for Import<'_> {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 1;
+    type Handles<'a>
+        = [NamedHandle<'a>; 1]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         [self.parent_handle]
     }
 }
@@ -211,7 +231,7 @@ impl Marshal for Import<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for Import<'a> {
     fn unmarshal_with_handles(
-        [parent_handle]: Self::Handles,
+        [parent_handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -226,8 +246,12 @@ impl<'a> UnmarshalMessage<'a> for Import<'a> {
 }
 
 impl Message for ImportRsp<'_> {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 0;
+    type Handles<'a>
+        = [NamedHandle<'a>; 0]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -240,7 +264,7 @@ impl Marshal for ImportRsp<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for ImportRsp<'a> {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {

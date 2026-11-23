@@ -24,9 +24,13 @@ impl Command for ContextSave {
     type Response<'a> = ContextSaveRsp<'a>;
 }
 impl Message for ContextSave {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.save_handle]
+    const NUM_HANDLES: usize = 1;
+    type Handles<'a>
+        = [NamedHandle<'a>; 1]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.save_handle.into()]
     }
 }
 impl Marshal for ContextSave {
@@ -38,16 +42,22 @@ impl Marshal for ContextSave {
 }
 impl<'a> UnmarshalMessage<'a> for ContextSave {
     fn unmarshal_with_handles(
-        [save_handle]: Self::Handles,
+        [save_handle]: Self::Handles<'a>,
         _: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
-        Ok(Self { save_handle })
+        Ok(Self {
+            save_handle: save_handle.handle,
+        })
     }
 }
 
 impl Message for ContextSaveRsp<'_> {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 0;
+    type Handles<'a>
+        = [NamedHandle<'a>; 0]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -60,7 +70,7 @@ impl Marshal for ContextSaveRsp<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for ContextSaveRsp<'a> {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -88,8 +98,12 @@ impl Command for ContextLoad<'_> {
     type Response<'a> = ContextLoadRsp;
 }
 impl Message for ContextLoad<'_> {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 0;
+    type Handles<'a>
+        = [NamedHandle<'a>; 0]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -102,7 +116,7 @@ impl Marshal for ContextLoad<'_> {
 }
 impl<'a> UnmarshalMessage<'a> for ContextLoad<'a> {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -112,9 +126,13 @@ impl<'a> UnmarshalMessage<'a> for ContextLoad<'a> {
 }
 
 impl Message for ContextLoadRsp {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.loaded_handle]
+    const NUM_HANDLES: usize = 1;
+    type Handles<'a>
+        = [NamedHandle<'a>; 1]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.loaded_handle.into()]
     }
 }
 impl Marshal for ContextLoadRsp {
@@ -126,10 +144,12 @@ impl Marshal for ContextLoadRsp {
 }
 impl<'a> UnmarshalMessage<'a> for ContextLoadRsp {
     fn unmarshal_with_handles(
-        [loaded_handle]: Self::Handles,
+        [loaded_handle]: Self::Handles<'a>,
         _: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
-        Ok(Self { loaded_handle })
+        Ok(Self {
+            loaded_handle: loaded_handle.handle,
+        })
     }
 }
 
@@ -146,8 +166,12 @@ impl Command for FlushContext {
     type Response<'a> = ();
 }
 impl Message for FlushContext {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    const NUM_HANDLES: usize = 0;
+    type Handles<'a>
+        = [NamedHandle<'a>; 0]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -160,7 +184,7 @@ impl Marshal for FlushContext {
 }
 impl<'a> UnmarshalMessage<'a> for FlushContext {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -173,36 +197,40 @@ impl<'a> UnmarshalMessage<'a> for FlushContext {
 #[doc(alias = "TPM2_EvictControl")]
 #[doc(alias = "EvictControl_In")]
 #[derive(Clone, Copy, PartialEq, Debug, Eq)]
-pub struct EvictControl {
+pub struct EvictControl<'a> {
     pub auth: Handle,
-    pub object_handle: Handle,
+    pub object_handle: NamedHandle<'a>,
     pub persistent_handle: Handle,
 }
 
-impl Command for EvictControl {
+impl Command for EvictControl<'_> {
     const CMD_CODE: TpmCc = TpmCc::EvictControl;
     type Response<'a> = ();
 }
-impl Message for EvictControl {
-    type Handles = [Handle; 2];
-    fn handles(&self) -> Self::Handles {
-        [self.auth, self.object_handle]
+impl Message for EvictControl<'_> {
+    const NUM_HANDLES: usize = 2;
+    type Handles<'a>
+        = [NamedHandle<'a>; 2]
+    where
+        Self: 'a;
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.auth.into(), self.object_handle]
     }
 }
-impl Marshal for EvictControl {
+impl Marshal for EvictControl<'_> {
     const MAX_SIZE: usize = Handle::MAX_SIZE;
-    type MaxBuffer = [u8; Self::MAX_SIZE];
+    type MaxBuffer = [u8; EvictControl::MAX_SIZE];
     fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
         self.persistent_handle.marshal(dst)
     }
 }
-impl<'a> UnmarshalMessage<'a> for EvictControl {
+impl<'a> UnmarshalMessage<'a> for EvictControl<'a> {
     fn unmarshal_with_handles(
-        [auth, object_handle]: Self::Handles,
+        [auth, object_handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            auth,
+            auth: auth.handle,
             object_handle,
             persistent_handle: Unmarshal::unmarshal(src)?,
         })
