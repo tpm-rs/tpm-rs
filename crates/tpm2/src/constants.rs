@@ -1295,6 +1295,23 @@ impl Handle {
         self.0.to_be_bytes()[0].try_into().ok()
     }
 
+    /// Whether this handle is a value of `TPMI_RH_HIERARCHY+`, defined in TPM 2.0 Part 2:
+    /// Structures (v185), Section 9.13 (Table 59): a hierarchy, a firmware-limited hierarchy
+    /// or an SVN-limited hierarchy, each including its NULL hierarchy.
+    pub(crate) fn is_hierarchy(self) -> bool {
+        matches!(
+            self,
+            Self::RH_OWNER
+                | Self::RH_ENDORSEMENT
+                | Self::RH_PLATFORM
+                | Self::RH_NULL
+                | Self::RH_FW_OWNER
+                | Self::RH_FW_ENDORSEMENT
+                | Self::RH_FW_PLATFORM
+                | Self::RH_FW_NULL
+        ) || (Self::RH_SVN_OWNER_BASE.0..=Self::RH_SVN_NULL_BASE.0 + 0xFFFF).contains(&self.0)
+    }
+
     pub const NV_INDEX_FIRST: Handle = Handle(0x01000000);
     pub const NV_INDEX_LAST: Handle = Handle(0x01FFFFFF);
     pub const RH_OWNER: Handle = Handle(0x40000001);

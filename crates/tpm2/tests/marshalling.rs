@@ -349,3 +349,149 @@ fn test_unmarshal_tpma_reserved_bits() {
         Err(tpm2::errors::UnmarshalError)
     );
 }
+
+// Hierarchies that are and are not values of `TPMI_RH_HIERARCHY+`, defined in TPM 2.0 Part 2:
+// Structures (v185), Section 9.13 (Table 59).
+const HIERARCHIES: [Handle; 14] = [
+    Handle::RH_OWNER,
+    Handle::RH_ENDORSEMENT,
+    Handle::RH_PLATFORM,
+    Handle::RH_NULL,
+    Handle::RH_FW_OWNER,
+    Handle::RH_FW_ENDORSEMENT,
+    Handle::RH_FW_PLATFORM,
+    Handle::RH_FW_NULL,
+    Handle::RH_SVN_OWNER_BASE,
+    Handle(0x4001_FFFF),
+    Handle::RH_SVN_ENDORSEMENT_BASE,
+    Handle::RH_SVN_PLATFORM_BASE,
+    Handle::RH_SVN_NULL_BASE,
+    Handle(0x4004_FFFF),
+];
+const NOT_HIERARCHIES: [Handle; 8] = [
+    Handle(0),
+    Handle(0x4000_0002),
+    Handle::RS_PW,
+    Handle::RH_LOCKOUT,
+    Handle::RH_PLATFORM_NV,
+    Handle(0x4000_FFFF),
+    Handle(0x4005_0000),
+    Handle(0x8000_0000),
+];
+
+fn tpms_context_unmarshals(saved_handle: Handle, hierarchy: Handle) -> bool {
+    let context = TpmsContext {
+        sequence: 1,
+        saved_handle,
+        hierarchy,
+        context_blob: Tpm2bContextData::new(&[1, 2, 3, 4]).unwrap(),
+    };
+    let mut buffer = [0u8; TpmsContext::MAX_SIZE];
+    let len = context.marshal(&mut buffer);
+    match TpmsContext::unmarshal(&mut &buffer[..len]) {
+        Ok(unmarshaled) => {
+            assert_eq!(unmarshaled, context);
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+#[test]
+fn test_unmarshal_tpms_context_handles() {
+    // `savedHandle` is a `TPMI_DH_SAVED`, defined in Section 9.12 (Table 58).
+    for saved_handle in [
+        0x0200_0000,
+        0x0200_0001,
+        0x02FF_FFFF,
+        0x0300_0000,
+        0x03FF_FFFF,
+        0x8000_0000,
+        0x8000_0001,
+        0x8000_0002,
+    ] {
+        assert!(
+            tpms_context_unmarshals(Handle(saved_handle), Handle::RH_OWNER),
+            "savedHandle {saved_handle:#010x}"
+        );
+    }
+    for saved_handle in [
+        0x0000_0000,
+        0x0100_0000,
+        0x0400_0000,
+        0x4000_0001,
+        0x7FFF_FFFF,
+        0x8000_0003,
+        0x80FF_FFFF,
+        0x8100_0001,
+    ] {
+        assert!(
+            !tpms_context_unmarshals(Handle(saved_handle), Handle::RH_OWNER),
+            "savedHandle {saved_handle:#010x}"
+        );
+    }
+
+    for hierarchy in HIERARCHIES {
+        assert!(
+            tpms_context_unmarshals(Handle(0x8000_0000), hierarchy),
+            "hierarchy {hierarchy:?}"
+        );
+    }
+    for hierarchy in NOT_HIERARCHIES {
+        assert!(
+            !tpms_context_unmarshals(Handle(0x8000_0000), hierarchy),
+            "hierarchy {hierarchy:?}"
+        );
+    }
+}
+
+#[test]
+fn test_unmarshal_ticket_hierarchy() {
+    // A ticket is a tag, a hierarchy and a digest (Section 10.6, Tables 110, 113, 114 and 115).
+    // The digest of `TPM_ST_DIGEST_VERIFIED` follows a hash algorithm.
+    fn ticket_bytes(tag: TpmSt, hierarchy: Handle) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        let mut tag_buffer = [0u8; TpmSt::MAX_SIZE];
+        let len = tag.marshal(&mut tag_buffer);
+        bytes.extend_from_slice(&tag_buffer[..len]);
+        bytes.extend_from_slice(&hierarchy.0.to_be_bytes());
+        if tag == TpmSt::DIGEST_VERIFIED {
+            let mut alg_buffer = [0u8; Alg::MAX_SIZE];
+            let len = Alg::SHA256.marshal(&mut alg_buffer);
+            bytes.extend_from_slice(&alg_buffer[..len]);
+        }
+        bytes.extend_from_slice(&[0, 4, 1, 2, 3, 4]);
+        bytes
+    }
+    fn ticket_unmarshals(tag: TpmSt, hierarchy: Handle) -> bool {
+        let bytes = ticket_bytes(tag, hierarchy);
+        let mut src = &bytes[..];
+        let unmarshaled = match tag {
+            TpmSt::CREATION => TpmtTkCreation::unmarshal(&mut src).is_ok(),
+            TpmSt::VERIFIED | TpmSt::MESSAGE_VERIFIED | TpmSt::DIGEST_VERIFIED => {
+                TpmtTkVerified::unmarshal(&mut src).is_ok()
+            }
+            TpmSt::AUTH_SIGNED | TpmSt::AUTH_SECRET => TpmtTkAuth::unmarshal(&mut src).is_ok(),
+            _ => TpmtTkHashcheck::unmarshal(&mut src).is_ok(),
+        };
+        assert!(!unmarshaled || src.is_empty());
+        unmarshaled
+    }
+
+    for (name, tag) in [
+        ("CREATION", TpmSt::CREATION),
+        ("VERIFIED", TpmSt::VERIFIED),
+        ("MESSAGE_VERIFIED", TpmSt::MESSAGE_VERIFIED),
+        ("DIGEST_VERIFIED", TpmSt::DIGEST_VERIFIED),
+        ("AUTH_SIGNED", TpmSt::AUTH_SIGNED),
+        ("AUTH_SECRET", TpmSt::AUTH_SECRET),
+        ("HASHCHECK", TpmSt::HASHCHECK),
+    ] {
+        for hierarchy in HIERARCHIES {
+            assert!(ticket_unmarshals(tag, hierarchy), "{name} {hierarchy:?}");
+        }
+        for hierarchy in NOT_HIERARCHIES {
+            assert!(!ticket_unmarshals(tag, hierarchy), "{name} {hierarchy:?}");
+        }
+    }
+}

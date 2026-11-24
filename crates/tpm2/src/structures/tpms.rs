@@ -1405,10 +1405,29 @@ impl Marshal for TpmsContext<'_> {
 
 impl<'a> Unmarshal<'a> for TpmsContext<'a> {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
+        let sequence = Unmarshal::unmarshal(src)?;
+        let saved_handle: Handle = Unmarshal::unmarshal(src)?;
+        // `savedHandle` is a `TPMI_DH_SAVED`, defined in TPM 2.0 Part 2: Structures (v185),
+        // Section 9.12 (Table 58). Its values are an HMAC or policy session handle,
+        // 0x80000000 (an ordinary transient object), 0x80000001 (a sequence object) and
+        // 0x80000002 (a transient object with the stClear attribute SET).
+        if !(Handle(0x8000_0000)..=Handle(0x8000_0002)).contains(&saved_handle)
+            && !matches!(
+                saved_handle.handle_type(),
+                Some(TpmHt::HMACSession | TpmHt::PolicySession)
+            )
+        {
+            return Err(UnmarshalError);
+        }
+        let hierarchy: Handle = Unmarshal::unmarshal(src)?;
+        // `hierarchy` is a `TPMI_RH_HIERARCHY+` (Section 9.13, Table 59).
+        if !hierarchy.is_hierarchy() {
+            return Err(UnmarshalError);
+        }
         Ok(Self {
-            sequence: Unmarshal::unmarshal(src)?,
-            saved_handle: Unmarshal::unmarshal(src)?,
-            hierarchy: Unmarshal::unmarshal(src)?,
+            sequence,
+            saved_handle,
+            hierarchy,
             context_blob: Unmarshal::unmarshal(src)?,
         })
     }

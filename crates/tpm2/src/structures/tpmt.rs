@@ -1265,11 +1265,22 @@ impl Marshal for TpmtTkCreation<'_> {
     }
 }
 
+/// Unmarshals the `hierarchy` of a ticket, a `TPMI_RH_HIERARCHY+` defined in TPM 2.0 Part 2:
+/// Structures (v185), Section 9.13 (Table 59). The tickets are defined in Section 10.6
+/// (Tables 110, 113, 114 and 115).
+fn unmarshal_hierarchy(src: &mut &[u8]) -> Result<Handle, UnmarshalError> {
+    let hierarchy: Handle = Unmarshal::unmarshal(src)?;
+    if !hierarchy.is_hierarchy() {
+        return Err(UnmarshalError);
+    }
+    Ok(hierarchy)
+}
+
 impl<'a> Unmarshal<'a> for TpmtTkCreation<'a> {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         Ok(match TpmSt::unmarshal(src)? {
             TpmSt::CREATION => {
-                Self::Creation(Unmarshal::unmarshal(src)?, Unmarshal::unmarshal(src)?)
+                Self::Creation(unmarshal_hierarchy(src)?, Unmarshal::unmarshal(src)?)
             }
             _ => return Err(UnmarshalError),
         })
@@ -1338,13 +1349,13 @@ impl<'a> Unmarshal<'a> for TpmtTkVerified<'a> {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         Ok(match TpmSt::unmarshal(src)? {
             TpmSt::VERIFIED => {
-                Self::Verified(Unmarshal::unmarshal(src)?, Unmarshal::unmarshal(src)?)
+                Self::Verified(unmarshal_hierarchy(src)?, Unmarshal::unmarshal(src)?)
             }
             TpmSt::MESSAGE_VERIFIED => {
-                Self::MessageVerified(Unmarshal::unmarshal(src)?, Unmarshal::unmarshal(src)?)
+                Self::MessageVerified(unmarshal_hierarchy(src)?, Unmarshal::unmarshal(src)?)
             }
             TpmSt::DIGEST_VERIFIED => Self::DigestVerified(
-                Unmarshal::unmarshal(src)?,
+                unmarshal_hierarchy(src)?,
                 Unmarshal::unmarshal(src)?,
                 Unmarshal::unmarshal(src)?,
             ),
@@ -1403,10 +1414,10 @@ impl<'a> Unmarshal<'a> for TpmtTkAuth<'a> {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         Ok(match TpmSt::unmarshal(src)? {
             TpmSt::AUTH_SIGNED => {
-                Self::Signed(Unmarshal::unmarshal(src)?, Unmarshal::unmarshal(src)?)
+                Self::Signed(unmarshal_hierarchy(src)?, Unmarshal::unmarshal(src)?)
             }
             TpmSt::AUTH_SECRET => {
-                Self::Secret(Unmarshal::unmarshal(src)?, Unmarshal::unmarshal(src)?)
+                Self::Secret(unmarshal_hierarchy(src)?, Unmarshal::unmarshal(src)?)
             }
             _ => return Err(UnmarshalError),
         })
@@ -1461,7 +1472,7 @@ impl<'a> Unmarshal<'a> for TpmtTkHashcheck<'a> {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         Ok(match TpmSt::unmarshal(src)? {
             TpmSt::HASHCHECK => {
-                Self::Hashcheck(Unmarshal::unmarshal(src)?, Unmarshal::unmarshal(src)?)
+                Self::Hashcheck(unmarshal_hierarchy(src)?, Unmarshal::unmarshal(src)?)
             }
             _ => return Err(UnmarshalError),
         })
