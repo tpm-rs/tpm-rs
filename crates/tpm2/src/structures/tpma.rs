@@ -182,7 +182,7 @@ impl Marshal for TpmaNv {
 
 impl<'a> Unmarshal<'a> for TpmaNv {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
-        Unmarshal::unmarshal(src).map(Self)
+        Self::from_bits(Unmarshal::unmarshal(src)?).ok_or(UnmarshalError)
     }
 }
 
@@ -247,7 +247,7 @@ impl Marshal for TpmaNvExp {
 
 impl<'a> Unmarshal<'a> for TpmaNvExp {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
-        Unmarshal::unmarshal(src).map(Self)
+        Self::from_bits(Unmarshal::unmarshal(src)?).ok_or(UnmarshalError)
     }
 }
 
@@ -490,7 +490,7 @@ impl Marshal for TpmaObject {
 
 impl<'a> Unmarshal<'a> for TpmaObject {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
-        Unmarshal::unmarshal(src).map(Self)
+        Self::from_bits(Unmarshal::unmarshal(src)?).ok_or(UnmarshalError)
     }
 }
 

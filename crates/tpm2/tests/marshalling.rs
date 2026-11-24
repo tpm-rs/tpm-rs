@@ -284,3 +284,68 @@ fn test_tpmt_nv_public_2_marshalling() {
     let err = TpmtNvPublic2::unmarshal(&mut reader).unwrap_err();
     assert_eq!(err, tpm2::errors::UnmarshalError);
 }
+
+#[test]
+fn test_unmarshal_tpma_reserved_bits() {
+    // Reserved bits of TPM 2.0 Part 2: Structures (v185), Table 37 (TPMA_OBJECT),
+    // Table 249 (TPMA_NV) and Table 250 (TPMA_NV_EXP).
+    const TPMA_OBJECT_RESERVED: u32 = 0xFFF0_F009;
+    const TPMA_NV_RESERVED: u32 = 0x01F0_0300;
+    const TPMA_NV_EXP_RESERVED: u64 = 0xFFFF_FFF8_01F0_0300;
+
+    // Each single bit unmarshals only if it is not reserved.
+    for bit in 0..u32::BITS {
+        let value = 1u32 << bit;
+        assert_eq!(
+            TpmaObject::unmarshal(&mut &value.to_be_bytes()[..]).is_ok(),
+            value & TPMA_OBJECT_RESERVED == 0,
+            "TPMA_OBJECT bit {bit}"
+        );
+        assert_eq!(
+            TpmaNv::unmarshal(&mut &value.to_be_bytes()[..]).is_ok(),
+            value & TPMA_NV_RESERVED == 0,
+            "TPMA_NV bit {bit}"
+        );
+    }
+    for bit in 0..u64::BITS {
+        let value = 1u64 << bit;
+        assert_eq!(
+            TpmaNvExp::unmarshal(&mut &value.to_be_bytes()[..]).is_ok(),
+            value & TPMA_NV_EXP_RESERVED == 0,
+            "TPMA_NV_EXP bit {bit}"
+        );
+    }
+
+    // All defined bits together still unmarshal.
+    assert_eq!(
+        TpmaObject::unmarshal(&mut &(!TPMA_OBJECT_RESERVED).to_be_bytes()[..]),
+        Ok(TpmaObject(!TPMA_OBJECT_RESERVED))
+    );
+    assert_eq!(
+        TpmaNv::unmarshal(&mut &(!TPMA_NV_RESERVED).to_be_bytes()[..]),
+        Ok(TpmaNv(!TPMA_NV_RESERVED))
+    );
+    assert_eq!(
+        TpmaNvExp::unmarshal(&mut &(!TPMA_NV_EXP_RESERVED).to_be_bytes()[..]),
+        Ok(TpmaNvExp(!TPMA_NV_EXP_RESERVED))
+    );
+
+    // A reserved bit next to defined bits is rejected.
+    let object = 0x0006_0072u32;
+    assert!(TpmaObject::unmarshal(&mut &object.to_be_bytes()[..]).is_ok());
+    for reserved in [1u32 << 0, 1 << 3] {
+        let value = object | reserved;
+        assert_eq!(
+            TpmaObject::unmarshal(&mut &value.to_be_bytes()[..]),
+            Err(tpm2::errors::UnmarshalError)
+        );
+    }
+    assert_eq!(
+        TpmaNv::unmarshal(&mut &0x0004_0104u32.to_be_bytes()[..]),
+        Err(tpm2::errors::UnmarshalError)
+    );
+    assert_eq!(
+        TpmaNvExp::unmarshal(&mut &0x0000_0008_0004_0004u64.to_be_bytes()[..]),
+        Err(tpm2::errors::UnmarshalError)
+    );
+}
