@@ -2,15 +2,15 @@
 //!
 //! This module implements the "Asymmetric Primitives" commands defined in
 //! **Section 14** of the TPM 2.0 Specification.
-use super::{Command, Message, UnmarshalMessage};
+use super::{Command, Response, UnmarshalCommand, UnmarshalResponse};
 use crate::{errors::UnmarshalError, marshal::marshal_helper, *};
 
 /// TPM2_RSA_Encrypt (Command)
 #[doc(alias = "TPM2_RSA_Encrypt")]
 #[doc(alias = "RSA_Encrypt_In")]
-#[derive(Clone, Copy, PartialEq, Debug, Eq)]
+#[derive(Clone, Copy)]
 pub struct RSAEncrypt<'a> {
-    pub key_handle: Handle,
+    pub key_handle: ObjectHandle<'a>,
     pub message: Tpm2bPublicKeyRsa<'a>,
     pub in_scheme: Option<TpmtRsaDecrypt>,
     pub label: Tpm2bData<'a>,
@@ -24,12 +24,13 @@ pub struct RSAEncryptRsp<'a> {
 
 impl Command for RSAEncrypt<'_> {
     const CMD_CODE: TpmCc = TpmCc::RSAEncrypt;
+    type Handles<'a>
+        = [EntityHandle<'a>; 1]
+    where
+        Self: 'a;
     type Response<'a> = RSAEncryptRsp<'a>;
-}
-impl Message for RSAEncrypt<'_> {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.key_handle]
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.key_handle.into()]
     }
 }
 impl Marshal for RSAEncrypt<'_> {
@@ -42,13 +43,13 @@ impl Marshal for RSAEncrypt<'_> {
         marshal_helper(&self.label, dst, count)
     }
 }
-impl<'a> UnmarshalMessage<'a> for RSAEncrypt<'a> {
+impl<'a> UnmarshalCommand<'a> for RSAEncrypt<'a> {
     fn unmarshal_with_handles(
-        [key_handle]: Self::Handles,
+        [key_handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            key_handle,
+            key_handle: key_handle.try_into()?,
             message: Unmarshal::unmarshal(src)?,
             in_scheme: Unmarshal::unmarshal(src)?,
             label: Unmarshal::unmarshal(src)?,
@@ -56,7 +57,7 @@ impl<'a> UnmarshalMessage<'a> for RSAEncrypt<'a> {
     }
 }
 
-impl Message for RSAEncryptRsp<'_> {
+impl Response for RSAEncryptRsp<'_> {
     type Handles = [Handle; 0];
     fn handles(&self) -> Self::Handles {
         []
@@ -69,7 +70,7 @@ impl Marshal for RSAEncryptRsp<'_> {
         self.out_data.marshal(dst)
     }
 }
-impl<'a> UnmarshalMessage<'a> for RSAEncryptRsp<'a> {
+impl<'a> UnmarshalResponse<'a> for RSAEncryptRsp<'a> {
     fn unmarshal_with_handles(
         []: Self::Handles,
         src: &mut &'a [u8],
@@ -83,9 +84,9 @@ impl<'a> UnmarshalMessage<'a> for RSAEncryptRsp<'a> {
 /// TPM2_RSA_Decrypt (Command)
 #[doc(alias = "TPM2_RSA_Decrypt")]
 #[doc(alias = "RSA_Decrypt_In")]
-#[derive(Clone, Copy, PartialEq, Debug, Eq)]
+#[derive(Clone, Copy)]
 pub struct RSADecrypt<'a> {
-    pub key_handle: Handle,
+    pub key_handle: ObjectHandle<'a>,
     pub cipher_text: Tpm2bPublicKeyRsa<'a>,
     pub in_scheme: Option<TpmtRsaDecrypt>,
     pub label: Tpm2bData<'a>,
@@ -99,12 +100,13 @@ pub struct RSADecryptRsp<'a> {
 
 impl Command for RSADecrypt<'_> {
     const CMD_CODE: TpmCc = TpmCc::RSADecrypt;
+    type Handles<'a>
+        = [EntityHandle<'a>; 1]
+    where
+        Self: 'a;
     type Response<'a> = RSADecryptRsp<'a>;
-}
-impl Message for RSADecrypt<'_> {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.key_handle]
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.key_handle.into()]
     }
 }
 impl Marshal for RSADecrypt<'_> {
@@ -117,13 +119,13 @@ impl Marshal for RSADecrypt<'_> {
         marshal_helper(&self.label, dst, count)
     }
 }
-impl<'a> UnmarshalMessage<'a> for RSADecrypt<'a> {
+impl<'a> UnmarshalCommand<'a> for RSADecrypt<'a> {
     fn unmarshal_with_handles(
-        [key_handle]: Self::Handles,
+        [key_handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            key_handle,
+            key_handle: key_handle.try_into()?,
             cipher_text: Unmarshal::unmarshal(src)?,
             in_scheme: Unmarshal::unmarshal(src)?,
             label: Unmarshal::unmarshal(src)?,
@@ -131,7 +133,7 @@ impl<'a> UnmarshalMessage<'a> for RSADecrypt<'a> {
     }
 }
 
-impl Message for RSADecryptRsp<'_> {
+impl Response for RSADecryptRsp<'_> {
     type Handles = [Handle; 0];
     fn handles(&self) -> Self::Handles {
         []
@@ -144,7 +146,7 @@ impl Marshal for RSADecryptRsp<'_> {
         self.message.marshal(dst)
     }
 }
-impl<'a> UnmarshalMessage<'a> for RSADecryptRsp<'a> {
+impl<'a> UnmarshalResponse<'a> for RSADecryptRsp<'a> {
     fn unmarshal_with_handles(
         []: Self::Handles,
         src: &mut &'a [u8],
@@ -158,9 +160,9 @@ impl<'a> UnmarshalMessage<'a> for RSADecryptRsp<'a> {
 /// TPM2_ECDH_KeyGen (Command)
 #[doc(alias = "TPM2_ECDH_KeyGen")]
 #[doc(alias = "ECDH_KeyGen_In")]
-#[derive(Clone, Copy, PartialEq, Debug, Eq)]
-pub struct ECDHKeyGen {
-    pub key_handle: Handle,
+#[derive(Clone, Copy)]
+pub struct ECDHKeyGen<'a> {
+    pub key_handle: ObjectHandle<'a>,
 }
 /// TPM2_ECDH_KeyGen (Response)
 #[doc(alias = "ECDH_KeyGen_Out")]
@@ -170,33 +172,36 @@ pub struct ECDHKeyGenRsp<'a> {
     pub pub_point: Tpm2bEccPoint<'a>,
 }
 
-impl Command for ECDHKeyGen {
+impl Command for ECDHKeyGen<'_> {
     const CMD_CODE: TpmCc = TpmCc::ECDHKeyGen;
+    type Handles<'a>
+        = [EntityHandle<'a>; 1]
+    where
+        Self: 'a;
     type Response<'a> = ECDHKeyGenRsp<'a>;
-}
-impl Message for ECDHKeyGen {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.key_handle]
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.key_handle.into()]
     }
 }
-impl Marshal for ECDHKeyGen {
+impl Marshal for ECDHKeyGen<'_> {
     const MAX_SIZE: usize = 0;
     type MaxBuffer = [u8; 0];
     fn marshal(&self, _: &mut Self::MaxBuffer) -> usize {
         0
     }
 }
-impl<'a> UnmarshalMessage<'a> for ECDHKeyGen {
+impl<'a> UnmarshalCommand<'a> for ECDHKeyGen<'a> {
     fn unmarshal_with_handles(
-        [key_handle]: Self::Handles,
+        [key_handle]: Self::Handles<'a>,
         _: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
-        Ok(Self { key_handle })
+        Ok(Self {
+            key_handle: key_handle.try_into()?,
+        })
     }
 }
 
-impl Message for ECDHKeyGenRsp<'_> {
+impl Response for ECDHKeyGenRsp<'_> {
     type Handles = [Handle; 0];
     fn handles(&self) -> Self::Handles {
         []
@@ -210,7 +215,7 @@ impl Marshal for ECDHKeyGenRsp<'_> {
         marshal_helper(&self.pub_point, dst, count)
     }
 }
-impl<'a> UnmarshalMessage<'a> for ECDHKeyGenRsp<'a> {
+impl<'a> UnmarshalResponse<'a> for ECDHKeyGenRsp<'a> {
     fn unmarshal_with_handles(
         []: Self::Handles,
         src: &mut &'a [u8],
@@ -225,9 +230,9 @@ impl<'a> UnmarshalMessage<'a> for ECDHKeyGenRsp<'a> {
 /// TPM2_ECDH_ZGen (Command)
 #[doc(alias = "TPM2_ECDH_ZGen")]
 #[doc(alias = "ECDH_ZGen_In")]
-#[derive(Clone, Copy, PartialEq, Debug, Eq)]
+#[derive(Clone, Copy)]
 pub struct ECDHZGen<'a> {
-    pub key_handle: Handle,
+    pub key_handle: ObjectHandle<'a>,
     pub in_point: Tpm2bEccPoint<'a>,
 }
 /// TPM2_ECDH_ZGen (Response)
@@ -239,12 +244,13 @@ pub struct ECDHZGenRsp<'a> {
 
 impl Command for ECDHZGen<'_> {
     const CMD_CODE: TpmCc = TpmCc::ECDHZGen;
+    type Handles<'a>
+        = [EntityHandle<'a>; 1]
+    where
+        Self: 'a;
     type Response<'a> = ECDHZGenRsp<'a>;
-}
-impl Message for ECDHZGen<'_> {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.key_handle]
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.key_handle.into()]
     }
 }
 impl Marshal for ECDHZGen<'_> {
@@ -254,19 +260,19 @@ impl Marshal for ECDHZGen<'_> {
         self.in_point.marshal(dst)
     }
 }
-impl<'a> UnmarshalMessage<'a> for ECDHZGen<'a> {
+impl<'a> UnmarshalCommand<'a> for ECDHZGen<'a> {
     fn unmarshal_with_handles(
-        [key_handle]: Self::Handles,
+        [key_handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            key_handle,
+            key_handle: key_handle.try_into()?,
             in_point: Unmarshal::unmarshal(src)?,
         })
     }
 }
 
-impl Message for ECDHZGenRsp<'_> {
+impl Response for ECDHZGenRsp<'_> {
     type Handles = [Handle; 0];
     fn handles(&self) -> Self::Handles {
         []
@@ -279,7 +285,7 @@ impl Marshal for ECDHZGenRsp<'_> {
         self.out_point.marshal(dst)
     }
 }
-impl<'a> UnmarshalMessage<'a> for ECDHZGenRsp<'a> {
+impl<'a> UnmarshalResponse<'a> for ECDHZGenRsp<'a> {
     fn unmarshal_with_handles(
         []: Self::Handles,
         src: &mut &'a [u8],
@@ -306,11 +312,12 @@ pub struct ECCParametersRsp<'a> {
 
 impl Command for ECCParameters {
     const CMD_CODE: TpmCc = TpmCc::ECCParameters;
+    type Handles<'a>
+        = [EntityHandle<'a>; 0]
+    where
+        Self: 'a;
     type Response<'a> = ECCParametersRsp<'a>;
-}
-impl Message for ECCParameters {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -321,9 +328,9 @@ impl Marshal for ECCParameters {
         self.curve_id.marshal(dst)
     }
 }
-impl<'a> UnmarshalMessage<'a> for ECCParameters {
+impl<'a> UnmarshalCommand<'a> for ECCParameters {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -332,7 +339,7 @@ impl<'a> UnmarshalMessage<'a> for ECCParameters {
     }
 }
 
-impl Message for ECCParametersRsp<'_> {
+impl Response for ECCParametersRsp<'_> {
     type Handles = [Handle; 0];
     fn handles(&self) -> Self::Handles {
         []
@@ -345,7 +352,7 @@ impl Marshal for ECCParametersRsp<'_> {
         self.parameters.marshal(dst)
     }
 }
-impl<'a> UnmarshalMessage<'a> for ECCParametersRsp<'a> {
+impl<'a> UnmarshalResponse<'a> for ECCParametersRsp<'a> {
     fn unmarshal_with_handles(
         []: Self::Handles,
         src: &mut &'a [u8],
@@ -359,9 +366,9 @@ impl<'a> UnmarshalMessage<'a> for ECCParametersRsp<'a> {
 /// TPM2_ZGen_2Phase (Command)
 #[doc(alias = "TPM2_ZGen_2Phase")]
 #[doc(alias = "ZGen_2Phase_In")]
-#[derive(Clone, Copy, PartialEq, Debug, Eq)]
+#[derive(Clone, Copy)]
 pub struct ZGen2Phase<'a> {
-    pub key_a: Handle,
+    pub key_a: ObjectHandle<'a>,
     pub in_qs_b: Tpm2bEccPoint<'a>,
     pub in_qe_b: Tpm2bEccPoint<'a>,
     pub in_scheme: TpmiEccKeyExchange,
@@ -377,12 +384,13 @@ pub struct ZGen2PhaseRsp<'a> {
 
 impl Command for ZGen2Phase<'_> {
     const CMD_CODE: TpmCc = TpmCc::ZGen2Phase;
+    type Handles<'a>
+        = [EntityHandle<'a>; 1]
+    where
+        Self: 'a;
     type Response<'a> = ZGen2PhaseRsp<'a>;
-}
-impl Message for ZGen2Phase<'_> {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.key_a]
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.key_a.into()]
     }
 }
 impl Marshal for ZGen2Phase<'_> {
@@ -398,13 +406,13 @@ impl Marshal for ZGen2Phase<'_> {
         marshal_helper(&self.counter, dst, count)
     }
 }
-impl<'a> UnmarshalMessage<'a> for ZGen2Phase<'a> {
+impl<'a> UnmarshalCommand<'a> for ZGen2Phase<'a> {
     fn unmarshal_with_handles(
-        [key_a]: Self::Handles,
+        [key_a]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            key_a,
+            key_a: key_a.try_into()?,
             in_qs_b: Unmarshal::unmarshal(src)?,
             in_qe_b: Unmarshal::unmarshal(src)?,
             in_scheme: Unmarshal::unmarshal(src)?,
@@ -413,7 +421,7 @@ impl<'a> UnmarshalMessage<'a> for ZGen2Phase<'a> {
     }
 }
 
-impl Message for ZGen2PhaseRsp<'_> {
+impl Response for ZGen2PhaseRsp<'_> {
     type Handles = [Handle; 0];
     fn handles(&self) -> Self::Handles {
         []
@@ -427,7 +435,7 @@ impl Marshal for ZGen2PhaseRsp<'_> {
         marshal_helper(&self.out_z2, dst, count)
     }
 }
-impl<'a> UnmarshalMessage<'a> for ZGen2PhaseRsp<'a> {
+impl<'a> UnmarshalResponse<'a> for ZGen2PhaseRsp<'a> {
     fn unmarshal_with_handles(
         []: Self::Handles,
         src: &mut &'a [u8],
@@ -442,9 +450,9 @@ impl<'a> UnmarshalMessage<'a> for ZGen2PhaseRsp<'a> {
 /// TPM2_ECC_Encrypt (Command)
 #[doc(alias = "TPM2_ECC_Encrypt")]
 #[doc(alias = "ECC_Encrypt_In")]
-#[derive(Clone, Copy, PartialEq, Debug, Eq)]
+#[derive(Clone, Copy)]
 pub struct ECCEncrypt<'a> {
-    pub key_handle: Handle,
+    pub key_handle: ObjectHandle<'a>,
     pub plain_text: Tpm2bMaxBuffer<'a>,
     pub in_scheme: Option<TpmtKdfScheme>,
 }
@@ -459,12 +467,13 @@ pub struct ECCEncryptRsp<'a> {
 
 impl Command for ECCEncrypt<'_> {
     const CMD_CODE: TpmCc = TpmCc::ECCEncrypt;
+    type Handles<'a>
+        = [EntityHandle<'a>; 1]
+    where
+        Self: 'a;
     type Response<'a> = ECCEncryptRsp<'a>;
-}
-impl Message for ECCEncrypt<'_> {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.key_handle]
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.key_handle.into()]
     }
 }
 impl Marshal for ECCEncrypt<'_> {
@@ -475,20 +484,20 @@ impl Marshal for ECCEncrypt<'_> {
         marshal_helper(&self.in_scheme, dst, count)
     }
 }
-impl<'a> UnmarshalMessage<'a> for ECCEncrypt<'a> {
+impl<'a> UnmarshalCommand<'a> for ECCEncrypt<'a> {
     fn unmarshal_with_handles(
-        [key_handle]: Self::Handles,
+        [key_handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            key_handle,
+            key_handle: key_handle.try_into()?,
             plain_text: Unmarshal::unmarshal(src)?,
             in_scheme: Unmarshal::unmarshal(src)?,
         })
     }
 }
 
-impl Message for ECCEncryptRsp<'_> {
+impl Response for ECCEncryptRsp<'_> {
     type Handles = [Handle; 0];
     fn handles(&self) -> Self::Handles {
         []
@@ -504,7 +513,7 @@ impl Marshal for ECCEncryptRsp<'_> {
         marshal_helper(&self.c3, dst, count)
     }
 }
-impl<'a> UnmarshalMessage<'a> for ECCEncryptRsp<'a> {
+impl<'a> UnmarshalResponse<'a> for ECCEncryptRsp<'a> {
     fn unmarshal_with_handles(
         []: Self::Handles,
         src: &mut &'a [u8],
@@ -520,9 +529,9 @@ impl<'a> UnmarshalMessage<'a> for ECCEncryptRsp<'a> {
 /// TPM2_ECC_Decrypt (Command)
 #[doc(alias = "TPM2_ECC_Decrypt")]
 #[doc(alias = "ECC_Decrypt_In")]
-#[derive(Clone, Copy, PartialEq, Debug, Eq)]
+#[derive(Clone, Copy)]
 pub struct ECCDecrypt<'a> {
-    pub key_handle: Handle,
+    pub key_handle: ObjectHandle<'a>,
     pub c1: Tpm2bEccPoint<'a>,
     pub c2: Tpm2bMaxBuffer<'a>,
     pub c3: Tpm2bDigest<'a>,
@@ -537,12 +546,13 @@ pub struct ECCDecryptRsp<'a> {
 
 impl Command for ECCDecrypt<'_> {
     const CMD_CODE: TpmCc = TpmCc::ECCDecrypt;
+    type Handles<'a>
+        = [EntityHandle<'a>; 1]
+    where
+        Self: 'a;
     type Response<'a> = ECCDecryptRsp<'a>;
-}
-impl Message for ECCDecrypt<'_> {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.key_handle]
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.key_handle.into()]
     }
 }
 impl Marshal for ECCDecrypt<'_> {
@@ -558,13 +568,13 @@ impl Marshal for ECCDecrypt<'_> {
         marshal_helper(&self.in_scheme, dst, count)
     }
 }
-impl<'a> UnmarshalMessage<'a> for ECCDecrypt<'a> {
+impl<'a> UnmarshalCommand<'a> for ECCDecrypt<'a> {
     fn unmarshal_with_handles(
-        [key_handle]: Self::Handles,
+        [key_handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            key_handle,
+            key_handle: key_handle.try_into()?,
             c1: Unmarshal::unmarshal(src)?,
             c2: Unmarshal::unmarshal(src)?,
             c3: Unmarshal::unmarshal(src)?,
@@ -573,7 +583,7 @@ impl<'a> UnmarshalMessage<'a> for ECCDecrypt<'a> {
     }
 }
 
-impl Message for ECCDecryptRsp<'_> {
+impl Response for ECCDecryptRsp<'_> {
     type Handles = [Handle; 0];
     fn handles(&self) -> Self::Handles {
         []
@@ -586,7 +596,7 @@ impl Marshal for ECCDecryptRsp<'_> {
         self.plain_text.marshal(dst)
     }
 }
-impl<'a> UnmarshalMessage<'a> for ECCDecryptRsp<'a> {
+impl<'a> UnmarshalResponse<'a> for ECCDecryptRsp<'a> {
     fn unmarshal_with_handles(
         []: Self::Handles,
         src: &mut &'a [u8],
@@ -600,9 +610,9 @@ impl<'a> UnmarshalMessage<'a> for ECCDecryptRsp<'a> {
 /// TPM2_Encapsulate (Command)
 #[doc(alias = "TPM2_Encapsulate")]
 #[doc(alias = "Encapsulate_In")]
-#[derive(Clone, Copy, PartialEq, Debug, Eq)]
-pub struct Encapsulate {
-    pub key_handle: Handle,
+#[derive(Clone, Copy)]
+pub struct Encapsulate<'a> {
+    pub key_handle: ObjectHandle<'a>,
 }
 /// TPM2_Encapsulate (Response)
 #[doc(alias = "Encapsulate_Out")]
@@ -612,33 +622,36 @@ pub struct EncapsulateRsp<'a> {
     pub ciphertext: Tpm2bKemCiphertext<'a>,
 }
 
-impl Command for Encapsulate {
+impl Command for Encapsulate<'_> {
     const CMD_CODE: TpmCc = TpmCc::Encapsulate;
+    type Handles<'a>
+        = [EntityHandle<'a>; 1]
+    where
+        Self: 'a;
     type Response<'a> = EncapsulateRsp<'a>;
-}
-impl Message for Encapsulate {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.key_handle]
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.key_handle.into()]
     }
 }
-impl Marshal for Encapsulate {
+impl Marshal for Encapsulate<'_> {
     const MAX_SIZE: usize = 0;
     type MaxBuffer = [u8; 0];
     fn marshal(&self, _: &mut Self::MaxBuffer) -> usize {
         0
     }
 }
-impl<'a> UnmarshalMessage<'a> for Encapsulate {
+impl<'a> UnmarshalCommand<'a> for Encapsulate<'a> {
     fn unmarshal_with_handles(
-        [key_handle]: Self::Handles,
+        [key_handle]: Self::Handles<'a>,
         _: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
-        Ok(Self { key_handle })
+        Ok(Self {
+            key_handle: key_handle.try_into()?,
+        })
     }
 }
 
-impl Message for EncapsulateRsp<'_> {
+impl Response for EncapsulateRsp<'_> {
     type Handles = [Handle; 0];
     fn handles(&self) -> Self::Handles {
         []
@@ -652,7 +665,7 @@ impl Marshal for EncapsulateRsp<'_> {
         marshal_helper(&self.ciphertext, dst, count)
     }
 }
-impl<'a> UnmarshalMessage<'a> for EncapsulateRsp<'a> {
+impl<'a> UnmarshalResponse<'a> for EncapsulateRsp<'a> {
     fn unmarshal_with_handles(
         []: Self::Handles,
         src: &mut &'a [u8],
@@ -667,9 +680,9 @@ impl<'a> UnmarshalMessage<'a> for EncapsulateRsp<'a> {
 /// TPM2_Decapsulate (Command)
 #[doc(alias = "TPM2_Decapsulate")]
 #[doc(alias = "Decapsulate_In")]
-#[derive(Clone, Copy, PartialEq, Debug, Eq)]
+#[derive(Clone, Copy)]
 pub struct Decapsulate<'a> {
-    pub key_handle: Handle,
+    pub key_handle: ObjectHandle<'a>,
     pub ciphertext: Tpm2bKemCiphertext<'a>,
 }
 /// TPM2_Decapsulate (Response)
@@ -681,12 +694,13 @@ pub struct DecapsulateRsp<'a> {
 
 impl Command for Decapsulate<'_> {
     const CMD_CODE: TpmCc = TpmCc::Decapsulate;
+    type Handles<'a>
+        = [EntityHandle<'a>; 1]
+    where
+        Self: 'a;
     type Response<'a> = DecapsulateRsp<'a>;
-}
-impl Message for Decapsulate<'_> {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.key_handle]
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.key_handle.into()]
     }
 }
 impl Marshal for Decapsulate<'_> {
@@ -696,19 +710,19 @@ impl Marshal for Decapsulate<'_> {
         self.ciphertext.marshal(dst)
     }
 }
-impl<'a> UnmarshalMessage<'a> for Decapsulate<'a> {
+impl<'a> UnmarshalCommand<'a> for Decapsulate<'a> {
     fn unmarshal_with_handles(
-        [key_handle]: Self::Handles,
+        [key_handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            key_handle,
+            key_handle: key_handle.try_into()?,
             ciphertext: Unmarshal::unmarshal(src)?,
         })
     }
 }
 
-impl Message for DecapsulateRsp<'_> {
+impl Response for DecapsulateRsp<'_> {
     type Handles = [Handle; 0];
     fn handles(&self) -> Self::Handles {
         []
@@ -721,7 +735,7 @@ impl Marshal for DecapsulateRsp<'_> {
         self.shared_secret.marshal(dst)
     }
 }
-impl<'a> UnmarshalMessage<'a> for DecapsulateRsp<'a> {
+impl<'a> UnmarshalResponse<'a> for DecapsulateRsp<'a> {
     fn unmarshal_with_handles(
         []: Self::Handles,
         src: &mut &'a [u8],

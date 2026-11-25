@@ -2,16 +2,16 @@
 //!
 //! This module implements the "Symmetric Primitives" commands defined in
 //! **Section 15** of the TPM 2.0 Specification.
-use super::{Command, Message, UnmarshalMessage};
+use super::{Command, Response, UnmarshalCommand, UnmarshalResponse};
 use crate::{errors::UnmarshalError, marshal::marshal_helper, *};
 
 /// TPM2_EncryptDecrypt (Command)
 #[doc(alias = "TPM2_EncryptDecrypt")]
 #[doc(alias = "EncryptDecrypt_In")]
 #[deprecated]
-#[derive(Clone, Copy, PartialEq, Debug, Eq)]
+#[derive(Clone, Copy)]
 pub struct EncryptDecrypt<'a> {
-    pub key_handle: Handle,
+    pub key_handle: ObjectHandle<'a>,
     pub decrypt: bool,
     pub mode: Option<TpmiAlgCipherMode>,
     pub iv_in: Tpm2bIv<'a>,
@@ -28,12 +28,13 @@ pub struct EncryptDecryptRsp<'a> {
 
 impl Command for EncryptDecrypt<'_> {
     const CMD_CODE: TpmCc = TpmCc::EncryptDecrypt;
+    type Handles<'a>
+        = [EntityHandle<'a>; 1]
+    where
+        Self: 'a;
     type Response<'a> = EncryptDecryptRsp<'a>;
-}
-impl Message for EncryptDecrypt<'_> {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.key_handle]
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.key_handle.into()]
     }
 }
 impl Marshal for EncryptDecrypt<'_> {
@@ -49,13 +50,13 @@ impl Marshal for EncryptDecrypt<'_> {
         marshal_helper(&self.in_data, dst, count)
     }
 }
-impl<'a> UnmarshalMessage<'a> for EncryptDecrypt<'a> {
+impl<'a> UnmarshalCommand<'a> for EncryptDecrypt<'a> {
     fn unmarshal_with_handles(
-        [key_handle]: Self::Handles,
+        [key_handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            key_handle,
+            key_handle: key_handle.try_into()?,
             decrypt: Unmarshal::unmarshal(src)?,
             mode: Unmarshal::unmarshal(src)?,
             iv_in: Unmarshal::unmarshal(src)?,
@@ -64,7 +65,7 @@ impl<'a> UnmarshalMessage<'a> for EncryptDecrypt<'a> {
     }
 }
 
-impl Message for EncryptDecryptRsp<'_> {
+impl Response for EncryptDecryptRsp<'_> {
     type Handles = [Handle; 0];
     fn handles(&self) -> Self::Handles {
         []
@@ -78,7 +79,7 @@ impl Marshal for EncryptDecryptRsp<'_> {
         marshal_helper(&self.iv_out, dst, count)
     }
 }
-impl<'a> UnmarshalMessage<'a> for EncryptDecryptRsp<'a> {
+impl<'a> UnmarshalResponse<'a> for EncryptDecryptRsp<'a> {
     fn unmarshal_with_handles(
         []: Self::Handles,
         src: &mut &'a [u8],
@@ -93,9 +94,9 @@ impl<'a> UnmarshalMessage<'a> for EncryptDecryptRsp<'a> {
 /// TPM2_EncryptDecrypt2 (Command)
 #[doc(alias = "TPM2_EncryptDecrypt2")]
 #[doc(alias = "EncryptDecrypt2_In")]
-#[derive(Clone, Copy, PartialEq, Debug, Eq)]
+#[derive(Clone, Copy)]
 pub struct EncryptDecrypt2<'a> {
-    pub key_handle: Handle,
+    pub key_handle: ObjectHandle<'a>,
     pub in_data: Tpm2bMaxBuffer<'a>,
     pub decrypt: bool,
     pub mode: Option<TpmiAlgCipherMode>,
@@ -111,12 +112,13 @@ pub struct EncryptDecrypt2Rsp<'a> {
 
 impl Command for EncryptDecrypt2<'_> {
     const CMD_CODE: TpmCc = TpmCc::EncryptDecrypt2;
+    type Handles<'a>
+        = [EntityHandle<'a>; 1]
+    where
+        Self: 'a;
     type Response<'a> = EncryptDecrypt2Rsp<'a>;
-}
-impl Message for EncryptDecrypt2<'_> {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.key_handle]
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.key_handle.into()]
     }
 }
 impl Marshal for EncryptDecrypt2<'_> {
@@ -132,13 +134,13 @@ impl Marshal for EncryptDecrypt2<'_> {
         marshal_helper(&self.iv_in, dst, count)
     }
 }
-impl<'a> UnmarshalMessage<'a> for EncryptDecrypt2<'a> {
+impl<'a> UnmarshalCommand<'a> for EncryptDecrypt2<'a> {
     fn unmarshal_with_handles(
-        [key_handle]: Self::Handles,
+        [key_handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            key_handle,
+            key_handle: key_handle.try_into()?,
             in_data: Unmarshal::unmarshal(src)?,
             decrypt: Unmarshal::unmarshal(src)?,
             mode: Unmarshal::unmarshal(src)?,
@@ -147,7 +149,7 @@ impl<'a> UnmarshalMessage<'a> for EncryptDecrypt2<'a> {
     }
 }
 
-impl Message for EncryptDecrypt2Rsp<'_> {
+impl Response for EncryptDecrypt2Rsp<'_> {
     type Handles = [Handle; 0];
     fn handles(&self) -> Self::Handles {
         []
@@ -161,7 +163,7 @@ impl Marshal for EncryptDecrypt2Rsp<'_> {
         marshal_helper(&self.iv_out, dst, count)
     }
 }
-impl<'a> UnmarshalMessage<'a> for EncryptDecrypt2Rsp<'a> {
+impl<'a> UnmarshalResponse<'a> for EncryptDecrypt2Rsp<'a> {
     fn unmarshal_with_handles(
         []: Self::Handles,
         src: &mut &'a [u8],
@@ -192,11 +194,12 @@ pub struct HashRsp<'a> {
 
 impl Command for Hash<'_> {
     const CMD_CODE: TpmCc = TpmCc::Hash;
+    type Handles<'a>
+        = [EntityHandle<'a>; 0]
+    where
+        Self: 'a;
     type Response<'a> = HashRsp<'a>;
-}
-impl Message for Hash<'_> {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -209,9 +212,9 @@ impl Marshal for Hash<'_> {
         marshal_helper(&self.hierarchy, dst, count)
     }
 }
-impl<'a> UnmarshalMessage<'a> for Hash<'a> {
+impl<'a> UnmarshalCommand<'a> for Hash<'a> {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -222,7 +225,7 @@ impl<'a> UnmarshalMessage<'a> for Hash<'a> {
     }
 }
 
-impl Message for HashRsp<'_> {
+impl Response for HashRsp<'_> {
     type Handles = [Handle; 0];
     fn handles(&self) -> Self::Handles {
         []
@@ -236,7 +239,7 @@ impl Marshal for HashRsp<'_> {
         marshal_helper(&self.validation, dst, count)
     }
 }
-impl<'a> UnmarshalMessage<'a> for HashRsp<'a> {
+impl<'a> UnmarshalResponse<'a> for HashRsp<'a> {
     fn unmarshal_with_handles(
         []: Self::Handles,
         src: &mut &'a [u8],
@@ -251,9 +254,9 @@ impl<'a> UnmarshalMessage<'a> for HashRsp<'a> {
 /// TPM2_HMAC (Command)
 #[doc(alias = "TPM2_HMAC")]
 #[doc(alias = "HMAC_In")]
-#[derive(Clone, Copy, PartialEq, Debug, Eq)]
+#[derive(Clone, Copy)]
 pub struct HMAC<'a> {
-    pub handle: Handle,
+    pub handle: ObjectHandle<'a>,
     pub buffer: Tpm2bMaxBuffer<'a>,
     pub hash_alg: Option<TpmiAlgHash>,
 }
@@ -266,12 +269,13 @@ pub struct HMACRsp<'a> {
 
 impl Command for HMAC<'_> {
     const CMD_CODE: TpmCc = TpmCc::HMAC;
+    type Handles<'a>
+        = [EntityHandle<'a>; 1]
+    where
+        Self: 'a;
     type Response<'a> = HMACRsp<'a>;
-}
-impl Message for HMAC<'_> {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.handle]
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.handle.into()]
     }
 }
 impl Marshal for HMAC<'_> {
@@ -282,20 +286,20 @@ impl Marshal for HMAC<'_> {
         marshal_helper(&self.hash_alg, dst, count)
     }
 }
-impl<'a> UnmarshalMessage<'a> for HMAC<'a> {
+impl<'a> UnmarshalCommand<'a> for HMAC<'a> {
     fn unmarshal_with_handles(
-        [handle]: Self::Handles,
+        [handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            handle,
+            handle: handle.try_into()?,
             buffer: Unmarshal::unmarshal(src)?,
             hash_alg: Unmarshal::unmarshal(src)?,
         })
     }
 }
 
-impl Message for HMACRsp<'_> {
+impl Response for HMACRsp<'_> {
     type Handles = [Handle; 0];
     fn handles(&self) -> Self::Handles {
         []
@@ -308,7 +312,7 @@ impl Marshal for HMACRsp<'_> {
         self.out_hmac.marshal(dst)
     }
 }
-impl<'a> UnmarshalMessage<'a> for HMACRsp<'a> {
+impl<'a> UnmarshalResponse<'a> for HMACRsp<'a> {
     fn unmarshal_with_handles(
         []: Self::Handles,
         src: &mut &'a [u8],

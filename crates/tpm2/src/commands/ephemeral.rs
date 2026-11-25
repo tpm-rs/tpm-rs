@@ -2,15 +2,15 @@
 //!
 //! This module implements the "Ephemeral EC Keys" commands defined in
 //! **Section 19** of the TPM 2.0 Specification.
-use super::{Command, Message, UnmarshalMessage};
+use super::{Command, Response, UnmarshalCommand, UnmarshalResponse};
 use crate::{errors::UnmarshalError, marshal::marshal_helper, *};
 
 /// TPM2_Commit (Command)
 #[doc(alias = "TPM2_Commit")]
 #[doc(alias = "Commit_In")]
-#[derive(Clone, Copy, PartialEq, Debug, Eq)]
+#[derive(Clone, Copy)]
 pub struct Commit<'a> {
-    pub sign_handle: Handle,
+    pub sign_handle: ObjectHandle<'a>,
     pub p1: Tpm2bEccPoint<'a>,
     pub s2: Tpm2bSensitiveData<'a>,
     pub y2: Tpm2bEccParameter<'a>,
@@ -27,12 +27,13 @@ pub struct CommitRsp<'a> {
 
 impl Command for Commit<'_> {
     const CMD_CODE: TpmCc = TpmCc::Commit;
+    type Handles<'a>
+        = [EntityHandle<'a>; 1]
+    where
+        Self: 'a;
     type Response<'a> = CommitRsp<'a>;
-}
-impl Message for Commit<'_> {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.sign_handle]
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.sign_handle.into()]
     }
 }
 impl Marshal for Commit<'_> {
@@ -45,13 +46,13 @@ impl Marshal for Commit<'_> {
         marshal_helper(&self.y2, dst, count)
     }
 }
-impl<'a> UnmarshalMessage<'a> for Commit<'a> {
+impl<'a> UnmarshalCommand<'a> for Commit<'a> {
     fn unmarshal_with_handles(
-        [sign_handle]: Self::Handles,
+        [sign_handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            sign_handle,
+            sign_handle: sign_handle.try_into()?,
             p1: Unmarshal::unmarshal(src)?,
             s2: Unmarshal::unmarshal(src)?,
             y2: Unmarshal::unmarshal(src)?,
@@ -59,7 +60,7 @@ impl<'a> UnmarshalMessage<'a> for Commit<'a> {
     }
 }
 
-impl Message for CommitRsp<'_> {
+impl Response for CommitRsp<'_> {
     type Handles = [Handle; 0];
     fn handles(&self) -> Self::Handles {
         []
@@ -76,7 +77,7 @@ impl Marshal for CommitRsp<'_> {
         marshal_helper(&self.counter, dst, count)
     }
 }
-impl<'a> UnmarshalMessage<'a> for CommitRsp<'a> {
+impl<'a> UnmarshalResponse<'a> for CommitRsp<'a> {
     fn unmarshal_with_handles(
         []: Self::Handles,
         src: &mut &'a [u8],
@@ -107,11 +108,12 @@ pub struct ECEphemeralRsp<'a> {
 
 impl Command for ECEphemeral {
     const CMD_CODE: TpmCc = TpmCc::ECEphemeral;
+    type Handles<'a>
+        = [EntityHandle<'a>; 0]
+    where
+        Self: 'a;
     type Response<'a> = ECEphemeralRsp<'a>;
-}
-impl Message for ECEphemeral {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -122,9 +124,9 @@ impl Marshal for ECEphemeral {
         self.curve_id.marshal(dst)
     }
 }
-impl<'a> UnmarshalMessage<'a> for ECEphemeral {
+impl<'a> UnmarshalCommand<'a> for ECEphemeral {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -133,7 +135,7 @@ impl<'a> UnmarshalMessage<'a> for ECEphemeral {
     }
 }
 
-impl Message for ECEphemeralRsp<'_> {
+impl Response for ECEphemeralRsp<'_> {
     type Handles = [Handle; 0];
     fn handles(&self) -> Self::Handles {
         []
@@ -147,7 +149,7 @@ impl Marshal for ECEphemeralRsp<'_> {
         marshal_helper(&self.counter, dst, count)
     }
 }
-impl<'a> UnmarshalMessage<'a> for ECEphemeralRsp<'a> {
+impl<'a> UnmarshalResponse<'a> for ECEphemeralRsp<'a> {
     fn unmarshal_with_handles(
         []: Self::Handles,
         src: &mut &'a [u8],

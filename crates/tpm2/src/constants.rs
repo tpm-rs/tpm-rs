@@ -1215,7 +1215,7 @@ impl<'a> Unmarshal<'a> for TpmPtPcr {
 
 /// `TPM_HT` (Handle Types) defined in TPM 2.0 Part 2: Structures, Section 6.7 (Table 13).
 ///
-/// Represents the handle type encoded in the most significant byte (bits 31..24) of a 32-bit TPM handle ([`Handle`]).
+/// Represents the handle type encoded in the most significant byte (bits 31..24) of a 32-bit TPM handle ([`Handle`](crate::Handle)).
 /// Used to classify handles (PCRs, NV Indices, HMAC/Policy sessions, Permanent handles, Transient/Persistent objects).
 #[doc(alias = "TPM_HT")]
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -1267,80 +1267,6 @@ impl Marshal for TpmHt {
 impl<'a> Unmarshal<'a> for TpmHt {
     fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
         u8::unmarshal(src)?.try_into()
-    }
-}
-
-/// `TPM_HANDLE`, `TPM_RH`, and `TPM_HC` defined in TPM 2.0 Part 2: Structures, Section 7 (Tables 28–30) and Section 9 (Tables 40–50).
-///
-/// Represents 32-bit numeric handles used to reference TPM resources (transient/persistent objects,
-/// NV indices, PCRs, authorization sessions, and permanent reserved handles such as `RH_OWNER`, `RH_PLATFORM`, `RH_NULL`).
-/// The top 8 bits determine the handle type ([`TpmHt`]).
-#[doc(alias = "TPM_HANDLE")]
-#[doc(alias = "TPM_RH")]
-#[doc(alias = "TPM_HC")]
-#[doc(alias = "TPMI_DH_OBJECT")]
-#[doc(alias = "TPMI_DH_PARENT")]
-#[doc(alias = "TPMI_DH_PERSISTENT")]
-#[doc(alias = "TPMI_DH_ENTITY")]
-#[doc(alias = "TPMI_DH_PCR")]
-#[doc(alias = "TPMI_SH_AUTH_SESSION")]
-#[doc(alias = "TPMI_DH_CONTEXT")]
-#[doc(alias = "TPMI_RH_HIERARCHY")]
-#[doc(alias = "TPMI_RH_NV_INDEX")]
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
-pub struct Handle(pub u32);
-
-impl Handle {
-    pub fn handle_type(self) -> Option<TpmHt> {
-        self.0.to_be_bytes()[0].try_into().ok()
-    }
-
-    pub const NV_INDEX_FIRST: Handle = Handle(0x01000000);
-    pub const NV_INDEX_LAST: Handle = Handle(0x01FFFFFF);
-    pub const RH_OWNER: Handle = Handle(0x40000001);
-    pub const RH_NULL: Handle = Handle(0x40000007);
-    pub const RS_PW: Handle = Handle(0x40000009);
-    pub const RH_LOCKOUT: Handle = Handle(0x4000000A);
-    pub const RH_ENDORSEMENT: Handle = Handle(0x4000000B);
-    pub const RH_PLATFORM: Handle = Handle(0x4000000C);
-    pub const RH_PLATFORM_NV: Handle = Handle(0x4000000D);
-    pub const RH_ACT_0: Handle = Handle(0x40000110);
-    pub const RH_ACT_1: Handle = Handle(0x40000111);
-    pub const RH_ACT_2: Handle = Handle(0x40000112);
-    pub const RH_ACT_3: Handle = Handle(0x40000113);
-    pub const RH_ACT_4: Handle = Handle(0x40000114);
-    pub const RH_ACT_5: Handle = Handle(0x40000115);
-    pub const RH_ACT_6: Handle = Handle(0x40000116);
-    pub const RH_ACT_7: Handle = Handle(0x40000117);
-    pub const RH_ACT_8: Handle = Handle(0x40000118);
-    pub const RH_ACT_9: Handle = Handle(0x40000119);
-    pub const RH_ACT_A: Handle = Handle(0x4000011A);
-    pub const RH_ACT_B: Handle = Handle(0x4000011B);
-    pub const RH_ACT_C: Handle = Handle(0x4000011C);
-    pub const RH_ACT_D: Handle = Handle(0x4000011D);
-    pub const RH_ACT_E: Handle = Handle(0x4000011E);
-    pub const RH_ACT_F: Handle = Handle(0x4000011F);
-    pub const RH_FW_OWNER: Handle = Handle(0x40000140);
-    pub const RH_FW_ENDORSEMENT: Handle = Handle(0x40000141);
-    pub const RH_FW_PLATFORM: Handle = Handle(0x40000142);
-    pub const RH_FW_NULL: Handle = Handle(0x40000143);
-    pub const RH_SVN_OWNER_BASE: Handle = Handle(0x40010000);
-    pub const RH_SVN_ENDORSEMENT_BASE: Handle = Handle(0x40020000);
-    pub const RH_SVN_PLATFORM_BASE: Handle = Handle(0x40030000);
-    pub const RH_SVN_NULL_BASE: Handle = Handle(0x40040000);
-}
-
-impl Marshal for Handle {
-    const MAX_SIZE: usize = u32::MAX_SIZE;
-    type MaxBuffer = [u8; Self::MAX_SIZE];
-
-    fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
-        self.0.marshal(dst)
-    }
-}
-impl<'a> Unmarshal<'a> for Handle {
-    fn unmarshal(src: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
-        Unmarshal::unmarshal(src).map(Self)
     }
 }
 
@@ -1495,6 +1421,7 @@ impl<'a> Unmarshal<'a> for TpmGenerated {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Handle;
 
     #[test]
     fn test_tpm_eo_size_and_conversions() {

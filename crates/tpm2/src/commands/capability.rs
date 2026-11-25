@@ -2,7 +2,7 @@
 //!
 //! This module implements the "Capability Commands" commands defined in
 //! **Section 30** of the TPM 2.0 Specification.
-use super::{Command, Message, UnmarshalMessage};
+use super::{Command, Response, UnmarshalCommand, UnmarshalResponse};
 use crate::{errors::UnmarshalError, marshal::marshal_helper, *};
 
 /// TPM2_GetCapability (Command)
@@ -24,11 +24,12 @@ pub struct GetCapabilityRsp<'a> {
 
 impl Command for GetCapability {
     const CMD_CODE: TpmCc = TpmCc::GetCapability;
+    type Handles<'a>
+        = [EntityHandle<'a>; 0]
+    where
+        Self: 'a;
     type Response<'a> = GetCapabilityRsp<'a>;
-}
-impl Message for GetCapability {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -41,9 +42,9 @@ impl Marshal for GetCapability {
         marshal_helper(&self.property_count, dst, count)
     }
 }
-impl<'a> UnmarshalMessage<'a> for GetCapability {
+impl<'a> UnmarshalCommand<'a> for GetCapability {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -54,7 +55,7 @@ impl<'a> UnmarshalMessage<'a> for GetCapability {
     }
 }
 
-impl Message for GetCapabilityRsp<'_> {
+impl Response for GetCapabilityRsp<'_> {
     type Handles = [Handle; 0];
     fn handles(&self) -> Self::Handles {
         []
@@ -68,7 +69,7 @@ impl Marshal for GetCapabilityRsp<'_> {
         marshal_helper(&self.capability_data, dst, count)
     }
 }
-impl<'a> UnmarshalMessage<'a> for GetCapabilityRsp<'a> {
+impl<'a> UnmarshalResponse<'a> for GetCapabilityRsp<'a> {
     fn unmarshal_with_handles(
         []: Self::Handles,
         src: &mut &'a [u8],
@@ -90,11 +91,12 @@ pub struct TestParms {
 
 impl Command for TestParms {
     const CMD_CODE: TpmCc = TpmCc::TestParms;
+    type Handles<'a>
+        = [EntityHandle<'a>; 0]
+    where
+        Self: 'a;
     type Response<'a> = ();
-}
-impl Message for TestParms {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -105,9 +107,9 @@ impl Marshal for TestParms {
         self.parameters.marshal(dst)
     }
 }
-impl<'a> UnmarshalMessage<'a> for TestParms {
+impl<'a> UnmarshalCommand<'a> for TestParms {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {

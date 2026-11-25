@@ -200,11 +200,11 @@ impl<'a> Unmarshal<'a> for TpmsQuoteInfo<'a> {
 #[doc(alias = "TPMS_CREATION_INFO")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct TpmsCreationInfo<'a> {
-    pub object_name: Tpm2bName<'a>,
+    pub object_name: Name<'a>,
     pub creation_hash: Tpm2bDigest<'a>,
 }
 impl Marshal for TpmsCreationInfo<'_> {
-    const MAX_SIZE: usize = Tpm2bName::MAX_SIZE + Tpm2bDigest::MAX_SIZE;
+    const MAX_SIZE: usize = Name::MAX_SIZE + Tpm2bDigest::MAX_SIZE;
     type MaxBuffer = [u8; TpmsCreationInfo::MAX_SIZE];
 
     fn marshal(&self, dst: &mut [u8; TpmsCreationInfo::MAX_SIZE]) -> usize {
@@ -228,11 +228,11 @@ impl<'a> Unmarshal<'a> for TpmsCreationInfo<'a> {
 #[doc(alias = "TPMS_CERTIFY_INFO")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct TpmsCertifyInfo<'a> {
-    pub name: Tpm2bName<'a>,
-    pub qualified_name: Tpm2bName<'a>,
+    pub name: Name<'a>,
+    pub qualified_name: Name<'a>,
 }
 impl Marshal for TpmsCertifyInfo<'_> {
-    const MAX_SIZE: usize = Tpm2bName::MAX_SIZE + Tpm2bName::MAX_SIZE;
+    const MAX_SIZE: usize = Name::MAX_SIZE + Name::MAX_SIZE;
     type MaxBuffer = [u8; TpmsCertifyInfo::MAX_SIZE];
 
     fn marshal(&self, dst: &mut [u8; TpmsCertifyInfo::MAX_SIZE]) -> usize {
@@ -375,12 +375,12 @@ impl<'a> Unmarshal<'a> for TpmsTimeAttestInfo {
 #[doc(alias = "TPMS_NV_CERTIFY_INFO")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct TpmsNvCertifyInfo<'a> {
-    pub index_name: Tpm2bName<'a>,
+    pub index_name: Name<'a>,
     pub offset: u16,
     pub nv_contents: Tpm2bMaxNvBuffer<'a>,
 }
 impl Marshal for TpmsNvCertifyInfo<'_> {
-    const MAX_SIZE: usize = Tpm2bName::MAX_SIZE + u16::MAX_SIZE + Tpm2bMaxNvBuffer::MAX_SIZE;
+    const MAX_SIZE: usize = Name::MAX_SIZE + u16::MAX_SIZE + Tpm2bMaxNvBuffer::MAX_SIZE;
     type MaxBuffer = [u8; TpmsNvCertifyInfo::MAX_SIZE];
 
     fn marshal(&self, dst: &mut [u8; TpmsNvCertifyInfo::MAX_SIZE]) -> usize {
@@ -406,11 +406,11 @@ impl<'a> Unmarshal<'a> for TpmsNvCertifyInfo<'a> {
 #[doc(alias = "TPMS_NV_DIGEST_CERTIFY_INFO")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct TpmsNvDigestCertifyInfo<'a> {
-    pub index_name: Tpm2bName<'a>,
+    pub index_name: Name<'a>,
     pub nv_digest: Tpm2bDigest<'a>,
 }
 impl Marshal for TpmsNvDigestCertifyInfo<'_> {
-    const MAX_SIZE: usize = Tpm2bName::MAX_SIZE + Tpm2bDigest::MAX_SIZE;
+    const MAX_SIZE: usize = Name::MAX_SIZE + Tpm2bDigest::MAX_SIZE;
     type MaxBuffer = [u8; TpmsNvDigestCertifyInfo::MAX_SIZE];
 
     fn marshal(&self, dst: &mut [u8; TpmsNvDigestCertifyInfo::MAX_SIZE]) -> usize {
@@ -435,7 +435,7 @@ impl<'a> Unmarshal<'a> for TpmsNvDigestCertifyInfo<'a> {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct TpmsAttest<'a> {
     pub magic: TpmGenerated,
-    pub qualified_signer: Tpm2bName<'a>,
+    pub qualified_signer: Name<'a>,
     pub extra_data: Tpm2bData<'a>,
     pub clock_info: TpmsClockInfo,
     pub firmware_version: u64,
@@ -452,7 +452,7 @@ impl TpmsAttest<'_> {
 impl Marshal for TpmsAttest<'_> {
     const MAX_SIZE: usize = TpmGenerated::MAX_SIZE
         + TpmSt::MAX_SIZE
-        + Tpm2bName::MAX_SIZE
+        + Name::MAX_SIZE
         + Tpm2bData::MAX_SIZE
         + TpmsClockInfo::MAX_SIZE
         + u64::MAX_SIZE
@@ -1424,8 +1424,8 @@ pub struct TpmsCreationData<'a> {
     pub pcr_digest: Tpm2bDigest<'a>,
     pub locality: TpmaLocality,
     pub parent_name_alg: Option<TpmiAlgHash>,
-    pub parent_name: Tpm2bName<'a>,
-    pub parent_qualified_name: Tpm2bName<'a>,
+    pub parent_name: Name<'a>,
+    pub parent_qualified_name: Name<'a>,
     pub outside_info: Tpm2bData<'a>,
 }
 
@@ -1434,8 +1434,8 @@ impl Marshal for TpmsCreationData<'_> {
         + Tpm2bDigest::MAX_SIZE
         + TpmaLocality::MAX_SIZE
         + <Option<TpmiAlgHash>>::MAX_SIZE
-        + Tpm2bName::MAX_SIZE
-        + Tpm2bName::MAX_SIZE
+        + Name::MAX_SIZE
+        + Name::MAX_SIZE
         + Tpm2bData::MAX_SIZE;
     type MaxBuffer = [u8; TpmsCreationData::MAX_SIZE];
 

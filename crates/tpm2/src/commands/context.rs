@@ -2,7 +2,7 @@
 //!
 //! This module implements the "Context Management" commands defined in
 //! **Section 28** of the TPM 2.0 Specification.
-use super::{Command, Message, UnmarshalMessage};
+use super::{Command, Response, UnmarshalCommand, UnmarshalResponse};
 use crate::{errors::UnmarshalError, *};
 
 /// TPM2_ContextSave (Command)
@@ -21,12 +21,13 @@ pub struct ContextSaveRsp<'a> {
 
 impl Command for ContextSave {
     const CMD_CODE: TpmCc = TpmCc::ContextSave;
+    type Handles<'a>
+        = [EntityHandle<'a>; 1]
+    where
+        Self: 'a;
     type Response<'a> = ContextSaveRsp<'a>;
-}
-impl Message for ContextSave {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.save_handle]
+    fn handles(&self) -> Self::Handles<'_> {
+        [EntityHandle::Handle(self.save_handle)]
     }
 }
 impl Marshal for ContextSave {
@@ -36,16 +37,18 @@ impl Marshal for ContextSave {
         0
     }
 }
-impl<'a> UnmarshalMessage<'a> for ContextSave {
+impl<'a> UnmarshalCommand<'a> for ContextSave {
     fn unmarshal_with_handles(
-        [save_handle]: Self::Handles,
+        [save_handle]: Self::Handles<'a>,
         _: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
-        Ok(Self { save_handle })
+        Ok(Self {
+            save_handle: save_handle.try_into()?,
+        })
     }
 }
 
-impl Message for ContextSaveRsp<'_> {
+impl Response for ContextSaveRsp<'_> {
     type Handles = [Handle; 0];
     fn handles(&self) -> Self::Handles {
         []
@@ -58,7 +61,7 @@ impl Marshal for ContextSaveRsp<'_> {
         self.context.marshal(dst)
     }
 }
-impl<'a> UnmarshalMessage<'a> for ContextSaveRsp<'a> {
+impl<'a> UnmarshalResponse<'a> for ContextSaveRsp<'a> {
     fn unmarshal_with_handles(
         []: Self::Handles,
         src: &mut &'a [u8],
@@ -85,11 +88,12 @@ pub struct ContextLoadRsp {
 
 impl Command for ContextLoad<'_> {
     const CMD_CODE: TpmCc = TpmCc::ContextLoad;
+    type Handles<'a>
+        = [EntityHandle<'a>; 0]
+    where
+        Self: 'a;
     type Response<'a> = ContextLoadRsp;
-}
-impl Message for ContextLoad<'_> {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -100,9 +104,9 @@ impl Marshal for ContextLoad<'_> {
         self.context.marshal(dst)
     }
 }
-impl<'a> UnmarshalMessage<'a> for ContextLoad<'a> {
+impl<'a> UnmarshalCommand<'a> for ContextLoad<'a> {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -111,7 +115,7 @@ impl<'a> UnmarshalMessage<'a> for ContextLoad<'a> {
     }
 }
 
-impl Message for ContextLoadRsp {
+impl Response for ContextLoadRsp {
     type Handles = [Handle; 1];
     fn handles(&self) -> Self::Handles {
         [self.loaded_handle]
@@ -124,7 +128,7 @@ impl Marshal for ContextLoadRsp {
         0
     }
 }
-impl<'a> UnmarshalMessage<'a> for ContextLoadRsp {
+impl<'a> UnmarshalResponse<'a> for ContextLoadRsp {
     fn unmarshal_with_handles(
         [loaded_handle]: Self::Handles,
         _: &mut &'a [u8],
@@ -143,11 +147,12 @@ pub struct FlushContext {
 
 impl Command for FlushContext {
     const CMD_CODE: TpmCc = TpmCc::FlushContext;
+    type Handles<'a>
+        = [EntityHandle<'a>; 0]
+    where
+        Self: 'a;
     type Response<'a> = ();
-}
-impl Message for FlushContext {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -158,9 +163,9 @@ impl Marshal for FlushContext {
         self.flush_handle.marshal(dst)
     }
 }
-impl<'a> UnmarshalMessage<'a> for FlushContext {
+impl<'a> UnmarshalCommand<'a> for FlushContext {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -172,38 +177,39 @@ impl<'a> UnmarshalMessage<'a> for FlushContext {
 /// TPM2_EvictControl (Command)
 #[doc(alias = "TPM2_EvictControl")]
 #[doc(alias = "EvictControl_In")]
-#[derive(Clone, Copy, PartialEq, Debug, Eq)]
-pub struct EvictControl {
+#[derive(Clone, Copy)]
+pub struct EvictControl<'a> {
     pub auth: Handle,
-    pub object_handle: Handle,
+    pub object_handle: ObjectHandle<'a>,
     pub persistent_handle: Handle,
 }
 
-impl Command for EvictControl {
+impl Command for EvictControl<'_> {
     const CMD_CODE: TpmCc = TpmCc::EvictControl;
+    type Handles<'a>
+        = [EntityHandle<'a>; 2]
+    where
+        Self: 'a;
     type Response<'a> = ();
-}
-impl Message for EvictControl {
-    type Handles = [Handle; 2];
-    fn handles(&self) -> Self::Handles {
-        [self.auth, self.object_handle]
+    fn handles(&self) -> Self::Handles<'_> {
+        [EntityHandle::Handle(self.auth), self.object_handle.into()]
     }
 }
-impl Marshal for EvictControl {
+impl Marshal for EvictControl<'_> {
     const MAX_SIZE: usize = Handle::MAX_SIZE;
-    type MaxBuffer = [u8; Self::MAX_SIZE];
+    type MaxBuffer = [u8; EvictControl::MAX_SIZE];
     fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
         self.persistent_handle.marshal(dst)
     }
 }
-impl<'a> UnmarshalMessage<'a> for EvictControl {
+impl<'a> UnmarshalCommand<'a> for EvictControl<'a> {
     fn unmarshal_with_handles(
-        [auth, object_handle]: Self::Handles,
+        [auth, object_handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            auth,
-            object_handle,
+            auth: auth.try_into()?,
+            object_handle: object_handle.try_into()?,
             persistent_handle: Unmarshal::unmarshal(src)?,
         })
     }

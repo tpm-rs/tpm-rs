@@ -51,7 +51,7 @@ pub const MAX_CAP_BUFFER: usize = 1024;
 /// By default, sized to fit an internal `OBJECT` containing a vendor-sized
 /// private area, a public area, and both cached object names.
 #[doc(alias = "TPM2_MAX_CONTEXT_SIZE")]
-pub const MAX_CONTEXT_SIZE: usize = Private::CAP + TpmtPublic::MAX_SIZE + Tpm2bName::MAX_SIZE * 2;
+pub const MAX_CONTEXT_SIZE: usize = Private::CAP + TpmtPublic::MAX_SIZE + Name::MAX_SIZE * 2;
 /// Implementation-defined maximum bytes for the vendor-specific private key
 /// format inside an encrypted [`Tpm2bPrivate`].
 ///
@@ -126,11 +126,6 @@ impl Tag for Digest {
 /// Sized to the largest tagged digest structure ([`TpmtHa::MAX_SIZE`]).
 pub struct Data;
 impl Tag for Data {
-    const CAP: usize = TpmtHa::MAX_SIZE;
-}
-/// Sized to the largest entity Name ([`TpmtHa::MAX_SIZE`]).
-pub struct Name;
-impl Tag for Name {
     const CAP: usize = TpmtHa::MAX_SIZE;
 }
 /// Sized to the symmetric block size ([`AlgSym::BLOCK_SIZE`]).

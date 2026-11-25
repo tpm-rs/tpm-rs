@@ -2,7 +2,7 @@
 //!
 //! This module implements the "Hierarchy Commands" commands defined in
 //! **Section 24** of the TPM 2.0 Specification.
-use super::{Command, Message, UnmarshalMessage};
+use super::{Command, Response, UnmarshalCommand, UnmarshalResponse};
 use crate::{errors::UnmarshalError, marshal::marshal_helper, *};
 
 /// TPM2_CreatePrimary (Command)
@@ -25,17 +25,18 @@ pub struct CreatePrimaryRsp<'a> {
     pub creation_data: Tpm2bCreationData<'a>,
     pub creation_hash: Tpm2bDigest<'a>,
     pub creation_ticket: TpmtTkCreation<'a>,
-    pub name: Tpm2bName<'a>,
+    pub name: Name<'a>,
 }
 
 impl Command for CreatePrimary<'_> {
     const CMD_CODE: TpmCc = TpmCc::CreatePrimary;
+    type Handles<'a>
+        = [EntityHandle<'a>; 1]
+    where
+        Self: 'a;
     type Response<'a> = CreatePrimaryRsp<'a>;
-}
-impl Message for CreatePrimary<'_> {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.primary_handle]
+    fn handles(&self) -> Self::Handles<'_> {
+        [EntityHandle::Handle(self.primary_handle)]
     }
 }
 impl Marshal for CreatePrimary<'_> {
@@ -51,13 +52,13 @@ impl Marshal for CreatePrimary<'_> {
         marshal_helper(&self.creation_pcr, dst, count)
     }
 }
-impl<'a> UnmarshalMessage<'a> for CreatePrimary<'a> {
+impl<'a> UnmarshalCommand<'a> for CreatePrimary<'a> {
     fn unmarshal_with_handles(
-        [primary_handle]: Self::Handles,
+        [primary_handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            primary_handle,
+            primary_handle: primary_handle.try_into()?,
             in_sensitive: Unmarshal::unmarshal(src)?,
             in_public: Unmarshal::unmarshal(src)?,
             outside_info: Unmarshal::unmarshal(src)?,
@@ -66,7 +67,7 @@ impl<'a> UnmarshalMessage<'a> for CreatePrimary<'a> {
     }
 }
 
-impl Message for CreatePrimaryRsp<'_> {
+impl Response for CreatePrimaryRsp<'_> {
     type Handles = [Handle; 1];
     fn handles(&self) -> Self::Handles {
         [self.object_handle]
@@ -77,7 +78,7 @@ impl Marshal for CreatePrimaryRsp<'_> {
         + Tpm2bCreationData::MAX_SIZE
         + Tpm2bDigest::MAX_SIZE
         + TpmtTkCreation::MAX_SIZE
-        + Tpm2bName::MAX_SIZE;
+        + Name::MAX_SIZE;
     type MaxBuffer = [u8; CreatePrimaryRsp::MAX_SIZE];
     fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
         let count = marshal_helper(&self.out_public, dst, 0);
@@ -87,7 +88,7 @@ impl Marshal for CreatePrimaryRsp<'_> {
         marshal_helper(&self.name, dst, count)
     }
 }
-impl<'a> UnmarshalMessage<'a> for CreatePrimaryRsp<'a> {
+impl<'a> UnmarshalResponse<'a> for CreatePrimaryRsp<'a> {
     fn unmarshal_with_handles(
         [object_handle]: Self::Handles,
         src: &mut &'a [u8],
@@ -115,12 +116,13 @@ pub struct HierarchyControl {
 
 impl Command for HierarchyControl {
     const CMD_CODE: TpmCc = TpmCc::HierarchyControl;
+    type Handles<'a>
+        = [EntityHandle<'a>; 1]
+    where
+        Self: 'a;
     type Response<'a> = ();
-}
-impl Message for HierarchyControl {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.auth_handle]
+    fn handles(&self) -> Self::Handles<'_> {
+        [EntityHandle::Handle(self.auth_handle)]
     }
 }
 impl Marshal for HierarchyControl {
@@ -131,13 +133,13 @@ impl Marshal for HierarchyControl {
         marshal_helper(&self.state, dst, count)
     }
 }
-impl<'a> UnmarshalMessage<'a> for HierarchyControl {
+impl<'a> UnmarshalCommand<'a> for HierarchyControl {
     fn unmarshal_with_handles(
-        [auth_handle]: Self::Handles,
+        [auth_handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            auth_handle,
+            auth_handle: auth_handle.try_into()?,
             enable: Unmarshal::unmarshal(src)?,
             state: Unmarshal::unmarshal(src)?,
         })
@@ -156,12 +158,13 @@ pub struct SetPrimaryPolicy<'a> {
 
 impl Command for SetPrimaryPolicy<'_> {
     const CMD_CODE: TpmCc = TpmCc::SetPrimaryPolicy;
+    type Handles<'a>
+        = [EntityHandle<'a>; 1]
+    where
+        Self: 'a;
     type Response<'a> = ();
-}
-impl Message for SetPrimaryPolicy<'_> {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.auth_handle]
+    fn handles(&self) -> Self::Handles<'_> {
+        [EntityHandle::Handle(self.auth_handle)]
     }
 }
 impl Marshal for SetPrimaryPolicy<'_> {
@@ -172,13 +175,13 @@ impl Marshal for SetPrimaryPolicy<'_> {
         marshal_helper(&self.hash_alg, dst, count)
     }
 }
-impl<'a> UnmarshalMessage<'a> for SetPrimaryPolicy<'a> {
+impl<'a> UnmarshalCommand<'a> for SetPrimaryPolicy<'a> {
     fn unmarshal_with_handles(
-        [auth_handle]: Self::Handles,
+        [auth_handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            auth_handle,
+            auth_handle: auth_handle.try_into()?,
             auth_policy: Unmarshal::unmarshal(src)?,
             hash_alg: Unmarshal::unmarshal(src)?,
         })
@@ -195,12 +198,13 @@ pub struct ChangePPS {
 
 impl Command for ChangePPS {
     const CMD_CODE: TpmCc = TpmCc::ChangePPS;
+    type Handles<'a>
+        = [EntityHandle<'a>; 1]
+    where
+        Self: 'a;
     type Response<'a> = ();
-}
-impl Message for ChangePPS {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.auth_handle]
+    fn handles(&self) -> Self::Handles<'_> {
+        [EntityHandle::Handle(self.auth_handle)]
     }
 }
 impl Marshal for ChangePPS {
@@ -210,12 +214,14 @@ impl Marshal for ChangePPS {
         0
     }
 }
-impl<'a> UnmarshalMessage<'a> for ChangePPS {
+impl<'a> UnmarshalCommand<'a> for ChangePPS {
     fn unmarshal_with_handles(
-        [auth_handle]: Self::Handles,
+        [auth_handle]: Self::Handles<'a>,
         _: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
-        Ok(Self { auth_handle })
+        Ok(Self {
+            auth_handle: auth_handle.try_into()?,
+        })
     }
 }
 
@@ -229,12 +235,13 @@ pub struct ChangeEPS {
 
 impl Command for ChangeEPS {
     const CMD_CODE: TpmCc = TpmCc::ChangeEPS;
+    type Handles<'a>
+        = [EntityHandle<'a>; 1]
+    where
+        Self: 'a;
     type Response<'a> = ();
-}
-impl Message for ChangeEPS {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.auth_handle]
+    fn handles(&self) -> Self::Handles<'_> {
+        [EntityHandle::Handle(self.auth_handle)]
     }
 }
 impl Marshal for ChangeEPS {
@@ -244,12 +251,14 @@ impl Marshal for ChangeEPS {
         0
     }
 }
-impl<'a> UnmarshalMessage<'a> for ChangeEPS {
+impl<'a> UnmarshalCommand<'a> for ChangeEPS {
     fn unmarshal_with_handles(
-        [auth_handle]: Self::Handles,
+        [auth_handle]: Self::Handles<'a>,
         _: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
-        Ok(Self { auth_handle })
+        Ok(Self {
+            auth_handle: auth_handle.try_into()?,
+        })
     }
 }
 
@@ -263,12 +272,13 @@ pub struct Clear {
 
 impl Command for Clear {
     const CMD_CODE: TpmCc = TpmCc::Clear;
+    type Handles<'a>
+        = [EntityHandle<'a>; 1]
+    where
+        Self: 'a;
     type Response<'a> = ();
-}
-impl Message for Clear {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.auth_handle]
+    fn handles(&self) -> Self::Handles<'_> {
+        [EntityHandle::Handle(self.auth_handle)]
     }
 }
 impl Marshal for Clear {
@@ -278,12 +288,14 @@ impl Marshal for Clear {
         0
     }
 }
-impl<'a> UnmarshalMessage<'a> for Clear {
+impl<'a> UnmarshalCommand<'a> for Clear {
     fn unmarshal_with_handles(
-        [auth_handle]: Self::Handles,
+        [auth_handle]: Self::Handles<'a>,
         _: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
-        Ok(Self { auth_handle })
+        Ok(Self {
+            auth_handle: auth_handle.try_into()?,
+        })
     }
 }
 
@@ -298,12 +310,13 @@ pub struct ClearControl {
 
 impl Command for ClearControl {
     const CMD_CODE: TpmCc = TpmCc::ClearControl;
+    type Handles<'a>
+        = [EntityHandle<'a>; 1]
+    where
+        Self: 'a;
     type Response<'a> = ();
-}
-impl Message for ClearControl {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.auth]
+    fn handles(&self) -> Self::Handles<'_> {
+        [EntityHandle::Handle(self.auth)]
     }
 }
 impl Marshal for ClearControl {
@@ -313,13 +326,13 @@ impl Marshal for ClearControl {
         self.disable.marshal(dst)
     }
 }
-impl<'a> UnmarshalMessage<'a> for ClearControl {
+impl<'a> UnmarshalCommand<'a> for ClearControl {
     fn unmarshal_with_handles(
-        [auth]: Self::Handles,
+        [auth]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            auth,
+            auth: auth.try_into()?,
             disable: Unmarshal::unmarshal(src)?,
         })
     }
@@ -336,12 +349,13 @@ pub struct HierarchyChangeAuth<'a> {
 
 impl Command for HierarchyChangeAuth<'_> {
     const CMD_CODE: TpmCc = TpmCc::HierarchyChangeAuth;
+    type Handles<'a>
+        = [EntityHandle<'a>; 1]
+    where
+        Self: 'a;
     type Response<'a> = ();
-}
-impl Message for HierarchyChangeAuth<'_> {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.auth_handle]
+    fn handles(&self) -> Self::Handles<'_> {
+        [EntityHandle::Handle(self.auth_handle)]
     }
 }
 impl Marshal for HierarchyChangeAuth<'_> {
@@ -351,13 +365,13 @@ impl Marshal for HierarchyChangeAuth<'_> {
         self.new_auth.marshal(dst)
     }
 }
-impl<'a> UnmarshalMessage<'a> for HierarchyChangeAuth<'a> {
+impl<'a> UnmarshalCommand<'a> for HierarchyChangeAuth<'a> {
     fn unmarshal_with_handles(
-        [auth_handle]: Self::Handles,
+        [auth_handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            auth_handle,
+            auth_handle: auth_handle.try_into()?,
             new_auth: Unmarshal::unmarshal(src)?,
         })
     }
@@ -374,12 +388,13 @@ pub struct ReadOnlyControl {
 
 impl Command for ReadOnlyControl {
     const CMD_CODE: TpmCc = TpmCc::ReadOnlyControl;
+    type Handles<'a>
+        = [EntityHandle<'a>; 1]
+    where
+        Self: 'a;
     type Response<'a> = ();
-}
-impl Message for ReadOnlyControl {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.auth_handle]
+    fn handles(&self) -> Self::Handles<'_> {
+        [EntityHandle::Handle(self.auth_handle)]
     }
 }
 impl Marshal for ReadOnlyControl {
@@ -389,13 +404,13 @@ impl Marshal for ReadOnlyControl {
         self.state.marshal(dst)
     }
 }
-impl<'a> UnmarshalMessage<'a> for ReadOnlyControl {
+impl<'a> UnmarshalCommand<'a> for ReadOnlyControl {
     fn unmarshal_with_handles(
-        [auth_handle]: Self::Handles,
+        [auth_handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            auth_handle,
+            auth_handle: auth_handle.try_into()?,
             state: Unmarshal::unmarshal(src)?,
         })
     }

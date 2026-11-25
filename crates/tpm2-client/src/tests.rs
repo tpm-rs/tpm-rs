@@ -24,9 +24,17 @@ impl Connection for ErrorTpm {
 
 #[derive(Debug, PartialEq, Eq)]
 struct TestCommand(u32);
-impl Message for TestCommand {
+impl Command for TestCommand {
+    const CMD_CODE: TpmCc = TpmCc::NVUndefineSpaceSpecial;
+    type Handles<'a> = [EntityHandle<'a>; 0];
+    type Response<'a> = TestCommand;
+    fn handles(&self) -> <Self as Command>::Handles<'_> {
+        []
+    }
+}
+impl Response for TestCommand {
     type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    fn handles(&self) -> <Self as Response>::Handles {
         []
     }
 }
@@ -37,18 +45,14 @@ impl Marshal for TestCommand {
         self.0.marshal(dst)
     }
 }
-impl<'a> UnmarshalMessage<'a> for TestCommand {
+impl<'a> UnmarshalResponse<'a> for TestCommand {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: <Self as Response>::Handles,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         let val = u32::unmarshal(src)?;
         Ok(Self(val))
     }
-}
-impl Command for TestCommand {
-    const CMD_CODE: TpmCc = TpmCc::NVUndefineSpaceSpecial;
-    type Response<'a> = TestCommand;
 }
 
 #[test]
@@ -189,12 +193,6 @@ impl FakeTpm {
 }
 
 struct TestSessionsCommand();
-impl Message for TestSessionsCommand {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
-        []
-    }
-}
 impl Marshal for TestSessionsCommand {
     const MAX_SIZE: usize = 0;
     type MaxBuffer = [u8; 0];
@@ -202,14 +200,13 @@ impl Marshal for TestSessionsCommand {
         0
     }
 }
-impl<'a> UnmarshalMessage<'a> for TestSessionsCommand {
-    fn unmarshal_with_handles([]: Self::Handles, _: &mut &'a [u8]) -> Result<Self, UnmarshalError> {
-        Ok(Self())
-    }
-}
 impl Command for TestSessionsCommand {
     const CMD_CODE: TpmCc = TpmCc::NVUndefineSpaceSpecial;
+    type Handles<'a> = [EntityHandle<'a>; 0];
     type Response<'a> = ();
+    fn handles(&self) -> Self::Handles<'_> {
+        []
+    }
 }
 
 #[test]
@@ -244,4 +241,51 @@ fn test_response_session_fails_validation() {
         run_command_with_sessions(&cmd, session, &mut fake_tpm, &mut resp_buffer),
         Err(ClientError::Auth(validation_failure.err().unwrap()))
     );
+}
+
+#[test]
+fn test_command_and_response_handles() {
+    use crate::protocol::{CMD_BUFFER_SIZE, marshal_command, unmarshal_response};
+    use tpm2::commands::{ReadPublic, responses};
+
+    // Only the handle goes on the wire, not its Name.
+    let digest = [0x11; 32];
+    let name = Name::Digest(TpmtHa::Sha256(&digest));
+    let object = ObjectHandle {
+        handle: Handle(0x8000_0042),
+        digest: Some(TpmtHa::Sha256(&digest)),
+    };
+    let cmd = ReadPublic {
+        object_handle: object,
+    };
+    let mut cmd_buf = [0u8; CMD_BUFFER_SIZE];
+    let written = marshal_command(&cmd, &(), &mut cmd_buf);
+    assert_eq!(written, CommandHeader::MAX_SIZE + Handle::MAX_SIZE);
+
+    let mut slice = &cmd_buf[..written];
+    let header = CommandHeader::unmarshal(&mut slice).unwrap();
+    assert_eq!(header.tag, TpmiStCommandTag::NoSessions);
+    assert_eq!(header.size as usize, written);
+    assert_eq!(header.code, TpmCc::ReadPublic);
+    assert_eq!(Handle::unmarshal(&mut slice).unwrap(), object.handle);
+    assert!(slice.is_empty());
+
+    // Response handles are plain handles.
+    let mut fake_tpm = FakeTpm::default();
+    fake_tpm.add_to_response(&object.handle);
+    fake_tpm.add_to_response(&name);
+    let mut resp_buf = [0u8; RESP_BUFFER_SIZE];
+    let raw_resp = fake_tpm.transact(&[], &mut resp_buf).unwrap();
+    let load_rsp: responses::Load<'_> = unmarshal_response::<_, !>(&(), raw_resp).unwrap();
+    assert_eq!(load_rsp.object_handle, object.handle);
+    assert_eq!(load_rsp.name, name);
+
+    let seq_handle = Handle(0x8000_0099);
+    let mut fake_seq_tpm = FakeTpm::default();
+    fake_seq_tpm.add_to_response(&seq_handle);
+    let mut seq_buf = [0u8; RESP_BUFFER_SIZE];
+    let raw_seq_resp = fake_seq_tpm.transact(&[], &mut seq_buf).unwrap();
+    let seq_rsp: responses::HashSequenceStart =
+        unmarshal_response::<_, !>(&(), raw_seq_resp).unwrap();
+    assert!(seq_rsp.sequence_handle == SequenceHandle(seq_handle));
 }

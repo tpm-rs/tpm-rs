@@ -2,7 +2,7 @@
 //!
 //! This module implements the "Miscellaneous Management Functions" commands defined in
 //! **Section 26** of the TPM 2.0 Specification.
-use super::{Command, Message, UnmarshalMessage};
+use super::{Command, UnmarshalCommand};
 use crate::{errors::UnmarshalError, marshal::marshal_helper, *};
 
 /// TPM2_PP_Commands (Command)
@@ -17,12 +17,13 @@ pub struct PPCommands {
 
 impl Command for PPCommands {
     const CMD_CODE: TpmCc = TpmCc::PPCommands;
+    type Handles<'a>
+        = [EntityHandle<'a>; 1]
+    where
+        Self: 'a;
     type Response<'a> = ();
-}
-impl Message for PPCommands {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.auth]
+    fn handles(&self) -> Self::Handles<'_> {
+        [EntityHandle::Handle(self.auth)]
     }
 }
 impl Marshal for PPCommands {
@@ -33,13 +34,13 @@ impl Marshal for PPCommands {
         marshal_helper(&self.clear_list, dst, count)
     }
 }
-impl<'a> UnmarshalMessage<'a> for PPCommands {
+impl<'a> UnmarshalCommand<'a> for PPCommands {
     fn unmarshal_with_handles(
-        [auth]: Self::Handles,
+        [auth]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            auth,
+            auth: auth.try_into()?,
             set_list: Unmarshal::unmarshal(src)?,
             clear_list: Unmarshal::unmarshal(src)?,
         })
@@ -57,12 +58,13 @@ pub struct SetAlgorithmSet {
 
 impl Command for SetAlgorithmSet {
     const CMD_CODE: TpmCc = TpmCc::SetAlgorithmSet;
+    type Handles<'a>
+        = [EntityHandle<'a>; 1]
+    where
+        Self: 'a;
     type Response<'a> = ();
-}
-impl Message for SetAlgorithmSet {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.auth_handle]
+    fn handles(&self) -> Self::Handles<'_> {
+        [EntityHandle::Handle(self.auth_handle)]
     }
 }
 impl Marshal for SetAlgorithmSet {
@@ -72,13 +74,13 @@ impl Marshal for SetAlgorithmSet {
         self.algorithm_set.marshal(dst)
     }
 }
-impl<'a> UnmarshalMessage<'a> for SetAlgorithmSet {
+impl<'a> UnmarshalCommand<'a> for SetAlgorithmSet {
     fn unmarshal_with_handles(
-        [auth_handle]: Self::Handles,
+        [auth_handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            auth_handle,
+            auth_handle: auth_handle.try_into()?,
             algorithm_set: Unmarshal::unmarshal(src)?,
         })
     }

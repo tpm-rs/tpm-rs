@@ -1,7 +1,7 @@
 //! TPM 2.0 Commands and Request/Response Protocol Layout
 //!
 //! This module defines the request and response structures, handle lists,
-//! and [`Command`] / [`Message`] trait implementations for TPM 2.0 commands.
+//! and [`Command`] / [`Response`] trait implementations for TPM 2.0 commands.
 //!
 //! ## Differences from the TPM 2.0 Specification
 //!
@@ -11,11 +11,25 @@
 //!
 //! ### [`Handle`] types
 //!
-//! Currently, we do not use different types for any of the handles, so types
-//! like `TPMI_DH_OBJECT`, `TPMI_DH_PCR`, or `TPMI_RH_NV_INDEX` are all just
-//! represented by a [`Handle`]. In the future, when more fine-grained handle
-//! types are added, [`UnmarshalMessage::unmarshal_with_handles`] will perform
-//! additional validation to ensure handles are in the correct range.
+//! Command handles carry their [`Name`](crate::Name), as sessions hash it into
+//! `cpHash`. Each handle-area slot uses the type matching the Names it can
+//! have:
+//! - [`ObjectHandle`](crate::ObjectHandle) for objects.
+//! - [`NvHandle`](crate::NvHandle) for NV indices.
+//! - [`SequenceHandle`](crate::SequenceHandle) for sequence objects.
+//! - [`EntityHandle`] for slots accepting several kinds of entity
+//!   (`TPMI_RH_NV_AUTH`, `TPMI_DH_ENTITY`, and object handles that may be
+//!   `TPM_RH_NULL`).
+//! - [`Handle`] for PCRs, sessions, permanent handles, and `ContextSave`.
+//!
+//! Response handles and handles in the parameter area are never hashed, so
+//! they are plain [`Handle`]s (or [`SequenceHandle`](crate::SequenceHandle)s).
+//!
+//! We do not yet validate handle numeric ranges per spec interface type
+//! (`TPMI_DH_OBJECT`, `TPMI_DH_PCR`, `TPMI_RH_NV_INDEX`, etc.). In the future,
+//! [`UnmarshalCommand::unmarshal_with_handles`] and
+//! [`UnmarshalResponse::unmarshal_with_handles`] will check that handles are in
+//! the correct range.
 //!
 //! ### Intentionally omitted commands
 //!
@@ -62,7 +76,7 @@
 //! [`Option<TpmiAlgHash>`](crate::TpmiAlgHash) (`TPMI_ALG_HASH+`) rather than
 //! the `MAC` command using `TPMI_ALG_MAC_SCHEME+`.
 //!
-//! ## [`Message`] / [`UnmarshalMessage`] implementations
+//! ## [`Command`] / [`Response`] implementations
 //!
 //! Currently, these traits are implemented manually (and repetitively) for all
 //! the commands and responses. However these implementations are very simple
@@ -72,44 +86,64 @@
 //! - [`PolicyOR::p_hash_list`] is checked to ensure it has at least 2 digests.
 //!
 #![allow(deprecated)] // So we can define now-deprecated Commands / impls.
-use crate::{Handle, Marshal, TpmCc, errors::UnmarshalError};
+use crate::{EntityHandle, Handle, Marshal, TpmCc, errors::UnmarshalError};
 
-/// Common trait for a TPM 2.0 command [`Message`].
-pub trait Command: Message {
+/// A TPM 2.0 command.
+///
+/// The [`Marshal`] supertrait marshals only the parameter area; the handle
+/// area is accessed via [`Command::handles`].
+pub trait Command: Marshal {
     /// The [command code](TpmCc) for this command.
     const CMD_CODE: TpmCc;
-    /// The corresponding response [`Message`] for this command.
-    type Response<'a>: UnmarshalMessage<'a>;
+    /// The handles in the handle area, with their Names
+    /// (`[EntityHandle<'a>; N]`).
+    type Handles<'a>: AsRef<[EntityHandle<'a>]> + Copy
+    where
+        Self: 'a;
+    /// The corresponding [`Response`] for this command.
+    type Response<'a>: UnmarshalResponse<'a>;
+    /// Returns the handles in the handle area.
+    fn handles(&self) -> Self::Handles<'_>;
 }
 
-/// Trait implemented for every [`Command`] and [`Command::Response`].
+/// Trait for unmarshaling a [`Command`] from its handles and parameter bytes.
+pub trait UnmarshalCommand<'a>: Command + 'a {
+    /// Unmarshals the parameters from `src` and combines them with `handles`.
+    fn unmarshal_with_handles(
+        handles: Self::Handles<'a>,
+        src: &mut &'a [u8],
+    ) -> Result<Self, UnmarshalError>;
+}
+
+/// The response to a [`Command`].
 ///
-/// Note that the [`Marshal`] supertrait marshals only the parameter area of the
-/// message; the handle area is accessed via [`Message::handles`].
-pub trait Message: Marshal {
-    /// Fixed-size array of [`Handle`]s in this message's handle area (`[Handle; N]`).
+/// The [`Marshal`] supertrait marshals only the parameter area; the handle
+/// area is accessed via [`Response::handles`]. Response handles are never
+/// hashed, so they are plain [`Handle`]s.
+pub trait Response: Marshal {
+    /// The handles in the handle area (`[Handle; N]`).
     type Handles: AsRef<[Handle]> + AsMut<[Handle]> + Default + Copy;
-    /// Returns the handles in this message's handle area.
+    /// Returns the handles in the handle area.
     fn handles(&self) -> Self::Handles;
 }
 
-/// Trait for unmarshaling a [`Message`] from its handle area and parameter bytes.
-pub trait UnmarshalMessage<'a>: Message {
-    /// Unmarshals the message's parameters from `src` and combines them with `handles`.
+/// Trait for unmarshaling a [`Response`] from its handles and parameter bytes.
+pub trait UnmarshalResponse<'a>: Response {
+    /// Unmarshals the parameters from `src` and combines them with `handles`.
     fn unmarshal_with_handles(
         handles: Self::Handles,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError>;
 }
 
-impl Message for () {
+impl Response for () {
     type Handles = [Handle; 0];
     fn handles(&self) -> Self::Handles {
         []
     }
 }
-impl UnmarshalMessage<'_> for () {
-    fn unmarshal_with_handles([]: Self::Handles, _: &mut &'_ [u8]) -> Result<Self, UnmarshalError> {
+impl UnmarshalResponse<'_> for () {
+    fn unmarshal_with_handles([]: Self::Handles, _: &mut &[u8]) -> Result<Self, UnmarshalError> {
         Ok(())
     }
 }
@@ -191,7 +225,7 @@ pub use {
     testing::{GetTestResult, IncrementalSelfTest, SelfTest},
 };
 
-/// Response [`Message`] types corresponding to commands in [`crate::commands`].
+/// [`Response`] types corresponding to commands in [`crate::commands`].
 pub mod responses {
     pub use super::asymmetric::DecapsulateRsp as Decapsulate;
     pub use super::asymmetric::ECCDecryptRsp as ECCDecrypt;

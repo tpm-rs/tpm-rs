@@ -2,15 +2,15 @@
 //!
 //! This module implements the "Object Commands" commands defined in
 //! **Section 12** of the TPM 2.0 Specification.
-use super::{Command, Message, UnmarshalMessage};
+use super::{Command, Response, UnmarshalCommand, UnmarshalResponse};
 use crate::{errors::UnmarshalError, marshal::marshal_helper, *};
 
 /// TPM2_Create (Command)
 #[doc(alias = "TPM2_Create")]
 #[doc(alias = "Create_In")]
-#[derive(Clone, Copy, PartialEq, Debug, Eq)]
+#[derive(Clone, Copy)]
 pub struct Create<'a> {
-    pub parent_handle: Handle,
+    pub parent_handle: ObjectHandle<'a>,
     pub in_sensitive: Tpm2bSensitiveCreate<'a>,
     pub in_public: Tpm2bPublic<'a>,
     pub outside_info: Tpm2bData<'a>,
@@ -29,12 +29,13 @@ pub struct CreateRsp<'a> {
 
 impl Command for Create<'_> {
     const CMD_CODE: TpmCc = TpmCc::Create;
+    type Handles<'a>
+        = [EntityHandle<'a>; 1]
+    where
+        Self: 'a;
     type Response<'a> = CreateRsp<'a>;
-}
-impl Message for Create<'_> {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.parent_handle]
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.parent_handle.into()]
     }
 }
 impl Marshal for Create<'_> {
@@ -50,13 +51,13 @@ impl Marshal for Create<'_> {
         marshal_helper(&self.creation_pcr, dst, count)
     }
 }
-impl<'a> UnmarshalMessage<'a> for Create<'a> {
+impl<'a> UnmarshalCommand<'a> for Create<'a> {
     fn unmarshal_with_handles(
-        [parent_handle]: Self::Handles,
+        [parent_handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            parent_handle,
+            parent_handle: parent_handle.try_into()?,
             in_sensitive: Unmarshal::unmarshal(src)?,
             in_public: Unmarshal::unmarshal(src)?,
             outside_info: Unmarshal::unmarshal(src)?,
@@ -65,7 +66,7 @@ impl<'a> UnmarshalMessage<'a> for Create<'a> {
     }
 }
 
-impl Message for CreateRsp<'_> {
+impl Response for CreateRsp<'_> {
     type Handles = [Handle; 0];
     fn handles(&self) -> Self::Handles {
         []
@@ -86,7 +87,7 @@ impl Marshal for CreateRsp<'_> {
         marshal_helper(&self.creation_ticket, dst, count)
     }
 }
-impl<'a> UnmarshalMessage<'a> for CreateRsp<'a> {
+impl<'a> UnmarshalResponse<'a> for CreateRsp<'a> {
     fn unmarshal_with_handles(
         []: Self::Handles,
         src: &mut &'a [u8],
@@ -104,9 +105,9 @@ impl<'a> UnmarshalMessage<'a> for CreateRsp<'a> {
 /// TPM2_Load (Command)
 #[doc(alias = "TPM2_Load")]
 #[doc(alias = "Load_In")]
-#[derive(Clone, Copy, PartialEq, Debug, Eq)]
+#[derive(Clone, Copy)]
 pub struct Load<'a> {
-    pub parent_handle: Handle,
+    pub parent_handle: ObjectHandle<'a>,
     pub in_private: Tpm2bPrivate<'a>,
     pub in_public: Tpm2bPublic<'a>,
 }
@@ -115,17 +116,18 @@ pub struct Load<'a> {
 #[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct LoadRsp<'a> {
     pub object_handle: Handle,
-    pub name: Tpm2bName<'a>,
+    pub name: Name<'a>,
 }
 
 impl Command for Load<'_> {
     const CMD_CODE: TpmCc = TpmCc::Load;
+    type Handles<'a>
+        = [EntityHandle<'a>; 1]
+    where
+        Self: 'a;
     type Response<'a> = LoadRsp<'a>;
-}
-impl Message for Load<'_> {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.parent_handle]
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.parent_handle.into()]
     }
 }
 impl Marshal for Load<'_> {
@@ -136,33 +138,33 @@ impl Marshal for Load<'_> {
         marshal_helper(&self.in_public, dst, count)
     }
 }
-impl<'a> UnmarshalMessage<'a> for Load<'a> {
+impl<'a> UnmarshalCommand<'a> for Load<'a> {
     fn unmarshal_with_handles(
-        [parent_handle]: Self::Handles,
+        [parent_handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            parent_handle,
+            parent_handle: parent_handle.try_into()?,
             in_private: Unmarshal::unmarshal(src)?,
             in_public: Unmarshal::unmarshal(src)?,
         })
     }
 }
 
-impl Message for LoadRsp<'_> {
+impl Response for LoadRsp<'_> {
     type Handles = [Handle; 1];
     fn handles(&self) -> Self::Handles {
         [self.object_handle]
     }
 }
 impl Marshal for LoadRsp<'_> {
-    const MAX_SIZE: usize = Tpm2bName::MAX_SIZE;
+    const MAX_SIZE: usize = Name::MAX_SIZE;
     type MaxBuffer = [u8; LoadRsp::MAX_SIZE];
     fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
         self.name.marshal(dst)
     }
 }
-impl<'a> UnmarshalMessage<'a> for LoadRsp<'a> {
+impl<'a> UnmarshalResponse<'a> for LoadRsp<'a> {
     fn unmarshal_with_handles(
         [object_handle]: Self::Handles,
         src: &mut &'a [u8],
@@ -177,53 +179,58 @@ impl<'a> UnmarshalMessage<'a> for LoadRsp<'a> {
 /// TPM2_ReadPublic (Command)
 #[doc(alias = "TPM2_ReadPublic")]
 #[doc(alias = "ReadPublic_In")]
-#[derive(Clone, Copy, PartialEq, Debug, Eq)]
-pub struct ReadPublic {
-    pub object_handle: Handle,
+#[derive(Clone, Copy)]
+pub struct ReadPublic<'a> {
+    /// Only sessions that compute `cpHash` use this Name. Without one, any
+    /// Name can be given, e.g. when using this command to learn the Name.
+    pub object_handle: ObjectHandle<'a>,
 }
 /// TPM2_ReadPublic (Response)
 #[doc(alias = "ReadPublic_Out")]
 #[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct ReadPublicRsp<'a> {
     pub out_public: Tpm2bPublic<'a>,
-    pub name: Tpm2bName<'a>,
-    pub qualified_name: Tpm2bName<'a>,
+    pub name: Name<'a>,
+    pub qualified_name: Name<'a>,
 }
 
-impl Command for ReadPublic {
+impl Command for ReadPublic<'_> {
     const CMD_CODE: TpmCc = TpmCc::ReadPublic;
+    type Handles<'a>
+        = [EntityHandle<'a>; 1]
+    where
+        Self: 'a;
     type Response<'a> = ReadPublicRsp<'a>;
-}
-impl Message for ReadPublic {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.object_handle]
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.object_handle.into()]
     }
 }
-impl Marshal for ReadPublic {
+impl Marshal for ReadPublic<'_> {
     const MAX_SIZE: usize = 0;
     type MaxBuffer = [u8; 0];
     fn marshal(&self, _: &mut Self::MaxBuffer) -> usize {
         0
     }
 }
-impl<'a> UnmarshalMessage<'a> for ReadPublic {
+impl<'a> UnmarshalCommand<'a> for ReadPublic<'a> {
     fn unmarshal_with_handles(
-        [object_handle]: Self::Handles,
+        [object_handle]: Self::Handles<'a>,
         _: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
-        Ok(Self { object_handle })
+        Ok(Self {
+            object_handle: object_handle.try_into()?,
+        })
     }
 }
 
-impl Message for ReadPublicRsp<'_> {
+impl Response for ReadPublicRsp<'_> {
     type Handles = [Handle; 0];
     fn handles(&self) -> Self::Handles {
         []
     }
 }
 impl Marshal for ReadPublicRsp<'_> {
-    const MAX_SIZE: usize = Tpm2bPublic::MAX_SIZE + Tpm2bName::MAX_SIZE + Tpm2bName::MAX_SIZE;
+    const MAX_SIZE: usize = Tpm2bPublic::MAX_SIZE + Name::MAX_SIZE + Name::MAX_SIZE;
     type MaxBuffer = [u8; ReadPublicRsp::MAX_SIZE];
     fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
         let count = marshal_helper(&self.out_public, dst, 0);
@@ -231,7 +238,7 @@ impl Marshal for ReadPublicRsp<'_> {
         marshal_helper(&self.qualified_name, dst, count)
     }
 }
-impl<'a> UnmarshalMessage<'a> for ReadPublicRsp<'a> {
+impl<'a> UnmarshalResponse<'a> for ReadPublicRsp<'a> {
     fn unmarshal_with_handles(
         []: Self::Handles,
         src: &mut &'a [u8],
@@ -247,10 +254,10 @@ impl<'a> UnmarshalMessage<'a> for ReadPublicRsp<'a> {
 /// TPM2_ActivateCredential (Command)
 #[doc(alias = "TPM2_ActivateCredential")]
 #[doc(alias = "ActivateCredential_In")]
-#[derive(Clone, Copy, PartialEq, Debug, Eq)]
+#[derive(Clone, Copy)]
 pub struct ActivateCredential<'a> {
-    pub activate_handle: Handle,
-    pub key_handle: Handle,
+    pub activate_handle: ObjectHandle<'a>,
+    pub key_handle: ObjectHandle<'a>,
     pub credential_blob: Tpm2bIdObject<'a>,
     pub secret: Tpm2bEncryptedSecret<'a>,
 }
@@ -263,12 +270,13 @@ pub struct ActivateCredentialRsp<'a> {
 
 impl Command for ActivateCredential<'_> {
     const CMD_CODE: TpmCc = TpmCc::ActivateCredential;
+    type Handles<'a>
+        = [EntityHandle<'a>; 2]
+    where
+        Self: 'a;
     type Response<'a> = ActivateCredentialRsp<'a>;
-}
-impl Message for ActivateCredential<'_> {
-    type Handles = [Handle; 2];
-    fn handles(&self) -> Self::Handles {
-        [self.activate_handle, self.key_handle]
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.activate_handle.into(), self.key_handle.into()]
     }
 }
 impl Marshal for ActivateCredential<'_> {
@@ -279,21 +287,21 @@ impl Marshal for ActivateCredential<'_> {
         marshal_helper(&self.secret, dst, count)
     }
 }
-impl<'a> UnmarshalMessage<'a> for ActivateCredential<'a> {
+impl<'a> UnmarshalCommand<'a> for ActivateCredential<'a> {
     fn unmarshal_with_handles(
-        [activate_handle, key_handle]: Self::Handles,
+        [activate_handle, key_handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            activate_handle,
-            key_handle,
+            activate_handle: activate_handle.try_into()?,
+            key_handle: key_handle.try_into()?,
             credential_blob: Unmarshal::unmarshal(src)?,
             secret: Unmarshal::unmarshal(src)?,
         })
     }
 }
 
-impl Message for ActivateCredentialRsp<'_> {
+impl Response for ActivateCredentialRsp<'_> {
     type Handles = [Handle; 0];
     fn handles(&self) -> Self::Handles {
         []
@@ -306,7 +314,7 @@ impl Marshal for ActivateCredentialRsp<'_> {
         self.cert_info.marshal(dst)
     }
 }
-impl<'a> UnmarshalMessage<'a> for ActivateCredentialRsp<'a> {
+impl<'a> UnmarshalResponse<'a> for ActivateCredentialRsp<'a> {
     fn unmarshal_with_handles(
         []: Self::Handles,
         src: &mut &'a [u8],
@@ -320,11 +328,11 @@ impl<'a> UnmarshalMessage<'a> for ActivateCredentialRsp<'a> {
 /// TPM2_MakeCredential (Command)
 #[doc(alias = "TPM2_MakeCredential")]
 #[doc(alias = "MakeCredential_In")]
-#[derive(Clone, Copy, PartialEq, Debug, Eq)]
+#[derive(Clone, Copy)]
 pub struct MakeCredential<'a> {
-    pub handle: Handle,
+    pub handle: ObjectHandle<'a>,
     pub credential: Tpm2bDigest<'a>,
-    pub object_name: Tpm2bName<'a>,
+    pub object_name: Name<'a>,
 }
 /// TPM2_MakeCredential (Response)
 #[doc(alias = "MakeCredential_Out")]
@@ -336,36 +344,37 @@ pub struct MakeCredentialRsp<'a> {
 
 impl Command for MakeCredential<'_> {
     const CMD_CODE: TpmCc = TpmCc::MakeCredential;
+    type Handles<'a>
+        = [EntityHandle<'a>; 1]
+    where
+        Self: 'a;
     type Response<'a> = MakeCredentialRsp<'a>;
-}
-impl Message for MakeCredential<'_> {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.handle]
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.handle.into()]
     }
 }
 impl Marshal for MakeCredential<'_> {
-    const MAX_SIZE: usize = Tpm2bDigest::MAX_SIZE + Tpm2bName::MAX_SIZE;
+    const MAX_SIZE: usize = Tpm2bDigest::MAX_SIZE + Name::MAX_SIZE;
     type MaxBuffer = [u8; MakeCredential::MAX_SIZE];
     fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
         let count = marshal_helper(&self.credential, dst, 0);
         marshal_helper(&self.object_name, dst, count)
     }
 }
-impl<'a> UnmarshalMessage<'a> for MakeCredential<'a> {
+impl<'a> UnmarshalCommand<'a> for MakeCredential<'a> {
     fn unmarshal_with_handles(
-        [handle]: Self::Handles,
+        [handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            handle,
+            handle: handle.try_into()?,
             credential: Unmarshal::unmarshal(src)?,
             object_name: Unmarshal::unmarshal(src)?,
         })
     }
 }
 
-impl Message for MakeCredentialRsp<'_> {
+impl Response for MakeCredentialRsp<'_> {
     type Handles = [Handle; 0];
     fn handles(&self) -> Self::Handles {
         []
@@ -379,7 +388,7 @@ impl Marshal for MakeCredentialRsp<'_> {
         marshal_helper(&self.secret, dst, count)
     }
 }
-impl<'a> UnmarshalMessage<'a> for MakeCredentialRsp<'a> {
+impl<'a> UnmarshalResponse<'a> for MakeCredentialRsp<'a> {
     fn unmarshal_with_handles(
         []: Self::Handles,
         src: &mut &'a [u8],
@@ -394,9 +403,9 @@ impl<'a> UnmarshalMessage<'a> for MakeCredentialRsp<'a> {
 /// TPM2_Unseal (Command)
 #[doc(alias = "TPM2_Unseal")]
 #[doc(alias = "Unseal_In")]
-#[derive(Clone, Copy, PartialEq, Debug, Eq)]
-pub struct Unseal {
-    pub item_handle: Handle,
+#[derive(Clone, Copy)]
+pub struct Unseal<'a> {
+    pub item_handle: ObjectHandle<'a>,
 }
 /// TPM2_Unseal (Response)
 #[doc(alias = "Unseal_Out")]
@@ -405,33 +414,36 @@ pub struct UnsealRsp<'a> {
     pub out_data: Tpm2bSensitiveData<'a>,
 }
 
-impl Command for Unseal {
+impl Command for Unseal<'_> {
     const CMD_CODE: TpmCc = TpmCc::Unseal;
+    type Handles<'a>
+        = [EntityHandle<'a>; 1]
+    where
+        Self: 'a;
     type Response<'a> = UnsealRsp<'a>;
-}
-impl Message for Unseal {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.item_handle]
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.item_handle.into()]
     }
 }
-impl Marshal for Unseal {
+impl Marshal for Unseal<'_> {
     const MAX_SIZE: usize = 0;
     type MaxBuffer = [u8; 0];
     fn marshal(&self, _: &mut Self::MaxBuffer) -> usize {
         0
     }
 }
-impl<'a> UnmarshalMessage<'a> for Unseal {
+impl<'a> UnmarshalCommand<'a> for Unseal<'a> {
     fn unmarshal_with_handles(
-        [item_handle]: Self::Handles,
+        [item_handle]: Self::Handles<'a>,
         _: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
-        Ok(Self { item_handle })
+        Ok(Self {
+            item_handle: item_handle.try_into()?,
+        })
     }
 }
 
-impl Message for UnsealRsp<'_> {
+impl Response for UnsealRsp<'_> {
     type Handles = [Handle; 0];
     fn handles(&self) -> Self::Handles {
         []
@@ -444,7 +456,7 @@ impl Marshal for UnsealRsp<'_> {
         self.out_data.marshal(dst)
     }
 }
-impl<'a> UnmarshalMessage<'a> for UnsealRsp<'a> {
+impl<'a> UnmarshalResponse<'a> for UnsealRsp<'a> {
     fn unmarshal_with_handles(
         []: Self::Handles,
         src: &mut &'a [u8],
@@ -458,10 +470,10 @@ impl<'a> UnmarshalMessage<'a> for UnsealRsp<'a> {
 /// TPM2_ObjectChangeAuth (Command)
 #[doc(alias = "TPM2_ObjectChangeAuth")]
 #[doc(alias = "ObjectChangeAuth_In")]
-#[derive(Clone, Copy, PartialEq, Debug, Eq)]
+#[derive(Clone, Copy)]
 pub struct ObjectChangeAuth<'a> {
-    pub object_handle: Handle,
-    pub parent_handle: Handle,
+    pub object_handle: ObjectHandle<'a>,
+    pub parent_handle: ObjectHandle<'a>,
     pub new_auth: Tpm2bAuth<'a>,
 }
 /// TPM2_ObjectChangeAuth (Response)
@@ -473,12 +485,13 @@ pub struct ObjectChangeAuthRsp<'a> {
 
 impl Command for ObjectChangeAuth<'_> {
     const CMD_CODE: TpmCc = TpmCc::ObjectChangeAuth;
+    type Handles<'a>
+        = [EntityHandle<'a>; 2]
+    where
+        Self: 'a;
     type Response<'a> = ObjectChangeAuthRsp<'a>;
-}
-impl Message for ObjectChangeAuth<'_> {
-    type Handles = [Handle; 2];
-    fn handles(&self) -> Self::Handles {
-        [self.object_handle, self.parent_handle]
+    fn handles(&self) -> Self::Handles<'_> {
+        [self.object_handle.into(), self.parent_handle.into()]
     }
 }
 impl Marshal for ObjectChangeAuth<'_> {
@@ -488,20 +501,20 @@ impl Marshal for ObjectChangeAuth<'_> {
         self.new_auth.marshal(dst)
     }
 }
-impl<'a> UnmarshalMessage<'a> for ObjectChangeAuth<'a> {
+impl<'a> UnmarshalCommand<'a> for ObjectChangeAuth<'a> {
     fn unmarshal_with_handles(
-        [object_handle, parent_handle]: Self::Handles,
+        [object_handle, parent_handle]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            object_handle,
-            parent_handle,
+            object_handle: object_handle.try_into()?,
+            parent_handle: parent_handle.try_into()?,
             new_auth: Unmarshal::unmarshal(src)?,
         })
     }
 }
 
-impl Message for ObjectChangeAuthRsp<'_> {
+impl Response for ObjectChangeAuthRsp<'_> {
     type Handles = [Handle; 0];
     fn handles(&self) -> Self::Handles {
         []
@@ -514,7 +527,7 @@ impl Marshal for ObjectChangeAuthRsp<'_> {
         self.out_private.marshal(dst)
     }
 }
-impl<'a> UnmarshalMessage<'a> for ObjectChangeAuthRsp<'a> {
+impl<'a> UnmarshalResponse<'a> for ObjectChangeAuthRsp<'a> {
     fn unmarshal_with_handles(
         []: Self::Handles,
         src: &mut &'a [u8],
@@ -539,16 +552,17 @@ pub struct LoadExternal<'a> {
 #[derive(Clone, Copy, PartialEq, Debug, Eq)]
 pub struct LoadExternalRsp<'a> {
     pub object_handle: Handle,
-    pub name: Tpm2bName<'a>,
+    pub name: Name<'a>,
 }
 
 impl Command for LoadExternal<'_> {
     const CMD_CODE: TpmCc = TpmCc::LoadExternal;
+    type Handles<'a>
+        = [EntityHandle<'a>; 0]
+    where
+        Self: 'a;
     type Response<'a> = LoadExternalRsp<'a>;
-}
-impl Message for LoadExternal<'_> {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -562,9 +576,9 @@ impl Marshal for LoadExternal<'_> {
         marshal_helper(&self.hierarchy, dst, count)
     }
 }
-impl<'a> UnmarshalMessage<'a> for LoadExternal<'a> {
+impl<'a> UnmarshalCommand<'a> for LoadExternal<'a> {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -575,20 +589,20 @@ impl<'a> UnmarshalMessage<'a> for LoadExternal<'a> {
     }
 }
 
-impl Message for LoadExternalRsp<'_> {
+impl Response for LoadExternalRsp<'_> {
     type Handles = [Handle; 1];
     fn handles(&self) -> Self::Handles {
         [self.object_handle]
     }
 }
 impl Marshal for LoadExternalRsp<'_> {
-    const MAX_SIZE: usize = Tpm2bName::MAX_SIZE;
+    const MAX_SIZE: usize = Name::MAX_SIZE;
     type MaxBuffer = [u8; LoadExternalRsp::MAX_SIZE];
     fn marshal(&self, dst: &mut Self::MaxBuffer) -> usize {
         self.name.marshal(dst)
     }
 }
-impl<'a> UnmarshalMessage<'a> for LoadExternalRsp<'a> {
+impl<'a> UnmarshalResponse<'a> for LoadExternalRsp<'a> {
     fn unmarshal_with_handles(
         [object_handle]: Self::Handles,
         src: &mut &'a [u8],

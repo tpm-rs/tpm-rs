@@ -9,7 +9,7 @@
 //! Each command includes its corresponding request parameters, handle list,
 //! response parameters, and [`Command`] trait implementation.
 
-use super::{Command, Message, UnmarshalMessage};
+use super::{Command, UnmarshalCommand};
 use crate::{errors::UnmarshalError, *};
 
 /// TPM2_Startup (Command)
@@ -21,11 +21,12 @@ pub struct Startup {
 }
 impl Command for Startup {
     const CMD_CODE: TpmCc = TpmCc::Startup;
+    type Handles<'a>
+        = [EntityHandle<'a>; 0]
+    where
+        Self: 'a;
     type Response<'a> = ();
-}
-impl Message for Startup {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -36,9 +37,9 @@ impl Marshal for Startup {
         self.startup_type.marshal(dst)
     }
 }
-impl<'a> UnmarshalMessage<'a> for Startup {
+impl<'a> UnmarshalCommand<'a> for Startup {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -57,11 +58,12 @@ pub struct Shutdown {
 
 impl Command for Shutdown {
     const CMD_CODE: TpmCc = TpmCc::Shutdown;
+    type Handles<'a>
+        = [EntityHandle<'a>; 0]
+    where
+        Self: 'a;
     type Response<'a> = ();
-}
-impl Message for Shutdown {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -72,9 +74,9 @@ impl Marshal for Shutdown {
         self.shutdown_type.marshal(dst)
     }
 }
-impl<'a> UnmarshalMessage<'a> for Shutdown {
+impl<'a> UnmarshalCommand<'a> for Shutdown {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {

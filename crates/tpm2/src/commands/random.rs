@@ -8,7 +8,7 @@
 //!
 //! Each command includes its corresponding request parameters, handle list,
 //! response parameters, and [`Command`] trait implementation.
-use super::{Command, Message, UnmarshalMessage};
+use super::{Command, Response, UnmarshalCommand, UnmarshalResponse};
 use crate::{errors::UnmarshalError, *};
 
 /// TPM2_GetRandom (Command)
@@ -27,11 +27,12 @@ pub struct GetRandomRsp<'a> {
 
 impl Command for GetRandom {
     const CMD_CODE: TpmCc = TpmCc::GetRandom;
+    type Handles<'a>
+        = [EntityHandle<'a>; 0]
+    where
+        Self: 'a;
     type Response<'a> = GetRandomRsp<'a>;
-}
-impl Message for GetRandom {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -42,9 +43,9 @@ impl Marshal for GetRandom {
         self.bytes_requested.marshal(dst)
     }
 }
-impl<'a> UnmarshalMessage<'a> for GetRandom {
+impl<'a> UnmarshalCommand<'a> for GetRandom {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
@@ -53,7 +54,7 @@ impl<'a> UnmarshalMessage<'a> for GetRandom {
     }
 }
 
-impl Message for GetRandomRsp<'_> {
+impl Response for GetRandomRsp<'_> {
     type Handles = [Handle; 0];
     fn handles(&self) -> Self::Handles {
         []
@@ -66,7 +67,7 @@ impl Marshal for GetRandomRsp<'_> {
         self.random_bytes.marshal(dst)
     }
 }
-impl<'a> UnmarshalMessage<'a> for GetRandomRsp<'a> {
+impl<'a> UnmarshalResponse<'a> for GetRandomRsp<'a> {
     fn unmarshal_with_handles(
         []: Self::Handles,
         src: &mut &'a [u8],
@@ -87,11 +88,12 @@ pub struct StirRandom<'a> {
 
 impl Command for StirRandom<'_> {
     const CMD_CODE: TpmCc = TpmCc::StirRandom;
+    type Handles<'a>
+        = [EntityHandle<'a>; 0]
+    where
+        Self: 'a;
     type Response<'a> = ();
-}
-impl Message for StirRandom<'_> {
-    type Handles = [Handle; 0];
-    fn handles(&self) -> Self::Handles {
+    fn handles(&self) -> Self::Handles<'_> {
         []
     }
 }
@@ -102,9 +104,9 @@ impl Marshal for StirRandom<'_> {
         self.in_data.marshal(dst)
     }
 }
-impl<'a> UnmarshalMessage<'a> for StirRandom<'a> {
+impl<'a> UnmarshalCommand<'a> for StirRandom<'a> {
     fn unmarshal_with_handles(
-        []: Self::Handles,
+        []: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {

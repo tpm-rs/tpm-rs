@@ -2,7 +2,7 @@
 //!
 //! This module implements the "Command Audit" commands defined in
 //! **Section 21** of the TPM 2.0 Specification.
-use super::{Command, Message, UnmarshalMessage};
+use super::{Command, UnmarshalCommand};
 use crate::{errors::UnmarshalError, marshal::marshal_helper, *};
 
 /// TPM2_SetCommandCodeAuditStatus (Command)
@@ -18,12 +18,13 @@ pub struct SetCommandCodeAuditStatus {
 
 impl Command for SetCommandCodeAuditStatus {
     const CMD_CODE: TpmCc = TpmCc::SetCommandCodeAuditStatus;
+    type Handles<'a>
+        = [EntityHandle<'a>; 1]
+    where
+        Self: 'a;
     type Response<'a> = ();
-}
-impl Message for SetCommandCodeAuditStatus {
-    type Handles = [Handle; 1];
-    fn handles(&self) -> Self::Handles {
-        [self.auth]
+    fn handles(&self) -> Self::Handles<'_> {
+        [EntityHandle::Handle(self.auth)]
     }
 }
 impl Marshal for SetCommandCodeAuditStatus {
@@ -35,13 +36,13 @@ impl Marshal for SetCommandCodeAuditStatus {
         marshal_helper(&self.clear_list, dst, count)
     }
 }
-impl<'a> UnmarshalMessage<'a> for SetCommandCodeAuditStatus {
+impl<'a> UnmarshalCommand<'a> for SetCommandCodeAuditStatus {
     fn unmarshal_with_handles(
-        [auth]: Self::Handles,
+        [auth]: Self::Handles<'a>,
         src: &mut &'a [u8],
     ) -> Result<Self, UnmarshalError> {
         Ok(Self {
-            auth,
+            auth: auth.try_into()?,
             audit_alg: Unmarshal::unmarshal(src)?,
             set_list: Unmarshal::unmarshal(src)?,
             clear_list: Unmarshal::unmarshal(src)?,
