@@ -1,5 +1,6 @@
 [package]
-name = "tpm2-impl"
+name = "tpm2-engine"
+description = "Core TPM 2.0 command execution engine"
 publish = false
 # Inherit from Workspace Settings
 version.workspace = true
@@ -14,3 +15,6 @@ categories.workspace = true
 
 [dependencies]
 tpm2 = { workspace = true }
+
+[dev-dependencies]
+tpm2-client = { workspace = true }
